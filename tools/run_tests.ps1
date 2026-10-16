@@ -33,7 +33,8 @@ foreach ($p in $programs) {
 $copies = @(
     @{ From = 'shared'; To = 'esp32\defuse_esp32\src\shared'; Files = @('protocol.h', 'protocol.c', 'proto_link.h', 'proto_link.c') },
     @{ From = 'shared'; To = 'mcxc444\defuse_mcx\source\shared'; Files = @('protocol.h', 'protocol.c', 'proto_link.h', 'proto_link.c') },
-    @{ From = 'game';   To = 'mcxc444\defuse_mcx\source\game'; Files = @('game_config.h', 'game.h', 'game.c') }
+    @{ From = 'game';   To = 'mcxc444\defuse_mcx\source\game'; Files = @('game_config.h', 'game.h', 'game.c') },
+    @{ From = 'game';   To = 'esp32\defuse_esp32\src\game'; Files = @('game_config.h') }
 )
 foreach ($c in $copies) {
     foreach ($f in $c.Files) {
@@ -44,5 +45,9 @@ foreach ($c in $copies) {
             exit 1
         }
     }
+}
+if (-not (Test-Path (Join-Path $root 'esp32\defuse_esp32\src\game\protocol.h'))) {
+    Write-Error 'esp32 src/game/protocol.h shim missing. Run tools\sync_shared.ps1.'
+    exit 1
 }
 Write-Host 'OK: all tests passed, synced copies match shared/ and game/.'
