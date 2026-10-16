@@ -6,3 +6,4 @@ tools/build/
 *.o
 *.exe
 /CG2271_As4.pdf
+dist/

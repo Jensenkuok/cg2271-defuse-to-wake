@@ -1,0 +1,177 @@
+<!--
+HOW TO PRODUCE THE PDF
+1. Open this file in Chrome or Edge.
+2. Print (Ctrl+P) -> Destination: Save as PDF -> Paper size A4 -> Margins: Default -> untick "Headers and footers".
+3. Check the preview shows exactly 2 pages. If it spills over, shorten text (do not shrink the font below 12 pt).
+4. Replace every yellow [TEAM: ...] placeholder with the real information first.
+5. Name the file B0X_YY_Interim.pdf (X = lab slot, YY = group number).
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Defuse to Wake - CG2271 Interim Report</title>
+<style>
+  @page { size: A4; margin: 2cm; }
+  html { background: #fff; }
+  body {
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 12pt;
+    line-height: 1.15;
+    text-align: justify;
+    color: #000;
+    margin: 0 auto;
+    max-width: 17cm;
+  }
+  h1 { font-size: 14pt; margin: 0 0 2pt 0; }
+  h2 { font-size: 12pt; margin: 6pt 0 2pt 0; }
+  p { margin: 0 0 3pt 0; }
+  ul { margin: 0 0 3pt 0; padding-left: 16pt; }
+  table { border-collapse: collapse; width: 100%; margin: 2pt 0 4pt 0; font-size: 12pt; text-align: left; }
+  th, td { border: 0.5pt solid #000; padding: 1pt 3pt; vertical-align: top; }
+  th { background: #e6e6e6; }
+  figure { margin: 2pt 0 2pt 0; text-align: center; page-break-inside: avoid; }
+  figure svg { width: 15cm; height: auto; }
+  figcaption { font-size: 12pt; }
+  .team { background: #ffff00; }
+  table, figure { page-break-inside: avoid; }
+</style>
+</head>
+<body>
+
+<h1>Defuse to Wake: CG2271 Mini Project Interim Report</h1>
+<p><span class="team">[TEAM: lab slot B0X, group YY, member names]</span></p>
+
+<h2>1. Problem statement</h2>
+<p>Phone alarms are easy to dismiss and sleep through. Defuse to Wake is a smart lecture alarm: it reads the user's NUSMods timetable and, at wake time, arms a "bomb" that keeps ringing until the user defuses it by clearing sensor-based modules without tampering.</p>
+
+<h2>2. Sensors and actuators</h2>
+<table>
+<tr><th>Part</th><th>Board</th><th>Read / driven via</th><th>Purpose</th></tr>
+<tr><td>Rotary encoder + push</td><td>MCXC444</td><td>GPIO interrupt (A/B edges, push)</td><td>Safe dial: enter code digits; long press snoozes</td></tr>
+<tr><td>PS2 joystick + button</td><td>MCXC444</td><td>ADC polled at 50 Hz; button IRQ</td><td>Wire cutter: move cursor, cut wire</td></tr>
+<tr><td>HC-SR04 ultrasonic</td><td>MCXC444</td><td>Periodic trigger, echo by timer input capture</td><td>Distance tripwire: hold hand in a band for 3 s</td></tr>
+<tr><td>GY-521 MPU-6050 gyro</td><td>ESP32</td><td>I2C, polled by an ESP32 task</td><td>Anti-tamper: shake or tilt is a strike (fallback: kit shock switch on an MCX interrupt)</td></tr>
+<tr><td>Passive buzzer</td><td>MCXC444</td><td>Timer PWM</td><td>Ticking that speeds up, explosion, defuse jingle</td></tr>
+<tr><td>RGB LED (on-board)</td><td>MCXC444</td><td>Timer PWM</td><td>Strike, progress and status colours</td></tr>
+<tr><td>SSD1306 0.96" OLED</td><td>ESP32</td><td>I2C (0x3C)</td><td>Bomb screen: timer, module graphics, clues</td></tr>
+</table>
+
+<h2>3. Architecture</h2>
+<figure>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 360" font-family="Arial, Helvetica, sans-serif" font-size="12">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#000"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" fill="#fff"/>
+
+  <!-- Column containers -->
+  <rect x="10" y="10" width="220" height="336" rx="6" fill="#f2f2f2" stroke="#000" stroke-width="1.5"/>
+  <text x="120" y="30" text-anchor="middle" font-size="13" font-weight="bold">MCXC444 (FreeRTOS)</text>
+  <rect x="330" y="10" width="190" height="336" rx="6" fill="#f2f2f2" stroke="#000" stroke-width="1.5"/>
+  <text x="425" y="30" text-anchor="middle" font-size="13" font-weight="bold">ESP32</text>
+  <rect x="590" y="10" width="160" height="336" rx="6" fill="#f2f2f2" stroke="#666" stroke-width="1.5" stroke-dasharray="6 3"/>
+  <text x="670" y="30" text-anchor="middle" font-size="13" font-weight="bold">Online</text>
+
+  <!-- MCX: sensors -->
+  <g fill="#fff" stroke="#000" stroke-width="1">
+    <rect x="22" y="44" width="196" height="32"/>
+    <rect x="22" y="86" width="196" height="32"/>
+    <rect x="22" y="128" width="196" height="32"/>
+    <rect x="22" y="182" width="196" height="44" stroke-width="2"/>
+    <rect x="22" y="262" width="196" height="44"/>
+  </g>
+  <g text-anchor="middle">
+    <text x="120" y="64">Rotary encoder (IRQ)</text>
+    <text x="120" y="106">PS2 joystick (polled ADC)</text>
+    <text x="120" y="148">HC-SR04 (timer capture)</text>
+    <text x="120" y="201" font-weight="bold">Game engine</text>
+    <text x="120" y="217">tasks + queues + ISRs</text>
+    <text x="120" y="281">Passive buzzer (PWM)</text>
+    <text x="120" y="297">On-board RGB LED (PWM)</text>
+  </g>
+  <g stroke="#000" stroke-width="1.5" marker-end="url(#ah)">
+    <line x1="120" y1="76" x2="120" y2="80" stroke="none"/>
+    <path d="M50,76 V182" fill="none"/>
+    <path d="M120,118 V182" fill="none"/>
+    <path d="M190,160 V182" fill="none"/>
+    <path d="M120,226 V262" fill="none"/>
+  </g>
+
+  <!-- ESP32 -->
+  <g fill="#fff" stroke="#000" stroke-width="1">
+    <rect x="342" y="44" width="166" height="44"/>
+    <rect x="342" y="182" width="166" height="44" stroke-width="2"/>
+  </g>
+  <rect x="342" y="246" width="166" height="88" fill="none" stroke="#666" stroke-dasharray="4 3"/>
+  <g fill="#fff" stroke="#000" stroke-width="1">
+    <rect x="352" y="262" width="146" height="32"/>
+    <rect x="352" y="298" width="146" height="32"/>
+  </g>
+  <g text-anchor="middle">
+    <text x="425" y="63" font-weight="bold">Network task</text>
+    <text x="425" y="79">WiFiMulti, HTTPS, NTP</text>
+    <text x="425" y="201" font-weight="bold">UART link task</text>
+    <text x="425" y="217">frames, ACK, retransmit</text>
+    <text x="425" y="260" font-size="11" fill="#444">I2C bus</text>
+    <text x="425" y="282">MPU-6050 gyro (I2C)</text>
+    <text x="425" y="318">SSD1306 OLED (I2C)</text>
+  </g>
+  <g stroke="#000" stroke-width="1.5" fill="none" marker-end="url(#ah)" marker-start="url(#ah)">
+    <path d="M425,88 V182"/>
+    <path d="M425,226 V246"/>
+  </g>
+
+  <!-- UART between the boards -->
+  <path d="M218,204 H342" stroke="#000" stroke-width="2" fill="none" marker-end="url(#ah)" marker-start="url(#ah)"/>
+  <text x="280" y="168" text-anchor="middle" font-size="11">UART 115200,</text>
+  <text x="280" y="181" text-anchor="middle" font-size="11">CRC-8 + ACK</text>
+  <path d="M280,185 V204" stroke="#000" stroke-width="0.75" fill="none"/>
+
+  <!-- Online services -->
+  <g fill="#fff" stroke="#000" stroke-width="1">
+    <rect x="602" y="44" width="136" height="36"/>
+    <rect x="602" y="92" width="136" height="36"/>
+    <rect x="602" y="140" width="136" height="36"/>
+    <rect x="602" y="188" width="136" height="36"/>
+  </g>
+  <g text-anchor="middle">
+    <text x="670" y="66">NUSMods API</text>
+    <text x="670" y="114">SoCLaaS LLM</text>
+    <text x="670" y="157">Firebase</text>
+    <text x="670" y="170">Realtime DB</text>
+    <text x="670" y="210">NTP</text>
+  </g>
+  <path d="M508,66 H602" stroke="#000" stroke-width="2" fill="none" marker-end="url(#ah)" marker-start="url(#ah)"/>
+  <text x="555" y="58" text-anchor="middle" font-size="11">HTTPS</text>
+  <text x="555" y="86" text-anchor="middle" font-size="11">(NTP: UDP)</text>
+</svg>
+<figcaption>Figure 1. Block diagram.</figcaption>
+</figure>
+<p><b>Hardware split.</b> The MCXC444 is the game engine and owns every real-time input and output, so the bomb loop never depends on Wi-Fi. The ESP32 is the renderer and network gateway: it drives the OLED, reads the gyro and handles Wi-Fi, HTTPS and NTP.</p>
+<p><b>MCXC444 software (FreeRTOS, planned).</b> Tasks, high to low priority: game/alarm FSM with buzzer; joystick sampler; ultrasonic sensor task; comm RX parser; comm TX. ISRs: UART RX (bytes to a queue), PORT (encoder and buttons to a queue or notification) and timer capture (echo), with UART RX above GPIO. Queues connect ISR to parser, input events to the FSM and FSM to TX; a mutex guards UART TX and the shared game state. Preemption and time slicing are enabled. The ESP32 runs network, UART, display and gyro tasks joined by queues.</p>
+<p><b>Inter-board protocol.</b> UART 115200 8N1 carries frames [0xAA][TYPE][SEQ][LEN][PAYLOAD 0-32][CRC-8] with 11 message types. Alarm, config, tamper, command and result messages use stop-and-wait ACKs with a NACK on CRC or length errors, a 100 ms retransmit timeout, 3 retries and a 1 s heartbeat; 3 s of silence marks the link down. The same code is compiled on both boards.</p>
+<p><b>Online services.</b> The ESP32 caches the NUSMods timetable in flash, gets time from NTP and has two saved Wi-Fi hotspots. The SoCLaaS LLM (model x-test-1, then x-test-2, then built-in template clues) writes clues and difficulty as JSON; the ESP32 validates and clamps every field and picks the puzzle answers itself. The reply is cached and requested at start-up or nightly, never at alarm time. Results go to Firebase Realtime Database over REST; failed writes are queued and retried. Everything online is fetched ahead of time and has a fallback, with a built-in offline bomb (dial, wires, tripwire, 180 s).</p>
+
+<h2>4. Current progress</h2>
+<ul>
+<li>Done: shared UART codec (framing, CRC-8, 11 message types), ACK/retransmit link layer, and hardware-independent game engine (state machine, dial, wire and tripwire modules, tamper, snooze).</li>
+<li>Done: host unit tests, 483 checks passing (protocol 91, link 148, game 244). No firmware has run on hardware yet.</li>
+<li><span class="team">[TEAM: MCXC444 smoke tests: encoder, joystick, ultrasonic, buzzer, LED]</span></li>
+<li><span class="team">[TEAM: ESP32 smoke tests: OLED, gyro, Wi-Fi, board-to-board UART]</span></li>
+</ul>
+
+<h2>5. Plan to Week 13</h2>
+<table>
+<tr><th>Milestone</th><th>Target</th></tr>
+<tr><td>Codec, link layer and game engine with host tests</td><td>Done</td></tr>
+<tr><td>MCXC444 firmware: input and sensor tasks, ISRs, buzzer and LED, game and comm tasks</td><td class="team">[TEAM: date]</td></tr>
+<tr><td>ESP32 firmware: UART link, OLED, gyro and tamper events</td><td class="team">[TEAM: date]</td></tr>
+<tr><td>Online: NTP, NUSMods, SoCLaaS clues with fallbacks, Firebase result writes</td><td class="team">[TEAM: date]</td></tr>
+<tr><td>Integration, demo rehearsal, final report (due 13 Nov)</td><td class="team">[TEAM: date]</td></tr>
+</table>
+
+</body>
+</html>
