@@ -38,6 +38,12 @@ Actuators
 | SSD1306 0.96" OLED (I2C 0x3C, 2 bought) | ESP32 | Bomb screen: timer, module graphics, clues, briefing |
 Wiring rules: HC-SR04 echo (5 V) through a voltage divider to the MCX pin; joystick and encoder
 on 3.3 V; each board on its own USB, grounds tied together.
+Proven pins (from the team's Lab 2/3 code — reuse, don't change):
+- Board link: MCX UART2 TX PTE22 / RX PTE23 (PORT mux 4) ↔ ESP32-S2 Serial1 RX GPIO2 / TX GPIO1.
+- On-board RGB LED via TPM0 PWM: red PTE31 (TPM0_CH4, mux 3), green PTD5 (TPM0_CH5, mux 4),
+  blue PTE29 (TPM0_CH2). TPM clock source MCGIRCLK (SIM->SOPT2 TPMSRC = 3).
+- Joystick X/Y: PTE20 (ADC0_SE0), PTE21 (ADC0_SE4a). On-board switch SW3: PTA4.
+All other pins are chosen and justified in docs/pin_table.md (verified against the RM and UM12120).
 Stretch (only after core is done): laser tripwire, magnetic key (reed/Hall), clap code (mic).
 
 ## Software architecture (target)
@@ -49,8 +55,11 @@ Stretch (only after core is done): laser tripwire, magnetic key (reed/Hall), cla
   TPM capture (echo). ISR priority: UART RX above GPIO.
 - Sync: queues (ISR→parser, input events→FSM, FSM→TX), mutex on UART TX + shared game state.
 - FreeRTOSConfig: configUSE_PREEMPTION=1, configUSE_TIME_SLICING=1, unused features disabled.
-- ESP32 (Arduino-on-FreeRTOS, xTaskCreatePinnedToCore): network task core 0 (WiFiMulti,
-  NTP, NUSMods, SoCLaaS, Firebase); UART task, display task, gyro task core 1; queues between.
+- ESP32-S2 is SINGLE-CORE (Arduino-on-FreeRTOS, xTaskCreate with priorities, no core pinning):
+  UART link task > gyro task > display task > network task (WiFiMulti, NTP, NUSMods, SoCLaaS,
+  Firebase; lowest because it is slow and latency-tolerant); queues between.
+- ESP32 rule: always send TIME_SYNC before SET_ALARM, and re-send SET_ALARM after every TIME_SYNC
+  (the MCX does not move an ARMED deadline when the clock changes).
 - Inter-board protocol: UART 115200 8N1. Frame [0xAA][TYPE][SEQ][LEN][PAYLOAD 0–32][CRC-8],
   ACK/NACK, retransmit (timeout + max retries), 1 s heartbeat. shared/protocol.h + .c are
   canonical and compiled unchanged on both boards.
@@ -87,12 +96,21 @@ Buying more hardware, camera/vision, mobile apps, cloud-hosted web apps, custom 
 NUS_STU WPA2-Enterprise, the dropped items above, features that don't map to a rubric line.
 
 ## Stack & tools
-- MCXC444: MCUXpresso IDE + MCUXpresso SDK (FreeRTOS), C.
-- ESP32: Arduino IDE, ESP32 core, C++. Libraries: WiFi/WiFiMulti, WiFiClientSecure, HTTPClient,
+- MCXC444: MCUXpresso IDE 25.6.136 at D:\D\MCUXpressoIDE_25.6.136 (headless build:
+  ide\mcuxpressoidec.exe), SDK_2.x_FRDM-MCXC444 26.6.0 installed, FreeRTOS, C. Cortex-M0+
+  (2 NVIC priority bits: 0/64/128/192; the CM0 port masks interrupts with PRIMASK).
+- MCX peripheral code is register-level (SIM, PORT, UART, TPM, ADC, NVIC), matching the labs;
+  fsl drivers only where the template project already uses them for board init/debug console.
+- References: RM D:\NUS\Year 3\Y3S1\CG2271\Datasheet\MCXC44XP64M48RM.pdf, board manual
+  D:\NUS\Year 3\Y3S1\CG2271\Datasheet\UM12120.pdf, lab code under D:\NUS\Year 3\Y3S1\CG2271\Labs
+  and C:\Users\rkoh2\Documents\MCUXpressoIDE_25.6.136\workspace (2271UART = Lab 3 FreeRTOS project).
+- ESP32: ESP32-S2 board, FQBN esp32:esp32:esp32s2, ESP32 core 3.3.12. CLI compile with the
+  arduino-cli bundled in Arduino IDE: C:\Program Files\Arduino IDE\resources\app\lib\backend\resources\arduino-cli.exe. C++. Libraries: WiFi/WiFiMulti, WiFiClientSecure, HTTPClient,
   Preferences, ArduinoJson, Adafruit_SSD1306/GFX, Adafruit_MPU6050, WebServer (others need planner approval).
 
 ## Layout
-- mcxc444/ — MCUXpresso project (created by the user in the IDE; workhorse edits its source/)
+- mcxc444/defuse_mcx/ — MCUXpresso FreeRTOS project (cloned from the Lab 3 project);
+  source/shared and source/game are synced copies of shared/ and game/ (tools/sync_shared.ps1)
 - esp32/defuse_esp32/ — Arduino sketch (secrets.h git-ignored; secrets.example.h committed)
 - shared/ — protocol + proto_link (ACK/retransmit), canonical for both boards
 - game/ — hardware-independent bomb game engine (pure C99, host-tested), compiled into the
@@ -120,6 +138,4 @@ tests; hardware test steps written for the user; rubric line noted; user confirm
   access from a phone hotspot is untested (AWS relay 13.212.116.159 is the fallback).
 - Ask TA whether GenAI + REST suffices or a DB operation is expected (we do a DB write anyway).
 - OLEDs (2× SSD1306) ordered 15 Oct, awaiting delivery.
-- ESP32 board model unconfirmed: spec sample output shows ESP32-S2 (single core) — affects
-  core pinning, UART and I2C pins. Confirm before any ESP32 firmware prompt.
-- MCUXpresso IDE install location unknown (not under C:\nxp on this machine).
+- ESP32-S2 I2C pins for OLED + gyro not yet chosen (check the board's header silkscreen).
