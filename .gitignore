@@ -1,0 +1,8 @@
+esp32/**/secrets.h
+mcxc444/**/Debug/
+mcxc444/**/Release/
+.metadata/
+tools/build/
+*.o
+*.exe
+/CG2271_As4.pdf
