@@ -5,9 +5,13 @@
 # Included: mcxc444/, esp32/, shared/, game/, tools/ (not tools/build/), docs/, README* in the root.
 # Excluded: .git, dist/, build outputs (Debug/, Release/, .metadata/, tools/build/, *.o, *.exe), *.pdf.
 #
-# SAFETY: aborts before creating any zip if a file named secrets.h exists in the tree, or if any
-# text file contains "Bearer " followed by a real-looking token, or "sk-" followed by 20+ key
-# characters. Remove or scrub the offending file yourself; this script never edits files.
+# secrets.h: any file named secrets.h (case-insensitive) is EXCLUDED from the zip, with one
+# informational line per excluded file. It never aborts the build, and the real file stays in place.
+#
+# SAFETY: the secret-content scan runs only on files that will be included in the zip. It aborts
+# before creating any zip if one contains "Bearer " followed by a real-looking token, or "sk-"
+# followed by 20+ key characters. Remove or scrub the offending file yourself; this script never
+# edits files.
 param(
     [Parameter(Mandatory = $true)][ValidateRange(1, 99)][int]$Slot,
     [Parameter(Mandatory = $true)][ValidateRange(1, 99)][int]$Group,
@@ -42,19 +46,26 @@ foreach ($d in $includeDirs) {
 }
 Get-ChildItem -Path $root -File -Force -Filter 'README*' | ForEach-Object { $candidates.Add($_) }
 
-# Drop build outputs, PDFs and VCS/dist folders (secrets.h is NOT dropped here: it must abort).
-$files = $candidates | Where-Object {
+# Drop build outputs, PDFs and VCS/dist folders.
+$candidates = $candidates | Where-Object {
     $rel = Get-RelativePath $_.FullName
     ($rel -notmatch $skipDirPattern) -and ($skipExtensions -notcontains $_.Extension.ToLower())
 }
 
+# Exclude secrets.h silently-but-visibly: one info line per file, never an abort.
+$files = @()
+foreach ($f in $candidates) {
+    if ($f.Name -ieq 'secrets.h') {
+        Write-Host ("Excluded (secrets.h): {0}" -f (Get-RelativePath $f.FullName)) -ForegroundColor Cyan
+    } else {
+        $files += $f
+    }
+}
+
+# Content scan runs only on files that will actually be zipped.
 $problems = New-Object System.Collections.Generic.List[string]
 foreach ($f in $files) {
     $rel = Get-RelativePath $f.FullName
-    if ($f.Name -ieq 'secrets.h') {
-        $problems.Add("${rel}: file named secrets.h must not be submitted")
-        continue
-    }
     if ($binaryExtensions -contains $f.Extension.ToLower() -or $f.Length -gt 5MB) { continue }
     $text = [System.IO.File]::ReadAllText($f.FullName, [System.Text.Encoding]::GetEncoding(28591))
     if ($text.IndexOf([char]0) -ge 0) { continue }
