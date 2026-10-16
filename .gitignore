@@ -7,3 +7,4 @@ tools/build/
 *.exe
 /CG2271_As4.pdf
 dist/
+.mcux_ws/
