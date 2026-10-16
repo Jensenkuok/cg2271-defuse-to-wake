@@ -103,8 +103,8 @@
 #define INCLUDE_vTaskDelay                      1
 #define INCLUDE_xTaskGetSchedulerState          1
 #define INCLUDE_xTaskGetCurrentTaskHandle       1
-#define INCLUDE_uxTaskGetStackHighWaterMark     0
-#define INCLUDE_xTaskGetIdleTaskHandle          0
+#define INCLUDE_uxTaskGetStackHighWaterMark     1   /* defuse: debug task prints each task's unused stack */
+#define INCLUDE_xTaskGetIdleTaskHandle          1   /* defuse: so the idle task's stack is reported too */
 #define INCLUDE_eTaskGetState                   0
 #define INCLUDE_xTimerPendFunctionCall          0   /* defuse: needs software timers, which are removed */
 #define INCLUDE_xTaskAbortDelay                 0

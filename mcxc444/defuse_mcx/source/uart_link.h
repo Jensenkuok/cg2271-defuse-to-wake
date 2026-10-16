@@ -15,6 +15,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "FreeRTOS.h"
+#include "task.h"
+
 #include "proto_link.h"
 
 /* Highest message type value + 1, for the per-type receive counters. */
@@ -47,5 +50,8 @@ bool uart_link_send(uint8_t type, const uint8_t *payload, uint8_t len);
 
 /* Any task: consistent snapshot of the counters. */
 void uart_link_get_stats(uart_link_stats_t *out);
+
+/* For stack high-water-mark reporting. */
+TaskHandle_t uart_link_task_handle(void);
 
 #endif /* UART_LINK_H */

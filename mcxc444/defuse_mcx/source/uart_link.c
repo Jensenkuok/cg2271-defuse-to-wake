@@ -34,6 +34,7 @@ typedef struct {
 /* Owned by the comm task (proto_link_t is single-owner by design). */
 static proto_link_t s_link;
 static uart_link_hooks_t s_hooks;
+static TaskHandle_t s_task;
 
 static QueueHandle_t s_rx_queue;     /* ISR -> comm task, uint8_t items */
 static QueueHandle_t s_tx_req_queue; /* any task -> comm task, tx_request_t items */
@@ -221,7 +222,7 @@ bool uart_link_init(const uart_link_hooks_t *hooks)
 
 bool uart_link_start(void)
 {
-    return xTaskCreate(comm_task, "comm", APP_STACK_COMM, NULL, APP_PRIO_COMM, NULL) == pdPASS;
+    return xTaskCreate(comm_task, "comm", APP_STACK_COMM, NULL, APP_PRIO_COMM, &s_task) == pdPASS;
 }
 
 bool uart_link_send(uint8_t type, const uint8_t *payload, uint8_t len)
@@ -254,4 +255,9 @@ void uart_link_get_stats(uart_link_stats_t *out)
     *out = s_stats;
     out->link = s_link.stats;
     taskEXIT_CRITICAL();
+}
+
+TaskHandle_t uart_link_task_handle(void)
+{
+    return s_task;
 }
