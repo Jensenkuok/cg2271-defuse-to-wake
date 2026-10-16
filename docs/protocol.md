@@ -115,7 +115,83 @@ parser task fed by a UART RX queue. States: wait for SOF, TYPE, SEQ, LEN, PAYLOA
   returns `PROTO_FRAME_OK` (the error is still counted).
 - Counters `frames_ok`, `crc_errors` and `len_errors` are kept in the decoder.
 
-## Reliability (later step)
+## Transport
 
-ACK handling, retransmit timeouts, retry limits and the 1 s heartbeat policy are not part of
-this codec. They are defined in a later step on top of these frames.
+Implemented in `shared/proto_link.{h,c}` on top of the codec above. Platform-agnostic: time is a
+`now_ms` argument, bytes leave through a write callback, frames and events leave through callbacks.
+
+### Reliable and unreliable types
+
+| Class | Types | Rule |
+|-------|-------|------|
+| Reliable (ACKed) | TIME_SYNC, SET_ALARM, BOMB_CONFIG, TAMPER_EVENT, CMD, RESULT | Stop-and-wait, retransmitted until ACKed |
+| Unreliable | HEARTBEAT, GAME_STATE, TELEMETRY, ACK, NACK | Written immediately, never ACKed |
+
+Each link has one 8-bit tx SEQ counter, incremented for every new frame (reliable or not).
+Retransmits reuse the original SEQ.
+
+### Sender
+
+- One reliable frame is outstanding at a time. Further reliable sends wait in a FIFO of 4 (payload
+  copied), so up to 5 reliable frames are in flight or waiting. `proto_link_send` returns false when
+  the FIFO is full, the type is unknown, or the arguments are invalid.
+- An ACK whose `acked_seq` matches the outstanding frame clears it and sends the next queued frame.
+  Other ACKs are ignored.
+- Any NACK received while a frame is outstanding retransmits it at once (counts as a retry).
+- No ACK within `timeout_ms` of the last transmission also retransmits. After `max_retries`
+  retransmits the frame is dropped, `PROTO_EVT_SEND_FAILED(type, seq)` is emitted, and the next
+  queued frame is sent.
+
+### Receiver
+
+- A valid reliable frame is always answered with `ACK{acked_seq = SEQ}`. It is delivered to the
+  application only if its SEQ differs from the last delivered reliable SEQ from the peer
+  (duplicates are re-ACKed but not re-delivered). The first reliable frame is always accepted.
+- Decoder CRC error: `NACK{0xFF, 1}`. Decoder length error: `NACK{0xFF, 2}`.
+  Valid frame of unknown TYPE: `NACK{its SEQ, 3}`, not delivered.
+
+### Sequence diagrams
+
+```
+Normal ACK            Lost frame               Lost ACK (duplicate)       NACK
+A         B           A         B              A         B                A         B
+|--CMD 5->|           |--CMD 5-X |             |--CMD 5->|                |--CMD 5->| (corrupted)
+|         |deliver    |   100 ms |             |         |deliver         |         |CRC error
+|<-ACK 5--|           |--CMD 5->| (retx)       |<-ACK 5-X|                |<-NACK---|
+|         |           |         |deliver       |   100 ms|                |--CMD 5->| (retx, immediate)
+                      |<-ACK 5--|              |--CMD 5->| (retx)         |         |deliver
+                                               |         |dup: no deliver |<-ACK 5--|
+                                               |<-ACK 5--| (re-ACK)
+```
+
+### Constants (`proto_link.h`)
+
+| Constant | Value | Notes |
+|----------|-------|-------|
+| `PROTO_LINK_DEFAULT_TIMEOUT_MS` | 100 | `cfg.timeout_ms`; 0 = default |
+| `PROTO_LINK_DEFAULT_MAX_RETRIES` | 3 | `cfg.max_retries`; 0 = default |
+| `PROTO_LINK_HEARTBEAT_MS` | 1000 | `poll` sends `HEARTBEAT{uptime_s = now_ms / 1000}` |
+| `PROTO_LINK_DOWN_MS` | 3000 | silence before the link is declared down |
+| `PROTO_LINK_TX_DEPTH` | 4 | FIFO behind the outstanding frame |
+
+All time comparisons are wraparound-safe for a 32-bit millisecond counter.
+
+### Link up/down
+
+The link starts down. Any valid frame (including ACK/NACK) sets it up and emits
+`PROTO_EVT_LINK_UP` on the transition. If no valid frame arrives for 3000 ms, `proto_link_poll`
+sets it down and emits `PROTO_EVT_LINK_DOWN`. Heartbeats keep flowing while down, so the link
+recovers by itself.
+
+### Threading rule
+
+A link is not thread-safe by design. One RTOS task owns it and serialises every call to
+`proto_link_send`, `proto_link_rx_byte` and `proto_link_poll`. A UART RX ISR only pushes received
+bytes into a queue; the owning task pops them and calls `proto_link_rx_byte`. Callbacks run on the
+owning task and may call `proto_link_send`, but not `rx_byte` or `poll`.
+
+### Statistics
+
+`link.stats`: `tx_frames` (new frames; retransmits are counted separately), `rx_frames` (valid frames,
+duplicates included), `retransmits`, `send_failures`, `crc_errors`, `len_errors`, `dup_drops`,
+`nacks_sent`.
