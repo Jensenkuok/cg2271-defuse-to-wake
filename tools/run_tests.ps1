@@ -29,13 +29,20 @@ foreach ($p in $programs) {
     if ($LASTEXITCODE -ne 0) { Write-Error "$($p.Name) failed."; exit 1 }
 }
 
-$dest = Join-Path $root 'esp32\defuse_esp32\src\shared'
-foreach ($f in 'protocol.h', 'protocol.c', 'proto_link.h', 'proto_link.c') {
-    $a = Join-Path $shared $f
-    $b = Join-Path $dest $f
-    if (-not (Test-Path $b) -or (Get-FileHash $a).Hash -ne (Get-FileHash $b).Hash) {
-        Write-Error "ESP32 copy of $f differs from shared/. Run tools\sync_shared.ps1."
-        exit 1
+# Synced copies (tools/sync_shared.ps1) must be byte-identical to the canonical sources.
+$copies = @(
+    @{ From = 'shared'; To = 'esp32\defuse_esp32\src\shared'; Files = @('protocol.h', 'protocol.c', 'proto_link.h', 'proto_link.c') },
+    @{ From = 'shared'; To = 'mcxc444\defuse_mcx\source\shared'; Files = @('protocol.h', 'protocol.c', 'proto_link.h', 'proto_link.c') },
+    @{ From = 'game';   To = 'mcxc444\defuse_mcx\source\game'; Files = @('game_config.h', 'game.h', 'game.c') }
+)
+foreach ($c in $copies) {
+    foreach ($f in $c.Files) {
+        $a = Join-Path $root "$($c.From)\$f"
+        $b = Join-Path $root "$($c.To)\$f"
+        if (-not (Test-Path $b) -or (Get-FileHash $a).Hash -ne (Get-FileHash $b).Hash) {
+            Write-Error "$($c.To)\$f differs from $($c.From)/. Run tools\sync_shared.ps1."
+            exit 1
+        }
     }
 }
-Write-Host 'OK: all tests passed, ESP32 copies match shared/.'
+Write-Host 'OK: all tests passed, synced copies match shared/ and game/.'

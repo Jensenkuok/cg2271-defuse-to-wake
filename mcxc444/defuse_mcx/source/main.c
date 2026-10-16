@@ -1,240 +1,173 @@
 /*
- * Copyright 2016-2025 NXP
- * All rights reserved.
+ * Defuse to Wake - MCXC444 firmware entry point.
  *
- * SPDX-License-Identifier: BSD-3-Clause=====
+ * This step brings up the inter-board link only:
+ *   - comm task (priority APP_PRIO_COMM, just below the future game task) owns
+ *     the ACK/retransmit link on UART2 (see uart_link.c);
+ *   - GREEN LED: solid while the link is up, off while it is down;
+ *   - optional LOOPBACK self-test (APP_LOOPBACK_TEST 1, jumper PTE22<->PTE23):
+ *     sends a reliable TIME_SYNC every 2 s, toggles BLUE on each delivered frame
+ *     and prints the link counters every 10 s.
+ * The RGB LED is plain GPIO here; TPM0 PWM replaces it in a later step.
  */
+#include <stdbool.h>
+#include <stdint.h>
 
-/**
- * @file    CG2271RTOS_UART.c
- * @brief   Application entry point.
- */
-#include <stdio.h>
 #include "board.h"
-#include "peripherals.h"
-#include "pin_mux.h"
 #include "clock_config.h"
 #include "fsl_debug_console.h"
-/* TODO: insert other include files here. */
-#include <string.h>
+#include "peripherals.h"
+#include "pin_mux.h"
+
 #include "FreeRTOS.h"
 #include "task.h"
-#include "queue.h"
-#include "semphr.h"
-#include <stdlib.h>
 
-/* TODO: insert other definitions and declarations here. */
+#include "app_config.h"
+#include "protocol.h"
+#include "uart_link.h"
 
-#define BAUD_RATE 9600
-#define UART_TX_PTE22 	22
-#define UART_RX_PTE23 	23
-#define UART2_INT_PRIO	128
+typedef enum { LED_RED, LED_GREEN, LED_BLUE } led_t;
 
-#define MAX_MSG_LEN		256
-char send_buffer[MAX_MSG_LEN];
-
-#define QLEN	5
-QueueHandle_t queue;
-typedef struct tm {
-	char message[MAX_MSG_LEN];
-} TMessage;
-
-// ---- Demo: LED actuator and shared state ----
-#define RED_PIN         31   // PTE31
-#define GREEN_PIN       5    // PTD5
-#define HIGH_THRESHOLD 3000   // pushed one way
-#define LOW_THRESHOLD  1000   // pushed the other way
-
-typedef enum { RED, GREEN } TLED;
-SemaphoreHandle_t newData;
-volatile int lightLevel = 0;
-
-void initLEDs(void) {
-	SIM->SCGC5 |= (SIM_SCGC5_PORTD_MASK | SIM_SCGC5_PORTE_MASK);
-	PORTE->PCR[RED_PIN] &= ~PORT_PCR_MUX_MASK;
-	PORTE->PCR[RED_PIN] |= PORT_PCR_MUX(1);
-	PORTD->PCR[GREEN_PIN] &= ~PORT_PCR_MUX_MASK;
-	PORTD->PCR[GREEN_PIN] |= PORT_PCR_MUX(1);
-	GPIOE->PDDR |= (1 << RED_PIN);
-	GPIOD->PDDR |= (1 << GREEN_PIN);
-}
-
-// LEDs are active-low: clearing the pin turns the LED on
-void setLED(TLED led, int on) {
-	if(led == RED) {
-		if(on) GPIOE->PCOR = (1 << RED_PIN); else GPIOE->PSOR = (1 << RED_PIN);
-	} else {
-		if(on) GPIOD->PCOR = (1 << GREEN_PIN); else GPIOD->PSOR = (1 << GREEN_PIN);
-	}
-}
-
-void initUART2(uint32_t baud_rate)
+/* ---- RGB LED, plain GPIO, active-low (clear = on) ---- */
+static void leds_init(void)
 {
-	NVIC_DisableIRQ(UART2_FLEXIO_IRQn);
-
-	//enable clock to UART2 and PORTE
-	SIM->SCGC4 |= SIM_SCGC4_UART2_MASK;
-	SIM->SCGC5 |= SIM_SCGC5_PORTE_MASK;
-
-	//Ensure Tx and Rx are disabled before configuration
-	UART2->C2 &= ~((UART_C2_TE_MASK) | (UART_C2_RE_MASK));
-
-	//connect UART pins for PTE22, PTE23
-	PORTE->PCR[UART_TX_PTE22] &= ~PORT_PCR_MUX_MASK;
-	PORTE->PCR[UART_TX_PTE22] |= PORT_PCR_MUX(4);
-
-	PORTE->PCR[UART_RX_PTE23] &= ~PORT_PCR_MUX_MASK;
-	PORTE->PCR[UART_RX_PTE23] |= PORT_PCR_MUX(4);
-
-	// Set the baud rate
-	uint32_t bus_clk = CLOCK_GetBusClkFreq();
-
-	// This version of sbr does integer rounding.
-	uint32_t sbr = (bus_clk + (baud_rate * 8)) / (baud_rate * 16);
-
-	// Set SBR. Bits 8 to 12 in BDH, 0-7 in BDL.
-	// MUST SET BDH FIRST!
-	UART2->BDH &= ~UART_BDH_SBR_MASK;
-	UART2->BDH |= ((sbr >> 8) & UART_BDH_SBR_MASK);
-	UART2->BDL = (uint8_t) (sbr &0xFF);
-
-	// Disable loop mode
-	UART2->C1 &= ~UART_C1_LOOPS_MASK;
-	UART2->C1 &= ~UART_C1_RSRC_MASK;
-
-	// Disable parity
-	UART2->C1 &= ~UART_C1_PE_MASK;
-
-	// 8-bit mode
-	UART2->C1 &= ~UART_C1_M_MASK;
-
-	//Enable RX interrupt
-	UART2->C2 |= UART_C2_RIE_MASK;
-
-	// Enable the receiver
-	UART2->C2 |= UART_C2_RE_MASK;
-
-	NVIC_SetPriority(UART2_FLEXIO_IRQn, UART2_INT_PRIO);
-	NVIC_ClearPendingIRQ(UART2_FLEXIO_IRQn);
-	NVIC_EnableIRQ(UART2_FLEXIO_IRQn);
-
+    SIM->SCGC5 |= SIM_SCGC5_PORTD_MASK | SIM_SCGC5_PORTE_MASK;
+    PORTE->PCR[APP_LED_RED_PIN] = (PORTE->PCR[APP_LED_RED_PIN] & ~PORT_PCR_MUX_MASK) | PORT_PCR_MUX(APP_GPIO_MUX);
+    PORTD->PCR[APP_LED_GREEN_PIN] = (PORTD->PCR[APP_LED_GREEN_PIN] & ~PORT_PCR_MUX_MASK) | PORT_PCR_MUX(APP_GPIO_MUX);
+    PORTE->PCR[APP_LED_BLUE_PIN] = (PORTE->PCR[APP_LED_BLUE_PIN] & ~PORT_PCR_MUX_MASK) | PORT_PCR_MUX(APP_GPIO_MUX);
+    GPIOE->PSOR = (1u << APP_LED_RED_PIN) | (1u << APP_LED_BLUE_PIN); /* all off */
+    GPIOD->PSOR = (1u << APP_LED_GREEN_PIN);
+    GPIOE->PDDR |= (1u << APP_LED_RED_PIN) | (1u << APP_LED_BLUE_PIN);
+    GPIOD->PDDR |= (1u << APP_LED_GREEN_PIN);
 }
 
-
-void UART2_FLEXIO_IRQHandler(void)
+static void led_set(led_t led, bool on)
 {
-	// Send and receive pointers
-	static int recv_ptr=0, send_ptr=0;
-	char rx_data;
-	static char recv_buffer[MAX_MSG_LEN];
-
-//NVIC_ClearPendingIRQ(UART2_FLEXIO_IRQn);
-	if(UART2->S1 & UART_S1_TDRE_MASK) // Send data
-	{
-		if(send_buffer[send_ptr] == '\0') {
-			send_ptr = 0;
-
-			// Disable the transmit interrupt
-			UART2->C2 &= ~UART_C2_TIE_MASK;
-
-			// Disable the transmitter
-			UART2->C2 &= ~UART_C2_TE_MASK;
-		}
-		else {
-			UART2->D = send_buffer[send_ptr++];
-		}
-	}
-
-	if(UART2->S1 & UART_S1_RDRF_MASK)
-	{
-		TMessage msg;
-		rx_data = UART2->D;
-		recv_buffer[recv_ptr++] = rx_data;
-		if(rx_data == '\n') {
-			// Copy over the string
-			BaseType_t hpw = pdFALSE;
-			recv_buffer[recv_ptr]='\0';
-			strncpy(msg.message, recv_buffer, MAX_MSG_LEN);
-			xQueueSendFromISR(queue, (void *)&msg, &hpw);
-			portYIELD_FROM_ISR(hpw);
-			recv_ptr = 0;
-		}
-	}
-
+    switch (led) {
+    case LED_RED:
+        if (on) { GPIOE->PCOR = (1u << APP_LED_RED_PIN); } else { GPIOE->PSOR = (1u << APP_LED_RED_PIN); }
+        break;
+    case LED_GREEN:
+        if (on) { GPIOD->PCOR = (1u << APP_LED_GREEN_PIN); } else { GPIOD->PSOR = (1u << APP_LED_GREEN_PIN); }
+        break;
+    default:
+        if (on) { GPIOE->PCOR = (1u << APP_LED_BLUE_PIN); } else { GPIOE->PSOR = (1u << APP_LED_BLUE_PIN); }
+        break;
+    }
 }
 
-void sendMessage(char *message) {
-	strncpy(send_buffer, message, MAX_MSG_LEN);
-
-	// Enable the TIE interrupt
-	UART2->C2 |= UART_C2_TIE_MASK;
-
-	// Enable the transmitter
-	UART2->C2 |= UART_C2_TE_MASK;
+/* Fatal error: RED solid, everything else stopped. Used by the FreeRTOS hooks. */
+static void fatal_halt(void)
+{
+    taskDISABLE_INTERRUPTS();
+    led_set(LED_GREEN, false);
+    led_set(LED_BLUE, false);
+    led_set(LED_RED, true);
+    for (;;) {
+        __asm volatile("nop"); /* halted on purpose; attach the debugger to inspect */
+    }
 }
 
-// Priority 3: communications (handles each incoming message)
-static void recvTask(void *p) {
-	while(1) {
-		TMessage msg;
-		if(xQueueReceive(queue, &msg, portMAX_DELAY) == pdTRUE) {
-			if(msg.message[0] == 'L' && msg.message[1] == ':') {
-				lightLevel = atoi(&msg.message[2]);
-				PRINTF("Joystick level: %d\r\n", lightLevel);
-				xSemaphoreGive(newData);
-			}
-		}
-	}
+/* configCHECK_FOR_STACK_OVERFLOW = 2 */
+void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
+{
+    (void)task;
+    (void)name;
+    fatal_halt();
 }
 
-// Priority 2: actuator (waits for new data, then updates the LED)
-static void ledTask(void *p) {
-	while(1) {
-		if(xSemaphoreTake(newData, portMAX_DELAY) == pdTRUE) {
-			int bright = (lightLevel >= HIGH_THRESHOLD) || (lightLevel <= LOW_THRESHOLD);
-			setLED(GREEN, bright);
-			setLED(RED, !bright);
-		}
-	}
+/* configUSE_MALLOC_FAILED_HOOK = 1 */
+void vApplicationMallocFailedHook(void)
+{
+    fatal_halt();
 }
-/*
- * @brief   Application entry point.
- */
-int main(void) {
 
-    /* Init board hardware. */
-	BOARD_InitBootPins();
+/* ---- link hooks (run in the comm task) ---- */
+static void on_link_change(bool up)
+{
+    led_set(LED_GREEN, up);
+}
+
+#if APP_LOOPBACK_TEST
+static volatile bool s_blue_on;
+
+static void on_frame(const proto_frame_t *f)
+{
+    (void)f;
+    s_blue_on = !s_blue_on;
+    led_set(LED_BLUE, s_blue_on);
+}
+
+/* Lowest app priority: it only generates test traffic and prints counters. */
+static void loopback_task(void *arg)
+{
+    TickType_t wake = xTaskGetTickCount();
+    uint32_t elapsed_ms = 0;
+    uint32_t i;
+    proto_time_sync_t ts;
+    uint8_t pl[PROTO_SIZE_TIME_SYNC];
+    uart_link_stats_t st;
+
+    (void)arg;
+    for (;;) {
+        vTaskDelayUntil(&wake, pdMS_TO_TICKS(APP_LOOPBACK_SEND_MS));
+        elapsed_ms += APP_LOOPBACK_SEND_MS;
+
+        ts.unix_time = elapsed_ms / 1000u; /* any value; the link ACKs its own frame */
+        if (proto_pack_time_sync(&ts, pl, sizeof(pl)) != 0u) {
+            (void)uart_link_send(PROTO_MSG_TIME_SYNC, pl, PROTO_SIZE_TIME_SYNC);
+        }
+
+        if (elapsed_ms % APP_LOOPBACK_PRINT_MS == 0u) {
+            uart_link_get_stats(&st);
+            PRINTF("\r\n[loopback t=%us] tx=%u rx=%u retx=%u fail=%u crc=%u len=%u dup=%u nack=%u\r\n",
+                   (unsigned)(elapsed_ms / 1000u), (unsigned)st.link.tx_frames, (unsigned)st.link.rx_frames,
+                   (unsigned)st.link.retransmits, (unsigned)st.link.send_failures,
+                   (unsigned)st.link.crc_errors, (unsigned)st.link.len_errors,
+                   (unsigned)st.link.dup_drops, (unsigned)st.link.nacks_sent);
+            PRINTF("  uart_err=%u rxq_ovf=%u ring_drop=%u req_drop=%u delivered:",
+                   (unsigned)st.uart_errors, (unsigned)st.rx_queue_overflows,
+                   (unsigned)st.tx_ring_drops, (unsigned)st.tx_req_drops);
+            for (i = 0; i < UART_LINK_TYPE_SLOTS; i++) {
+                if (st.rx_by_type[i] != 0u) {
+                    PRINTF(" 0x%02x=%u", (unsigned)i, (unsigned)st.rx_by_type[i]);
+                }
+            }
+            PRINTF("\r\n");
+        }
+    }
+}
+#else
+static void on_frame(const proto_frame_t *f)
+{
+    (void)f; /* counted per type in uart_link; game logic comes in a later step */
+}
+#endif
+
+int main(void)
+{
+    static const uart_link_hooks_t hooks = { on_link_change, on_frame };
+
+    BOARD_InitBootPins();
     BOARD_InitBootClocks();
     BOARD_InitBootPeripherals();
 #ifndef BOARD_INIT_DEBUG_CONSOLE_PERIPHERAL
-    /* Init FSL debug console. */
     BOARD_InitDebugConsole();
 #endif
 
-    initUART2(9600);
-    PRINTF("UART2 DEMO\r\n");
+    leds_init();
+    PRINTF("Defuse to Wake MCX: link bring-up%s\r\n", APP_LOOPBACK_TEST ? " (LOOPBACK TEST)" : "");
 
-    queue = xQueueCreate(QLEN, sizeof(TMessage));
-
-    newData = xSemaphoreCreateBinary();
-    initLEDs();
-    setLED(RED, 0);
-    setLED(GREEN, 0);
-
-    xTaskCreate(recvTask, "recvTask", configMINIMAL_STACK_SIZE+100, NULL, 3, NULL);
-    xTaskCreate(ledTask,  "ledTask",  configMINIMAL_STACK_SIZE+100, NULL, 2, NULL);
+    if (!uart_link_init(&hooks) || !uart_link_start()) {
+        fatal_halt();
+    }
+#if APP_LOOPBACK_TEST
+    if (xTaskCreate(loopback_task, "loopback", APP_STACK_LOOPBACK, NULL, APP_PRIO_LOOPBACK, NULL) != pdPASS) {
+        fatal_halt();
+    }
+#endif
 
     vTaskStartScheduler();
-
-    /* Force the counter to be placed into memory. */
-    volatile static int i = 0 ;
-    /* Enter an infinite loop, just incrementing a counter. */
-    while(1) {
-        i++ ;
-        /* 'Dummy' NOP to allow source level single stepping of
-            tight while() loop */
-        __asm volatile ("nop");
-    }
-    return 0 ;
+    fatal_halt(); /* only reached if the idle task could not be created */
+    return 0;
 }
-
