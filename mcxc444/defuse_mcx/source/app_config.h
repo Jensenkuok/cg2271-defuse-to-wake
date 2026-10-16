@@ -18,6 +18,9 @@
 #ifndef APP_DEBUG_STATS
 #define APP_DEBUG_STATS             1   /* 0 = no periodic stats print in normal mode */
 #endif
+#ifndef APP_GAME_DEBUG
+#define APP_GAME_DEBUG              1   /* 1 = debug task prints one line per game-state change */
+#endif
 #ifndef APP_USE_SHOCK_FALLBACK
 #define APP_USE_SHOCK_FALLBACK      0   /* 1 = shock switch on PTD6 replaces the ESP32 gyro */
 #endif
@@ -82,6 +85,7 @@
 #define APP_STACK_COMM              256u    /* proto_link frame buffers + callbacks */
 #define APP_STACK_JOYSTICK          128u
 #define APP_STACK_ULTRASONIC        128u
+#define APP_STACK_GAME_MARGIN_WORDS 192u    /* on top of sizeof(game_t)/4: engine calls, pack, queue sends */
 #define APP_STACK_FEEDBACK          160u
 #define APP_STACK_DEBUG             288u    /* PRINTF formatting is stack-hungry */
 #define APP_STACK_LOOPBACK          256u
@@ -92,6 +96,17 @@
 #define APP_TX_REQ_QUEUE_LEN        4u      /* frames other tasks ask the comm task to send */
 #define APP_INPUT_QUEUE_LEN         16u     /* game_event_t from all input drivers */
 #define APP_FEEDBACK_QUEUE_LEN      8u      /* sound / tick / LED requests */
+#define APP_CONTROL_QUEUE_LEN       4u      /* comm -> game: TIME_SYNC / SET_ALARM / BOMB_CONFIG (rare) */
+
+/* ---- Game task ---- */
+#define APP_GAME_TICK_MS            50u     /* game_tick period (buzzer tick rate is separate) */
+#define APP_GAME_CATCHUP_TICKS      4u      /* if later than this many periods, resync instead of bursting */
+#define APP_STATE_MUTEX_WAIT_MS     5u      /* bounded wait for the snapshot mutex */
+
+/* ---- Messages to the ESP32 ---- */
+#define APP_GAME_STATE_MIN_MS       100u    /* at most 10 GAME_STATE frames per second */
+#define APP_TELEMETRY_MS            500u    /* TELEMETRY period */
+#define APP_TELEMETRY_ENC_MAX       32767   /* encoder count clamp for the int16 field */
 
 /* ---- Comm task timing ---- */
 #define APP_COMM_RX_WAIT_MS         10u     /* max wait for a byte before polling timers */
@@ -124,6 +139,7 @@
 #define APP_US_US_PER_CM            58u     /* round-trip microseconds per centimetre */
 #define APP_US_MAX_CM               400u    /* HC-SR04 range */
 #define APP_US_INVALID_CM           999     /* DISTANCE value for timeout / out of range */
+#define APP_US_USE_PIN_LEVEL        1       /* 1 = classify edges by ECHO pin level (UNVERIFIED on HW) */
 
 /* ---- TPM clocks: MCGIRCLK = 8 MHz LIRC (BOARD_BootClockRUN), SOPT2 TPMSRC = 3 ---- */
 #define APP_TPM_CLK_HZ              8000000u
@@ -149,6 +165,7 @@
 /* ---- Debug task ---- */
 #define APP_DEBUG_STATS_MS          10000u  /* normal mode stats period */
 #define APP_DEBUG_TEST_STATS_MS     5000u   /* driver-test mode stats period */
+#define GAME_DEBUG_MASK_BITS        6u      /* wires cut-mask digits printed (max 6 wires) */
 #define APP_DEBUG_DEMO_STEP_MS      2000u   /* boot demo: one sound + one LED mode per step */
 
 /* ---- Loopback self-test ---- */

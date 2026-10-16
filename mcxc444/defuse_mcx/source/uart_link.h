@@ -31,6 +31,11 @@ typedef struct {
     uint32_t uart_errors;                       /* overrun / noise / framing / parity */
     uint32_t tx_ring_drops;                     /* frames dropped: TX ring full */
     uint32_t tx_req_drops;                      /* uart_link_send: request queue full */
+    uint32_t rx_bad_payload;                    /* delivered frame whose payload failed to unpack */
+    uint32_t rx_ignored;                        /* delivered frame of a type the MCX does not act on */
+    uint32_t ctrl_drops;                        /* control queue full: TIME_SYNC/SET_ALARM/CONFIG lost */
+    uint32_t game_state_sent;                   /* GAME_STATE frames handed to the link */
+    uint32_t telemetry_sent;                    /* TELEMETRY frames handed to the link */
 } uart_link_stats_t;
 
 /* Called from the comm task. Keep them short; they must not block. */

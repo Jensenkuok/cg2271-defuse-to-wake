@@ -2,7 +2,7 @@
  * Defuse to Wake - MCXC444 firmware entry point.
  *
  * Tasks (priorities from CLAUDE.md, configMAX_PRIORITIES = 5):
- *   game (4)        - not created yet (next step)
+ *   game (4)        - owns game_t, consumes the input + control queues (not in DRIVER_TEST)
  *   joystick (3)    - 50 Hz ADC sampler, joystick.c
  *   comm (2)        - owns the ACK/retransmit link on UART2, uart_link.c
  *   ultrasonic (2)  - 60 ms HC-SR04 ping; equal to comm so time slicing shares the CPU
@@ -26,10 +26,12 @@
 #include "task.h"
 
 #include "app_config.h"
+#include "app_state.h"
 #include "buttons.h"
 #include "debug.h"
 #include "encoder.h"
 #include "feedback.h"
+#include "game_task.h"
 #include "input_queue.h"
 #include "joystick.h"
 #include "protocol.h"
@@ -142,6 +144,7 @@ int main(void)
 
     /* Queues and peripherals first (no task runs yet), then the tasks. */
     ok = input_queue_init();
+    ok = ok && app_state_init();
     ok = ok && feedback_init();
     ok = ok && uart_link_init(&hooks);
     if (!ok) {
@@ -155,6 +158,9 @@ int main(void)
     buttons_init();
 
     ok = feedback_start() && uart_link_start() && joystick_start() && ultrasonic_start() && debug_start();
+#if !APP_DRIVER_TEST
+    ok = ok && game_task_start(); /* in driver-test mode the debug task consumes the input queue instead */
+#endif
 #if APP_LOOPBACK_TEST
     ok = ok && (xTaskCreate(loopback_task, "loopback", APP_STACK_LOOPBACK, NULL, APP_PRIO_LOOPBACK, NULL) == pdPASS);
 #endif
