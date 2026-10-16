@@ -49,8 +49,9 @@ Stretch (only after core is done): laser tripwire, magnetic key (reed/Hall), cla
 ## Software architecture (target)
 - Game FSM (MCX): IDLE → ARMED → BOMB_ACTIVE (module 1..N) → DEFUSED | EXPLODED
   (EXPLODED → new bomb with +1 module). 3 strikes or timeout = EXPLODED.
-- MCX tasks (high→low): game/alarm FSM + buzzer > joystick sampler > sensor task
-  (ultrasonic) > comm RX parser > comm TX.
+- MCX task priorities (configMAX_PRIORITIES 5): game 4 > joystick sampler 3 > comm (owns
+  proto_link) 2 = ultrasonic 2 (equal on purpose: shows time slicing) > feedback (buzzer + LED)
+  1 = debug/stats 1 > idle 0.
 - MCX ISRs: UART RX (bytes → queue), PORT (encoder, buttons → queue/notification),
   TPM capture (echo). ISR priority: UART RX above GPIO.
 - Sync: queues (ISR→parser, input events→FSM, FSM→TX), mutex on UART TX + shared game state.
