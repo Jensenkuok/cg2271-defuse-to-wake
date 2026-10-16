@@ -26,6 +26,9 @@ int32_t ultrasonic_last_cm(void);
 
 uint32_t ultrasonic_timeouts(void);
 
+/* Cycles discarded by the capture rule (stale echo, wrong edge order). */
+uint32_t ultrasonic_stale(void);
+
 TaskHandle_t ultrasonic_task_handle(void);
 
 #endif /* ULTRASONIC_H */

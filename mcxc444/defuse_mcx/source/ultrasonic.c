@@ -7,6 +7,8 @@
 #include "input_queue.h"
 
 #define TRIG_MASK      (1u << APP_US_TRIG_PIN)
+#define ECHO_MASK      (1u << APP_US_ECHO_PIN)
+#define WIDTH_INVALID  0xFFFFFFFFu  /* s_width_us marker: this cycle's echo was not usable */
 #define TPM_CMOD_COUNT 1u   /* SC CMOD: count on every TPM counter clock */
 #define MAX_OVERFLOWS  1u   /* > 1 wrap = pulse > 65 ms: impossible, discard */
 
@@ -19,6 +21,7 @@ static volatile uint32_t s_overflows;   /* ISR only */
 static volatile uint32_t s_width_us;    /* ISR -> task, read after the notification */
 static volatile int32_t s_last_cm = APP_US_INVALID_CM;
 static volatile uint32_t s_timeouts;
+static volatile uint32_t s_stale;      /* cycles discarded by the capture rule */
 
 /* Bounded wait for a CnSC write to be acknowledged in the TPM clock domain (RM TPM
  * chapter: a channel must be disabled, and that acknowledged, before a mode change).
@@ -74,11 +77,29 @@ void ultrasonic_init(void)
     NVIC_EnableIRQ(TPM1_IRQn);
 }
 
-/* ISR: read the captured value, clear flags, compute the width, notify. */
+/*
+ * ECHO CAPTURE RULE (re-armed at every ping):
+ *   1. A ping starts only if ECHO is LOW. If it is still HIGH, the previous echo has
+ *      not ended: nothing is triggered and the cycle reports DISTANCE 999.
+ *   2. Before the trigger the capture flag is cleared and the state set to WAIT_RISE,
+ *      so only edges captured AFTER this trigger can count. Captures that arrive while
+ *      the state is IDLE (e.g. the late falling edge of a ping we already gave up on)
+ *      are discarded.
+ *   3. The first accepted edge must be a RISING edge (pin high when the ISR runs), the
+ *      next a FALLING edge (pin low). Any other order (a stray falling edge first, or
+ *      a second rising edge) invalidates the cycle: it reports 999.
+ *   4. If either edge never comes, the 35 ms task timeout also reports 999.
+ * The pin level is read through GPIOA->PDIR (a pin muxed to a TPM channel is still a
+ * digital function and reads its level, RM GPIO "PDIR" p.842).
+ * UNVERIFIED on hardware: set APP_US_USE_PIN_LEVEL 0 to fall back to edge ORDER only.
+ */
+
+/* ISR: read the captured value, clear flags, classify the edge, notify. */
 void TPM1_IRQHandler(void)
 {
     BaseType_t woken = pdFALSE;
     uint32_t status = TPM1->STATUS;
+    bool level_high;
     uint16_t cap;
 
     TPM1->STATUS = status & (TPM_STATUS_CH1F_MASK | TPM_STATUS_TOF_MASK); /* w1c */
@@ -88,19 +109,32 @@ void TPM1_IRQHandler(void)
     }
     if ((status & TPM_STATUS_CH1F_MASK) != 0u) {
         cap = (uint16_t)TPM1->CONTROLS[APP_US_ECHO_CH].CnV;
+        level_high = (GPIOA->PDIR & ECHO_MASK) != 0u;
         if (s_state == ECHO_WAIT_RISE) {
-            s_rise = cap;
-            s_overflows = 0u;
-            s_state = ECHO_WAIT_FALL;
-        } else if (s_state == ECHO_WAIT_FALL) {
-            /* uint16_t subtraction handles one counter wrap by itself; the overflow
-             * count only rejects pulses longer than 65.5 ms (not an HC-SR04 echo). */
-            s_width_us = (s_overflows > MAX_OVERFLOWS) ? 0xFFFFFFFFu
-                                                        : (uint32_t)(uint16_t)(cap - s_rise);
-            s_state = ECHO_IDLE;
-            if (s_task != NULL) {
-                vTaskNotifyGiveFromISR(s_task, &woken);
+            if (!APP_US_USE_PIN_LEVEL || level_high) {
+                s_rise = cap;
+                s_overflows = 0u;
+                s_state = ECHO_WAIT_FALL;
+            } else { /* a falling edge first: left over from an older echo */
+                s_width_us = WIDTH_INVALID;
+                s_stale++;
+                s_state = ECHO_IDLE;
+                if (s_task != NULL) { vTaskNotifyGiveFromISR(s_task, &woken); }
             }
+        } else if (s_state == ECHO_WAIT_FALL) {
+            if (!APP_US_USE_PIN_LEVEL || !level_high) {
+                /* uint16_t subtraction handles one counter wrap by itself; the overflow
+                 * count only rejects pulses longer than 65.5 ms (not an HC-SR04 echo). */
+                s_width_us = (s_overflows > MAX_OVERFLOWS) ? WIDTH_INVALID
+                                                           : (uint32_t)(uint16_t)(cap - s_rise);
+            } else { /* a second rising edge: not a valid pulse */
+                s_width_us = WIDTH_INVALID;
+                s_stale++;
+            }
+            s_state = ECHO_IDLE;
+            if (s_task != NULL) { vTaskNotifyGiveFromISR(s_task, &woken); }
+        } else {
+            /* ECHO_IDLE: a capture nobody is waiting for: discarded. */
         }
     }
     portYIELD_FROM_ISR(woken);
@@ -134,14 +168,28 @@ static void ultrasonic_task(void *arg)
     for (;;) {
         vTaskDelayUntil(&wake, pdMS_TO_TICKS(APP_US_PERIOD_MS));
 
-        (void)ulTaskNotifyTake(pdTRUE, 0); /* drop a late notification from last cycle */
-        s_state = ECHO_WAIT_RISE;          /* arm before the pulse so no edge is missed */
+        /* Rule 1: never ping while the previous echo is still high. */
+        if (APP_US_USE_PIN_LEVEL && (GPIOA->PDIR & ECHO_MASK) != 0u) {
+            s_stale++;
+            s_last_cm = APP_US_INVALID_CM;
+            input_post(GAME_EVT_DISTANCE, APP_US_INVALID_CM);
+            continue;
+        }
+
+        /* Rule 2: re-arm. Drop a late notification and any pending capture flag, then
+         * arm WAIT_RISE before the pulse so only edges after this trigger count. */
+        (void)ulTaskNotifyTake(pdTRUE, 0);
+        TPM1->STATUS = TPM_STATUS_CH1F_MASK; /* w1c */
+        s_width_us = WIDTH_INVALID;
+        s_state = ECHO_WAIT_RISE;
         trigger_pulse();
 
         if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(APP_US_ECHO_TIMEOUT_MS)) == 0u) {
-            s_state = ECHO_IDLE;
+            s_state = ECHO_IDLE;   /* rule 4: late edges are now discarded by the ISR */
             s_timeouts++;
             cm = APP_US_INVALID_CM;
+        } else if (s_width_us == WIDTH_INVALID) {
+            cm = APP_US_INVALID_CM; /* rule 3: wrong edge order */
         } else {
             cm = (int32_t)(s_width_us / APP_US_US_PER_CM);
             if (cm > (int32_t)APP_US_MAX_CM) {
@@ -166,6 +214,11 @@ int32_t ultrasonic_last_cm(void)
 uint32_t ultrasonic_timeouts(void)
 {
     return s_timeouts;
+}
+
+uint32_t ultrasonic_stale(void)
+{
+    return s_stale;
 }
 
 TaskHandle_t ultrasonic_task_handle(void)
