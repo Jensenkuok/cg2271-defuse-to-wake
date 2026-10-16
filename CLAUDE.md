@@ -64,6 +64,15 @@ Stretch (only after core is done): laser tripwire, magnetic key (reed/Hall), cla
 - Dropped on purpose (failure points, no extra marks): weather API, cloud dashboard,
   Wi-Fi setup portal/QR, async web server libraries, DS1302, SD card.
 
+## Game rules (team-approved)
+- Dial: 4-digit code; encoder changes current digit (wraps 0–9), press locks; wrong = strike, digit resets.
+- Wires: 3–6 wires; joystick moves cursor, press cuts; wrong = strike, cut wire stays cut.
+- Tripwire: hand in distance band continuously 3 s; leaving band resets hold, no strike.
+- Tamper: shake over threshold = strike, 2 s cooldown.
+- Max strikes or timer 0 = EXPLODED → after 3 s new bomb with +1 module (cap 4). All modules = DEFUSED.
+- Snooze: encoder long-press or ESP32 CMD → +5 min, +1 module next bomb, max 2.
+- Default offline bomb: dial + wires + tripwire, 180 s. All ESP32-sent config is range-checked in game/.
+
 ## Rubric map (demo, 35)
 Sensors/actuators 5 · Poll+IRQ 2 · ISR design 3 · Task design 4 · Sync 2 · RTOS config 2 ·
 ESP32 use 7 · Comms protocol 5 (packetization + flow control) · Online 5 (GenAI + REST + DB).
@@ -85,7 +94,9 @@ NUS_STU WPA2-Enterprise, the dropped items above, features that don't map to a r
 ## Layout
 - mcxc444/ — MCUXpresso project (created by the user in the IDE; workhorse edits its source/)
 - esp32/defuse_esp32/ — Arduino sketch (secrets.h git-ignored; secrets.example.h committed)
-- shared/ — protocol.h / protocol.c, canonical for both boards
+- shared/ — protocol + proto_link (ACK/retransmit), canonical for both boards
+- game/ — hardware-independent bomb game engine (pure C99, host-tested), compiled into the
+  MCX project like shared/; MCX tasks feed it events and act on its outputs
 - tools/ — host-side tests/scripts
 - docs/ — interim/final report drafts, diagrams, pin table
 
@@ -109,3 +120,6 @@ tests; hardware test steps written for the user; rubric line noted; user confirm
   access from a phone hotspot is untested (AWS relay 13.212.116.159 is the fallback).
 - Ask TA whether GenAI + REST suffices or a DB operation is expected (we do a DB write anyway).
 - OLEDs (2× SSD1306) ordered 15 Oct, awaiting delivery.
+- ESP32 board model unconfirmed: spec sample output shows ESP32-S2 (single core) — affects
+  core pinning, UART and I2C pins. Confirm before any ESP32 firmware prompt.
+- MCUXpresso IDE install location unknown (not under C:\nxp on this machine).
