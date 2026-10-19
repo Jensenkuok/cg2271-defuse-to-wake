@@ -4,7 +4,7 @@ HOW TO PRODUCE THE PDF
 2. Print (Ctrl+P) -> Destination: Save as PDF -> Paper size A4 -> Margins: Default -> untick "Headers and footers".
 3. Check the preview shows exactly 2 pages. If it spills over, shorten text (do not shrink the font below 12 pt).
 4. Replace every yellow [TEAM: ...] placeholder with the real information first.
-5. Name the file B0X_YY_Interim.pdf (X = lab slot, YY = group number).
+5. Save the PDF as B02_10_Interim.pdf.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -40,21 +40,21 @@ HOW TO PRODUCE THE PDF
 <body>
 
 <h1>Defuse to Wake: CG2271 Mini Project Interim Report</h1>
-<p><span class="team">[TEAM: lab slot B0X, group YY, member names]</span></p>
+<p>Lab slot B02, Group 10. <span class="team">[TEAM: member names]</span></p>
 
 <h2>1. Problem statement</h2>
-<p>Phone alarms are easy to dismiss and sleep through. Defuse to Wake is a smart lecture alarm: it reads the user's NUSMods timetable and, at wake time, arms a "bomb" that keeps ringing until the user defuses it by clearing sensor-based modules without tampering.</p>
+<p>Defuse to Wake is a smart lecture alarm. It reads the user's NUSMods timetable and, at wake time, arms a "bomb" that keeps ringing until the user defuses it by clearing sensor-based modules (safe dial, wire cutter, distance tripwire) without tampering.</p>
 
 <h2>2. Sensors and actuators</h2>
 <table>
 <tr><th>Part</th><th>Board</th><th>Read / driven via</th><th>Purpose</th></tr>
 <tr><td>Rotary encoder + push</td><td>MCXC444</td><td>GPIO interrupt (A/B edges, push)</td><td>Safe dial: enter code digits; long press snoozes</td></tr>
 <tr><td>PS2 joystick + button</td><td>MCXC444</td><td>ADC polled at 50 Hz; button IRQ</td><td>Wire cutter: move cursor, cut wire</td></tr>
-<tr><td>HC-SR04 ultrasonic</td><td>MCXC444</td><td>Periodic trigger, echo by timer input capture</td><td>Distance tripwire: hold hand in a band for 3 s</td></tr>
-<tr><td>GY-521 MPU-6050 gyro</td><td>ESP32</td><td>I2C, polled by an ESP32 task</td><td>Anti-tamper: shake or tilt is a strike (fallback: kit shock switch on an MCX interrupt)</td></tr>
-<tr><td>Passive buzzer</td><td>MCXC444</td><td>Timer PWM</td><td>Ticking that speeds up, explosion, defuse jingle</td></tr>
+<tr><td>HC-SR04 ultrasonic</td><td>MCXC444</td><td>Trigger pulse, timer input capture</td><td>Distance tripwire: hold hand in a band for 3 s</td></tr>
+<tr><td>GY-521 MPU-6050 gyro</td><td>ESP32</td><td>I2C, polled by an ESP32 task</td><td>Anti-tamper: shake or tilt is a strike</td></tr>
+<tr><td>Passive buzzer</td><td>MCXC444</td><td>Timer PWM</td><td>Ticking, explosion, defuse jingle</td></tr>
 <tr><td>RGB LED (on-board)</td><td>MCXC444</td><td>Timer PWM</td><td>Strike, progress and status colours</td></tr>
-<tr><td>SSD1306 0.96" OLED</td><td>ESP32</td><td>I2C (0x3C)</td><td>Bomb screen: timer, module graphics, clues</td></tr>
+<tr><td>SSD1306 0.96" OLED</td><td>ESP32</td><td>I2C (0x3C)</td><td>Bomb screen: timer, puzzles, briefing</td></tr>
 </table>
 
 <h2>3. Architecture</h2>
@@ -104,6 +104,7 @@ HOW TO PRODUCE THE PDF
   <g fill="#fff" stroke="#000" stroke-width="1">
     <rect x="342" y="44" width="166" height="44"/>
     <rect x="342" y="182" width="166" height="44" stroke-width="2"/>
+    <rect x="395" y="112" width="113" height="34"/>
   </g>
   <rect x="342" y="246" width="166" height="88" fill="none" stroke="#666" stroke-dasharray="4 3"/>
   <g fill="#fff" stroke="#000" stroke-width="1">
@@ -113,6 +114,7 @@ HOW TO PRODUCE THE PDF
   <g text-anchor="middle">
     <text x="425" y="63" font-weight="bold">Network task</text>
     <text x="425" y="79">WiFiMulti, HTTPS, NTP</text>
+    <text x="451" y="133">Web page (local)</text>
     <text x="425" y="201" font-weight="bold">UART link task</text>
     <text x="425" y="217">frames, ACK, retransmit</text>
     <text x="425" y="260" font-size="11" fill="#444">I2C bus</text>
@@ -120,7 +122,8 @@ HOW TO PRODUCE THE PDF
     <text x="425" y="318">SSD1306 OLED (I2C)</text>
   </g>
   <g stroke="#000" stroke-width="1.5" fill="none" marker-end="url(#ah)" marker-start="url(#ah)">
-    <path d="M425,88 V182"/>
+    <path d="M370,88 V182"/>
+    <path d="M451,88 V112"/>
     <path d="M425,226 V246"/>
   </g>
 
@@ -150,27 +153,28 @@ HOW TO PRODUCE THE PDF
 </svg>
 <figcaption>Figure 1. Block diagram.</figcaption>
 </figure>
-<p><b>Hardware split.</b> The MCXC444 is the game engine and owns every real-time input and output, so the bomb loop never depends on Wi-Fi. The ESP32 is the renderer and network gateway: it drives the OLED, reads the gyro and handles Wi-Fi, HTTPS and NTP.</p>
-<p><b>MCXC444 software (FreeRTOS, planned).</b> Tasks, high to low priority: game/alarm FSM with buzzer; joystick sampler; ultrasonic sensor task; comm RX parser; comm TX. ISRs: UART RX (bytes to a queue), PORT (encoder and buttons to a queue or notification) and timer capture (echo), with UART RX above GPIO. Queues connect ISR to parser, input events to the FSM and FSM to TX; a mutex guards UART TX and the shared game state. Preemption and time slicing are enabled. The ESP32 runs network, UART, display and gyro tasks joined by queues.</p>
-<p><b>Inter-board protocol.</b> UART 115200 8N1 carries frames [0xAA][TYPE][SEQ][LEN][PAYLOAD 0-32][CRC-8] with 11 message types. Alarm, config, tamper, command and result messages use stop-and-wait ACKs with a NACK on CRC or length errors, a 100 ms retransmit timeout, 3 retries and a 1 s heartbeat; 3 s of silence marks the link down. The same code is compiled on both boards.</p>
-<p><b>Online services.</b> The ESP32 caches the NUSMods timetable in flash, gets time from NTP and has two saved Wi-Fi hotspots. The SoCLaaS LLM (model x-test-1, then x-test-2, then built-in template clues) writes clues and difficulty as JSON; the ESP32 validates and clamps every field and picks the puzzle answers itself. The reply is cached and requested at start-up or nightly, never at alarm time. Results go to Firebase Realtime Database over REST; failed writes are queued and retried. Everything online is fetched ahead of time and has a fallback, with a built-in offline bomb (dial, wires, tripwire, 180 s).</p>
+<p><b>Hardware split.</b> The MCXC444 is the game engine and owns all real-time I/O, so the bomb never depends on Wi-Fi. The single-core ESP32-S2 is the renderer and network gateway: OLED, gyro, Wi-Fi and a local web page.</p>
+<p><b>Software (FreeRTOS).</b> MCXC444 task priorities: game FSM 4 &gt; joystick sampler 3 &gt; comm 2 = ultrasonic 2 &gt; feedback (buzzer, LED) 1 &gt; idle. ISRs: UART RX (bytes to a queue), PORT (encoder, buttons) and timer capture (echo), UART above GPIO. Queues join ISRs, FSM and TX; a mutex guards UART TX and game state. Preemption and time slicing are on. ESP32 tasks run by priority, no core pinning: UART link &gt; gyro &gt; display &gt; network = web page.</p>
+<p><b>Inter-board protocol.</b> UART 115200 8N1, frames [0xAA][TYPE][SEQ][LEN][PAYLOAD 0-32][CRC-8], 11 message types, stop-and-wait ACKs, NACK on CRC errors, 100 ms retransmit timeout, 3 retries, 1 s heartbeat.</p>
+<p><b>Cloud data exchange.</b> Everything online is cached, has a fallback and is never used at alarm time. The ESP32 caches the NUSMods timetable in flash and syncs time by NTP. Nightly, the SoCLaaS LLM writes dial and wire brain-teasers: the ESP32 picks each answer, a setter model (x-test-2) writes the puzzle and an independent checker model (x-test-1) must solve it before use. Fallbacks: qwen3.6:35b, "default", then a built-in puzzle bank. After defusing, the AI writes a morning briefing and coach message from the timetable and history. Difficulty is a deterministic rule from recent snoozes and strikes. The last 14 mornings stay in ESP32 flash (source of truth); Firebase Realtime Database is a write-only mirror, queued and retried, never read at runtime. A web page on the same Wi-Fi shows "My mornings" (alarm, lectures, history, settings) and "Engineering" (live bomb, packet log, AI checks, fault buttons) (game-independent).</p>
 
 <h2>4. Current progress</h2>
 <ul>
-<li>Done: shared UART codec (framing, CRC-8, 11 message types), ACK/retransmit link layer, and hardware-independent game engine (state machine, dial, wire and tripwire modules, tamper, snooze).</li>
-<li>Done: host unit tests, 483 checks passing (protocol 91, link 148, game 244). No firmware has run on hardware yet.</li>
-<li><span class="team">[TEAM: MCXC444 smoke tests: encoder, joystick, ultrasonic, buzzer, LED]</span></li>
-<li><span class="team">[TEAM: ESP32 smoke tests: OLED, gyro, Wi-Fi, board-to-board UART]</span></li>
+<li>Done, host-tested: UART codec, ACK/retransmit link layer and hardware-independent game engine; 483 unit-test checks pass (protocol 91, link 148, game 244).</li>
+<li>MCXC444 firmware builds with 0 errors and 0 warnings: FreeRTOS config, UART link task, encoder/button ISRs, joystick and ultrasonic tasks, buzzer/LED task, game task with mutex-guarded snapshot. Pin table verified against the manuals.</li>
+<li>ESP32-S2 firmware compiles against the real libraries: link, OLED, gyro and Wi-Fi/NTP tasks. NUSMods fetch and alarm scheduler: in progress.</li>
+<li>Cloud set up: SoCLaaS key working (4 models verified, reachable from a phone hotspot); Firebase Realtime Database project created; NUSMods API verified for AY2026/27 Sem 1.</li>
+<li>Hardware is being assembled; on-target testing is scheduled for Week 11. <span class="team">[TEAM: update if any on-hardware test has been done before submission]</span></li>
 </ul>
 
 <h2>5. Plan to Week 13</h2>
 <table>
 <tr><th>Milestone</th><th>Target</th></tr>
-<tr><td>Codec, link layer and game engine with host tests</td><td>Done</td></tr>
-<tr><td>MCXC444 firmware: input and sensor tasks, ISRs, buzzer and LED, game and comm tasks</td><td class="team">[TEAM: date]</td></tr>
-<tr><td>ESP32 firmware: UART link, OLED, gyro and tamper events</td><td class="team">[TEAM: date]</td></tr>
-<tr><td>Online: NTP, NUSMods, SoCLaaS clues with fallbacks, Firebase result writes</td><td class="team">[TEAM: date]</td></tr>
-<tr><td>Integration, demo rehearsal, final report (due 13 Nov)</td><td class="team">[TEAM: date]</td></tr>
+<tr><td>Codec, link, game engine, firmware builds</td><td>Done</td></tr>
+<tr><td>On-hardware testing and fixes for both boards; NUSMods and alarm scheduling</td><td>Wk 11 (26-30 Oct)</td></tr>
+<tr><td>AI puzzle pipeline and briefing; web page; end-to-end integration</td><td>Wk 12 (2-6 Nov)</td></tr>
+<tr><td>Integration tests, demo rehearsal, backup video</td><td>By Mon 9 Nov</td></tr>
+<tr><td>Final report and code</td><td>Fri 13 Nov</td></tr>
 </table>
 
 </body>
