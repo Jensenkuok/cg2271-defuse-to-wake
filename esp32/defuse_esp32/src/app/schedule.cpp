@@ -3,6 +3,8 @@
 
 #include <string.h>
 
+#include "../shared/protocol.h"
+
 namespace {
 
 struct TypeEntry {
@@ -136,6 +138,24 @@ void parse_slot_token(const char *module, const char *p, const char *end, ShareL
         return;
     }
     out->count++;
+}
+
+/* Index of the earliest lesson taught on this weekday/week (ties: lower index), -1 if none. */
+int first_lesson_on_day(const Lesson *lessons, int count, int weekday, int week)
+{
+    int best = -1;
+    int i;
+
+    for (i = 0; i < count; i++) {
+        if (lessons[i].weekday > SCHED_MAX_WEEKDAY || lessons[i].weekday != weekday ||
+            lessons[i].start_min >= SCHED_MIN_PER_DAY || ((lessons[i].weeks >> (week - 1)) & 1u) == 0u) {
+            continue;
+        }
+        if (best < 0 || lessons[i].start_min < lessons[best].start_min) {   /* strict '<': ties keep the lower index */
+            best = i;
+        }
+    }
+    return best;
 }
 
 }  // namespace
@@ -283,22 +303,21 @@ uint32_t sched_local_to_unix(int year, int month, int day, int hour, int minute)
     return (uint32_t)(local - SCHED_TZ_OFFSET_S);
 }
 
-NextAlarm next_alarm(const Lesson *lessons, int count, uint32_t now_unix, int lead_min)
+NextAlarm next_alarm(const Lesson *lessons, int count, uint32_t now_unix, int lead_min,
+                     uint32_t consumed_class_start_unix)
 {
     NextAlarm r;
     const int64_t now = (int64_t)now_unix;
     const int64_t first_day = floor_div(now + SCHED_TZ_OFFSET_S, SCHED_SEC_PER_DAY);
     const int64_t horizon = now + (int64_t)SCHED_LOOKAHEAD_DAYS * SCHED_SEC_PER_DAY;
     const int64_t lead_s = (int64_t)lead_min * SCHED_SEC_PER_MIN;
-    int64_t best_start = 0;
     int64_t day;
     int64_t start;
-    int weekday;
     int week;
+    int idx;
     int y;
     int m;
     int d;
-    int i;
     int d_off;
 
     r.found = false;
@@ -319,28 +338,46 @@ NextAlarm next_alarm(const Lesson *lessons, int count, uint32_t now_unix, int le
         if (week == 0) {
             continue;                                   /* recess, before week 1 or after week 13 */
         }
-        weekday = sched_weekday(y, m, d);
-        for (i = 0; i < count; i++) {
-            if (lessons[i].weekday > SCHED_MAX_WEEKDAY || lessons[i].weekday != weekday ||
-                lessons[i].start_min >= SCHED_MIN_PER_DAY ||
-                ((lessons[i].weeks >> (week - 1)) & 1u) == 0u) {
-                continue;
-            }
-            start = day * SCHED_SEC_PER_DAY + (int64_t)lessons[i].start_min * SCHED_SEC_PER_MIN -
-                    SCHED_TZ_OFFSET_S;
-            if (start >= horizon || start - lead_s <= now + SCHED_MIN_LEAD_S) {
-                continue;
-            }
-            if (!r.found || start < best_start) {       /* strict '<': ties keep the lower index */
-                r.found = true;
-                best_start = start;
-                r.lesson_idx = i;
-            }
+        idx = first_lesson_on_day(lessons, count, sched_weekday(y, m, d), week);
+        if (idx < 0) {
+            continue;
         }
-    }
-    if (r.found) {
-        r.class_start_unix = (uint32_t)best_start;
-        r.alarm_unix = (uint32_t)(best_start - lead_s);
+        start = day * SCHED_SEC_PER_DAY + (int64_t)lessons[idx].start_min * SCHED_SEC_PER_MIN - SCHED_TZ_OFFSET_S;
+        if (start >= horizon) {
+            break;                                      /* every later day starts later still */
+        }
+        /* The day's FIRST class decides the day: if its alarm is too close or already rang, the
+         * later classes of the same day are NOT used, the next day's first class is. */
+        if (start - lead_s <= now + SCHED_MIN_LEAD_S || start <= (int64_t)consumed_class_start_unix) {
+            continue;
+        }
+        r.found = true;
+        r.lesson_idx = idx;
+        r.class_start_unix = (uint32_t)start;
+        r.alarm_unix = (uint32_t)(start - lead_s);
+        break;
     }
     return r;
+}
+
+AlarmAction alarm_action(uint32_t desired_alarm_unix, uint32_t last_sent_alarm_unix, uint8_t mcx_state,
+                         bool session_active, bool time_sync_sent)
+{
+    if (session_active) {
+        return ALARM_ACTION_NONE;
+    }
+    if (desired_alarm_unix == 0u) {
+        return (mcx_state == PROTO_STATE_ARMED && last_sent_alarm_unix != 0u) ? ALARM_ACTION_SEND_CANCEL
+                                                                              : ALARM_ACTION_NONE;
+    }
+    return (desired_alarm_unix != last_sent_alarm_unix || time_sync_sent) ? ALARM_ACTION_SEND_SET_ALARM
+                                                                          : ALARM_ACTION_NONE;
+}
+
+bool session_next(bool session_active, uint8_t mcx_state)
+{
+    if (mcx_state == PROTO_STATE_BOMB_ACTIVE) {
+        return true;
+    }
+    return (mcx_state == PROTO_STATE_IDLE) ? false : session_active;
 }

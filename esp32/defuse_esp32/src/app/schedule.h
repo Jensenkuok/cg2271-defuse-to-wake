@@ -96,9 +96,33 @@ int sched_weekday(int year, int month, int day);
 /* Local (UTC+8) wall-clock time to unix seconds. */
 uint32_t sched_local_to_unix(int year, int month, int day, int hour, int minute);
 
-/* The earliest lesson start within SCHED_LOOKAHEAD_DAYS of now_unix whose alarm
- * (start - lead_min) is more than SCHED_MIN_LEAD_S after now_unix, honouring the weeks mask,
- * the recess week and the end of semester. Ties go to the lower lesson index. */
-NextAlarm next_alarm(const Lesson *lessons, int count, uint32_t now_unix, int lead_min);
+/* The alarm for the FIRST class of the next day that has one (Asia/Singapore calendar days),
+ * honouring the weeks mask, the recess week and the end of semester. Only the earliest class
+ * of a day counts (ties go to the lower lesson index); the later classes of that day never
+ * produce an alarm. A day is used if its first class starts within SCHED_LOOKAHEAD_DAYS of
+ * now_unix, its alarm (start - lead_min) is more than SCHED_MIN_LEAD_S after now_unix and it
+ * starts after consumed_class_start_unix (the class whose alarm already rang; 0 = none).
+ * Otherwise the next day's first class is tried. */
+NextAlarm next_alarm(const Lesson *lessons, int count, uint32_t now_unix, int lead_min,
+                     uint32_t consumed_class_start_unix = 0u);
+
+/* ---- What to tell the MCX about the alarm (pure decision, no I/O) ---- */
+enum AlarmAction {
+    ALARM_ACTION_NONE = 0,
+    ALARM_ACTION_SEND_SET_ALARM,
+    ALARM_ACTION_SEND_CANCEL
+};
+
+/* desired_alarm_unix: the alarm the schedule wants (0 = none). last_sent_alarm_unix: what the
+ * MCX was last told (0 = nothing, or cancelled). mcx_state: PROTO_STATE_* from GAME_STATE.
+ * session_active: a bomb has started and the MCX is not back in IDLE yet (see session_next):
+ * then the MCX owns the alarm (a snooze leaves it ARMED) and NOTHING is sent, not even the
+ * re-send that follows a TIME_SYNC. time_sync_sent: a TIME_SYNC goes out in this pass. */
+AlarmAction alarm_action(uint32_t desired_alarm_unix, uint32_t last_sent_alarm_unix, uint8_t mcx_state,
+                         bool session_active, bool time_sync_sent);
+
+/* Session flag after a GAME_STATE: BOMB_ACTIVE starts it, IDLE ends it, any other state keeps it
+ * (DEFUSED / EXPLODED / a snooze's ARMED all belong to the running session). */
+bool session_next(bool session_active, uint8_t mcx_state);
 
 #endif /* SCHEDULE_H */

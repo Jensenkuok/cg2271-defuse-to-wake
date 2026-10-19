@@ -34,12 +34,17 @@ struct NetCtx {
     /* MCX time/alarm sync */
     uint32_t last_sync_ms;
     uint32_t seen_link_count;
-    bool force_send;            /* a new alarm exists that the MCX has not been told about */
+    bool force_send;            /* the alarm changed: run the TIME_SYNC / SET_ALARM / CANCEL decision now */
+    uint32_t last_sent_alarm_unix; /* the alarm the MCX was last told, 0 = none / cancelled / consumed */
     /* alarm scheduling */
     bool resched_pending;       /* recompute once the clock is valid */
-    bool alarm_consumed;        /* the alarm rang and the bomb was defused: replace it now */
     bool first_schedule_done;   /* false until the first reschedule after boot */
     uint32_t cur_alarm_unix;    /* the alarm we last scheduled, 0 = none */
+    uint32_t cur_class_start_unix;      /* start of the class that alarm is for */
+    uint32_t consumed_class_start_unix; /* classes starting at or before this already had their alarm */
+    uint32_t session_class_start_unix;  /* class whose alarm started the running session, 0 = demo ring */
+    uint32_t seen_session_starts;
+    uint32_t seen_session_ends;
     char cur_module[SCHED_MODULE_LEN];
     uint32_t ring_alarm_unix;   /* the previous alarm, remembered after it was replaced */
     char ring_module[SCHED_MODULE_LEN];
@@ -79,31 +84,44 @@ static bool game_ringing(const AppState &st)
     return st.game_valid && st.game.state != PROTO_STATE_IDLE && st.game.state != PROTO_STATE_ARMED;
 }
 
-/* Queue TIME_SYNC, then SET_ALARM if one is stored. Both or neither: the MCX needs them
- * in this order (a TIME_SYNC moves its clock, and an armed deadline is not moved with it). */
-static bool send_time_and_alarm(uint32_t unix_now, uint32_t alarm_unix)
+/* Each helper queues one frame for the link task; false if the queue refused it. */
+static bool queue_time_sync(uint32_t unix_now)
 {
     proto_time_sync_t ts;
-    proto_set_alarm_t sa;
     uint8_t pl[PROTO_SIZE_TIME_SYNC];
-    uint8_t pl2[PROTO_SIZE_SET_ALARM];
 
-    if (link_tx_space() < 2u) {
-        return false; /* retry on the next loop */
-    }
     ts.unix_time = unix_now;
-    if (proto_pack_time_sync(&ts, pl, sizeof(pl)) == 0 ||
-        !link_send(PROTO_MSG_TIME_SYNC, pl, PROTO_SIZE_TIME_SYNC)) {
+    if (proto_pack_time_sync(&ts, pl, sizeof(pl)) == 0 || !link_send(PROTO_MSG_TIME_SYNC, pl, PROTO_SIZE_TIME_SYNC)) {
         return false;
     }
     Serial.printf("[net] TIME_SYNC %u queued\n", (unsigned)unix_now);
-    if (alarm_unix != 0u) {
-        sa.alarm_unix = alarm_unix;
-        if (proto_pack_set_alarm(&sa, pl2, sizeof(pl2)) != 0 &&
-            link_send(PROTO_MSG_SET_ALARM, pl2, PROTO_SIZE_SET_ALARM)) {
-            Serial.printf("[net] SET_ALARM %u queued\n", (unsigned)alarm_unix);
-        }
+    return true;
+}
+
+static bool queue_set_alarm(uint32_t alarm_unix)
+{
+    proto_set_alarm_t sa;
+    uint8_t pl[PROTO_SIZE_SET_ALARM];
+
+    sa.alarm_unix = alarm_unix;
+    if (proto_pack_set_alarm(&sa, pl, sizeof(pl)) == 0 || !link_send(PROTO_MSG_SET_ALARM, pl, PROTO_SIZE_SET_ALARM)) {
+        return false;
     }
+    Serial.printf("[net] SET_ALARM %u queued\n", (unsigned)alarm_unix);
+    return true;
+}
+
+static bool queue_cancel(void)
+{
+    proto_cmd_t cmd;
+    uint8_t pl[PROTO_SIZE_CMD];
+
+    cmd.cmd = PROTO_CMD_CANCEL;
+    cmd.arg = 0u;
+    if (proto_pack_cmd(&cmd, pl, sizeof(pl)) == 0 || !link_send(PROTO_MSG_CMD, pl, PROTO_SIZE_CMD)) {
+        return false;
+    }
+    Serial.println("[net] CMD_CANCEL queued (alarm cleared)");
     return true;
 }
 
@@ -114,8 +132,9 @@ static bool send_time_and_alarm(uint32_t unix_now, uint32_t alarm_unix)
  * NEXT class. */
 static bool alarm_replaceable(const NetCtx &c, uint32_t unix_now)
 {
-    if (c.cur_alarm_unix == 0u || c.alarm_consumed) {
-        return true;
+    if (c.cur_alarm_unix == 0u ||
+        (c.cur_class_start_unix != 0u && c.cur_class_start_unix <= c.consumed_class_start_unix)) {
+        return true;                                   /* nothing scheduled, or its alarm was already used */
     }
     return c.cur_alarm_unix > unix_now + SCHED_MIN_LEAD_S || unix_now >= c.cur_alarm_unix + ALARM_GRACE_S;
 }
@@ -143,18 +162,19 @@ static void reschedule(NetCtx &c, uint32_t unix_now)
      * minute away (we rebooted, it did not). Look back BOOT_GRACE so that alarm is returned again
      * instead of being skipped for the next class. A past result is never sent (see sync_with_mcx). */
     a = next_alarm(s_lessons, n, c.first_schedule_done ? unix_now : unix_now - ALARM_BOOT_GRACE_S,
-                   settings_get_lead_min());
+                   settings_get_lead_min(), c.consumed_class_start_unix);
     c.first_schedule_done = true;
     new_alarm = a.found ? a.alarm_unix : 0u;
-    c.alarm_consumed = false;
     if (new_alarm == c.cur_alarm_unix) {
         return;
     }
     remember_fired_alarm(c, unix_now);
     c.cur_alarm_unix = new_alarm;
+    c.cur_class_start_unix = a.found ? a.class_start_unix : 0u;
     memset(c.cur_module, 0, sizeof(c.cur_module));
     if (!a.found) {
         app_state_set_schedule(0u, 0u, NULL);
+        c.force_send = true;                           /* alarm_action decides whether the MCX needs a CANCEL */
         Serial.printf("[sched] no class in the next %d days: alarm cleared (%d lessons cached)\n",
                       SCHED_LOOKAHEAD_DAYS, n);
         return;
@@ -187,17 +207,15 @@ static void handle_results(NetCtx &c, uint32_t unix_now)
 {
     proto_result_msg_t r;
     HistRecord rec;
-    bool defused;
 
+    /* The alarm is marked consumed when the session ends (track_session), not here: the MCX is
+     * still in its 30 s DEFUSED hold and a snooze keeps the session, and the alarm, alive. */
     while (link_result_pop(&r)) {
-        defused = (r.outcome == PROTO_OUTCOME_DEFUSED);
+        const bool defused = (r.outcome == PROTO_OUTCOME_DEFUSED);
+
         if (history_on_result(defused, r.duration_s, r.strikes, r.snoozes, unix_now,
                               defused ? module_for_result(c, unix_now) : "", &rec)) {
             mirror_push(rec);
-        }
-        if (defused) {
-            c.alarm_consumed = true;               /* the next class becomes the alarm */
-            c.resched_pending = true;
         }
     }
 }
@@ -242,16 +260,71 @@ static void service_timetable(NetCtx &c, uint32_t now_ms, uint32_t unix_now)
 }
 
 /* ================= MCX sync ================= */
+/* Session = from the first BOMB_ACTIVE until the MCX is back in IDLE (app_state, fed by
+ * GAME_STATE). The MCX owns the alarm during it (a snooze leaves it ARMED), so alarm_action()
+ * sends nothing. When it ends the MCX has used up its alarm: forget what we sent, mark the
+ * class that rang as consumed and reschedule (-> the next day's first class). */
+static void track_session(NetCtx &c, const AppState &st, uint32_t unix_now)
+{
+    if (st.session_starts != c.seen_session_starts) {
+        c.seen_session_starts = st.session_starts;
+        /* Only a bomb started by the alarm consumes it; a demo RING_NOW must not eat tomorrow's. */
+        c.session_class_start_unix =
+            (c.cur_alarm_unix != 0u && c.cur_alarm_unix <= unix_now + SCHED_MIN_LEAD_S) ? c.cur_class_start_unix : 0u;
+        Serial.println("[sched] session started: no SET_ALARM / CANCEL until the MCX is IDLE");
+    }
+    if (st.session_ends != c.seen_session_ends) {
+        c.seen_session_ends = st.session_ends;
+        if (c.session_class_start_unix > c.consumed_class_start_unix) {
+            c.consumed_class_start_unix = c.session_class_start_unix;
+        }
+        c.session_class_start_unix = 0u;
+        c.last_sent_alarm_unix = 0u;
+        c.resched_pending = true;
+        c.force_send = true;
+        Serial.println("[sched] session ended: alarm consumed, rescheduling");
+    }
+}
+
+/* Queue what alarm_action() decided, TIME_SYNC first (the MCX needs that order). False = the
+ * TX queue was full; nothing is marked as sent and the caller retries on the next loop. */
+static bool send_to_mcx(NetCtx &c, uint32_t unix_now, AlarmAction action, bool send_sync, uint32_t alarm)
+{
+    const uint32_t need = (send_sync ? 1u : 0u) + (action != ALARM_ACTION_NONE ? 1u : 0u);
+
+    if (link_tx_space() < need) {
+        return false;
+    }
+    if (send_sync && !queue_time_sync(unix_now)) {
+        return false;
+    }
+    if (action == ALARM_ACTION_SEND_SET_ALARM) {
+        if (!queue_set_alarm(alarm)) {
+            return false;
+        }
+        c.last_sent_alarm_unix = alarm;
+    } else if (action == ALARM_ACTION_SEND_CANCEL) {
+        if (!queue_cancel()) {
+            return false;
+        }
+        c.last_sent_alarm_unix = 0u;
+    }
+    return true;
+}
+
 static void sync_with_mcx(NetCtx &c, uint32_t now_ms, uint32_t unix_now)
 {
     AppState st;
+    AlarmAction action;
     bool new_link;
-    bool periodic;
-    uint32_t alarm;
+    bool sync_due;
+    bool send_sync;
+    uint32_t desired;
 
     if (!app_state_read(&st)) {
         return;
     }
+    track_session(c, st, unix_now);
     if (c.resched_pending) {
         reschedule(c, unix_now);
         c.resched_pending = false;
@@ -260,20 +333,31 @@ static void sync_with_mcx(NetCtx &c, uint32_t now_ms, uint32_t unix_now)
         return;
     }
     new_link = (st.link_up_count != c.seen_link_count);
-    periodic = (c.last_sync_ms != 0u) && ((uint32_t)(now_ms - c.last_sync_ms) >= APP_TIME_SYNC_PERIOD_MS);
-    if (!(new_link || c.last_sync_ms == 0u || periodic || c.force_send)) {
+    sync_due = new_link || c.last_sync_ms == 0u || (uint32_t)(now_ms - c.last_sync_ms) >= APP_TIME_SYNC_PERIOD_MS;
+    if (!(sync_due || c.force_send)) {
         return;
     }
     reschedule(c, unix_now);       /* after every TIME_SYNC the alarm is recomputed, then re-sent */
     if (game_ringing(st)) {
-        return;                    /* never touch the MCX under a running bomb; force_send stays set */
+        return;                    /* the MCX drops SET_ALARM in these states; force_send stays set */
     }
-    alarm = (c.cur_alarm_unix > unix_now) ? c.cur_alarm_unix : 0u;   /* never send an alarm that is already past */
-    if (send_time_and_alarm(unix_now, alarm)) {
-        c.seen_link_count = st.link_up_count;
-        c.last_sync_ms = (now_ms == 0u) ? 1u : now_ms; /* 0 means "never" */
-        c.force_send = false;
+    /* An alarm that is already past has rung (or is ringing now): leave the MCX alone, the session
+     * or the next reschedule takes over. A CANCEL here could kill the bomb that is just starting. */
+    desired = c.cur_alarm_unix;
+    action = (desired != 0u && desired <= unix_now)
+                 ? ALARM_ACTION_NONE
+                 : alarm_action(desired, c.last_sent_alarm_unix, st.game.state, st.session_active, sync_due);
+    send_sync = sync_due || action == ALARM_ACTION_SEND_SET_ALARM;   /* TIME_SYNC always precedes SET_ALARM */
+    if (send_sync || action != ALARM_ACTION_NONE) {
+        if (!send_to_mcx(c, unix_now, action, send_sync, desired)) {
+            return;                /* retry on the next loop */
+        }
+        if (send_sync) {
+            c.seen_link_count = st.link_up_count;
+            c.last_sync_ms = (now_ms == 0u) ? 1u : now_ms; /* 0 means "never" */
+        }
     }
+    c.force_send = false;
 }
 
 /* ================= Wi-Fi + SNTP ================= */

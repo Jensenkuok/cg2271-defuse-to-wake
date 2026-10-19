@@ -167,7 +167,50 @@ The console shows both entries, oldest first.
 - `link <share link>` with a different set of classes: `[cfg] settings changed ...`, a refresh,
   a new `[sched]` line for the new classes.
 
-### 2.10 The game does not depend on the network
+### 2.10 Snooze is not overwritten
+Rule: from the first BOMB_ACTIVE until the MCX is back in IDLE, the ESP32 sends **no** `SET_ALARM`
+and **no** `CMD_CANCEL`, not even the re-send that normally follows a TIME_SYNC. Needs a valid
+timetable so that an alarm exists (so `[sched] next alarm ...` was printed).
+1. Press BOOT (or SW3) to ring in 3 s. Serial: `[sched] session started: no SET_ALARM / CANCEL until the MCX is IDLE`.
+2. On the BOMB_ACTIVE screen snooze with a long press of the encoder (or `CMD_SNOOZE`). The OLED goes
+   to ARMED with `RING IN 05:00`.
+3. Make the ESP32 do its TIME_SYNC pass while snoozed: either wait for the next periodic
+   `[net] TIME_SYNC ... queued` (every 10 min) or type `resched`. Note that the pass may only show a
+   TIME_SYNC line (the MCX state is ARMED, so TIME_SYNC is still allowed).
+4. Expected Serial: `[net] TIME_SYNC <unix> queued` **without** a `SET_ALARM` or `CMD_CANCEL` line after it.
+   The MCX 10 s stats `set_alarm=N/0` does not increase.
+5. Let the snooze run out: the bomb must ring again at +5 min (the countdown on the OLED was not reset
+   or replaced by the timetable alarm).
+6. Defuse it. After the DEFUSED hold the OLED is IDLE and Serial prints
+   `[sched] session ended: alarm consumed, rescheduling`, then `[sched] next alarm ...` (the next
+   day's first class when the ring was for today's first class) and `TIME_SYNC` + `SET_ALARM queued`.
+- PASS: no `SET_ALARM` / `CMD_CANCEL` between "session started" and "session ended", the snooze re-rings
+  at +5 min, and exactly one new `SET_ALARM` follows the session end.
+
+### 2.11 Cleared alarm cancels
+Rule: when the schedule has no alarm any more and the MCX is ARMED for one we sent, the ESP32 sends
+`CMD_CANCEL` (outside a session only).
+1. Make sure the MCX shows ARMED (an alarm was sent in 2.4) and no bomb has been running.
+2. Make the schedule empty while the MCX is still ARMED: replace the share link (`link <url>`) with
+   one whose only classes are more than 7 days away (for example a module with a single class in a
+   later teaching week). A link that matches no lesson at all is rejected and the old cache kept, so
+   it must match something. The settings change refreshes the timetable and reschedules.
+3. Expected Serial: `[sched] no class in the next 7 days: alarm cleared`, then
+   `[net] CMD_CANCEL queued (alarm cleared)`. The MCX goes from ARMED to IDLE (OLED IDLE screen).
+4. Negative check: reset the ESP32 (nothing sent since boot) while the MCX is still ARMED for an old
+   alarm and the schedule is empty: **no** `CMD_CANCEL` is sent (the ESP32 only cancels an alarm it
+   sent itself). Restore the real link afterwards (`link <your share link>`).
+5. Negative check 2: during a running session (bomb on screen, or snoozed ARMED) clear the schedule:
+   no `CMD_CANCEL` is sent until the session has ended.
+- PASS: exactly one `CMD_CANCEL`, MCX goes IDLE; no cancel after a reset or inside a session.
+
+### 2.12 First class of the day only
+With a timetable that has two classes on one day (for example the 12:00 and 16:00 classes on a Friday),
+the `[sched] next alarm` line names the 12:00 class. After that alarm has rung (or its time has
+passed), type `resched`: the alarm moves to the **next day's first class**, never to the 16:00 class.
+- PASS: only one alarm per day, always for that day's earliest class.
+
+### 2.13 The game does not depend on the network
 Turn the hotspot off while a bomb is running. The game, the OLED and the link keep working. Network
 retries (`[tt] will retry in 300 s`) only appear in the Serial log. Check that
 `[stack bytes free] ... net=` stays above 512 and `lock_to` in the `[link]` line stays ~0.
@@ -176,7 +219,7 @@ retries (`[tt] will retry in 300 s`) only appear in the Serial log. Check that
 
 | Check | Expected | Result | Notes |
 |---|---|---|---|
-| Sketch size / RAM (compile output) | 1150748 B (36%) / 55068 B (16%) | | record the new numbers |
+| Sketch size / RAM (compile output) | 1151320 B (36%) / 55108 B (16%) | | record the new numbers |
 | Lessons fetched per module | matches NUSMods | | |
 | Cache loaded after reboot, Wi-Fi off | yes | | |
 | OLED shows next alarm line | yes | | |

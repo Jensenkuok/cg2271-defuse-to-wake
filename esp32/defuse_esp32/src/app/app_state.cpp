@@ -46,6 +46,15 @@ void app_state_set_game(const proto_game_state_t &g)
         s_state.game = g;
         s_state.game_valid = true;
         s_state.game_version++;
+        /* Session tracking lives here so it is updated in the same locked step as the state it
+         * derives from; the network task only reads the flag and the two counters. */
+        const bool was_active = s_state.session_active;
+        s_state.session_active = session_next(was_active, g.state);
+        if (s_state.session_active && !was_active) {
+            s_state.session_starts++;
+        } else if (!s_state.session_active && was_active) {
+            s_state.session_ends++;
+        }
     });
 }
 

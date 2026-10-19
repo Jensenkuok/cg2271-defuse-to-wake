@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "schedule.h"
+#include "../shared/protocol.h"
 
 static int g_checks;
 static int g_failed;
@@ -217,10 +218,11 @@ static void test_next_alarm_basic(void)
     CHECK(a.found && a.lesson_idx == L_QF_LEC_FRI);
     CHECK(a.alarm_unix == sched_local_to_unix(2026, 10, 16, 9, 0));
 
-    /* Same moment, other lead: the earliest class START wins, not the earliest alarm. */
+    /* Fri 16 Oct 13:00: Friday's first class (QF 12:00) has started, so the CG2271 16:00 lecture is
+     * NOT used (first class of each day only); Mon/Tue have no class in week 10, Wed 21 08:00 is next. */
     a = alarm_at(2026, 10, 16, 13, 0, 0, 60);
-    CHECK(a.found && a.lesson_idx == L_CG2271_LEC);
-    CHECK(a.alarm_unix == sched_local_to_unix(2026, 10, 16, 15, 0));
+    CHECK(a.found && a.lesson_idx == L_QF_LEC_WED);
+    CHECK(a.alarm_unix == sched_local_to_unix(2026, 10, 21, 7, 0));
 }
 
 static void test_next_alarm_lead_edges(void)
@@ -229,20 +231,23 @@ static void test_next_alarm_lead_edges(void)
     NextAlarm a = alarm_at(2026, 10, 16, 10, 58, 59, 60);       /* alarm is 61 s away: counts */
 
     CHECK(a.found && a.lesson_idx == L_QF_LEC_FRI);
+    /* Once the first class's alarm is too close or past, the day is over: the 16:00 CG2271 lecture
+     * never takes its place, the next day's first class (Wed 21 Oct 08:00) does. */
     a = alarm_at(2026, 10, 16, 10, 59, 0, 60);                  /* exactly 60 s away: not "> now + 60" */
-    CHECK(a.found && a.lesson_idx == L_CG2271_LEC);
+    CHECK(a.found && a.lesson_idx == L_QF_LEC_WED);
     a = alarm_at(2026, 10, 16, 10, 59, 30, 60);                 /* 30 s away */
-    CHECK(a.found && a.lesson_idx == L_CG2271_LEC);
+    CHECK(a.found && a.lesson_idx == L_QF_LEC_WED);
     a = alarm_at(2026, 10, 16, 11, 0, 0, 60);                   /* alarm time itself */
-    CHECK(a.found && a.lesson_idx == L_CG2271_LEC);
+    CHECK(a.found && a.lesson_idx == L_QF_LEC_WED);
 
     /* Lead longer than the time to class: the class is skipped even though it has not started. */
     a = alarm_at(2026, 10, 16, 11, 30, 0, 60);
-    CHECK(a.found && a.lesson_idx == L_CG2271_LEC);
+    CHECK(a.found && a.lesson_idx == L_QF_LEC_WED);
     a = alarm_at(2026, 10, 16, 8, 0, 0, 180);                   /* 09:00 alarm for 12:00 class: still ahead */
     CHECK(a.found && a.lesson_idx == L_QF_LEC_FRI);
     a = alarm_at(2026, 10, 16, 9, 30, 0, 180);                  /* 09:00 already passed */
-    CHECK(a.found && a.lesson_idx == L_CG2271_LEC);
+    CHECK(a.found && a.lesson_idx == L_QF_LEC_WED);
+    CHECK(a.alarm_unix == sched_local_to_unix(2026, 10, 21, 5, 0));
 }
 
 static void test_next_alarm_previous_day(void)
@@ -371,6 +376,162 @@ static void test_next_alarm_bad_input(void)
     }
 }
 
+/* ---------------- first class per day ---------------- */
+/* Mon (array order scrambled on purpose): 14:00, 09:00, 11:00. Wed: 10:00. Fri: 08:00 only in week 10,
+ * 13:00 every week. */
+enum { F_MON_1400 = 0, F_MON_0900, F_MON_1100, F_WED_1000, F_FRI_0800_W10, F_FRI_1300, F_COUNT };
+
+static void build_day_fixtures(Lesson *l)
+{
+    l[F_MON_1400] = make_lesson("AAA1000", "LEC", 1, 1400, 1500, kWeeks1to13, "X");
+    l[F_MON_0900] = make_lesson("BBB1000", "LEC", 1, 900, 1000, kWeeks1to13, "X");
+    l[F_MON_1100] = make_lesson("CCC1000", "TUT", 1, 1100, 1200, kWeeks1to13, "X");
+    l[F_WED_1000] = make_lesson("DDD1000", "LEC", 3, 1000, 1100, kWeeks1to13, "X");
+    l[F_FRI_0800_W10] = make_lesson("EEE1000", "LEC", 5, 800, 900, 0x0200, "X");
+    l[F_FRI_1300] = make_lesson("FFF1000", "LEC", 5, 1300, 1400, kWeeks1to13, "X");
+}
+
+static void test_first_class_only(void)
+{
+    Lesson l[F_COUNT];
+    NextAlarm a;
+
+    build_day_fixtures(l);
+    /* Sun 11 Oct 12:00 -> Mon 12 Oct (week 9): the 09:00 class, not 11:00 or 14:00. */
+    a = next_alarm(l, F_COUNT, sched_local_to_unix(2026, 10, 11, 12, 0), 60);
+    CHECK(a.found && a.lesson_idx == F_MON_0900);
+    CHECK(a.class_start_unix == sched_local_to_unix(2026, 10, 12, 9, 0));
+    CHECK(a.alarm_unix == sched_local_to_unix(2026, 10, 12, 8, 0));
+
+    /* Mon 12 Oct 06:00 and 07:58:59 (alarm 08:00 is still more than 60 s away): same alarm. */
+    a = next_alarm(l, F_COUNT, sched_local_to_unix(2026, 10, 12, 6, 0), 60);
+    CHECK(a.found && a.lesson_idx == F_MON_0900);
+    a = next_alarm(l, F_COUNT, sched_local_to_unix(2026, 10, 12, 7, 58) + 59u, 60);
+    CHECK(a.found && a.lesson_idx == F_MON_0900);
+
+    /* The weeks mask picks the first class that is actually taught: Fri 16 Oct (week 9) has only
+     * the 13:00 class (the 08:00 one is week 10 only), Fri 23 Oct (week 10) has 08:00 first. */
+    a = next_alarm(l, F_COUNT, sched_local_to_unix(2026, 10, 14, 12, 0), 60);
+    CHECK(a.found && a.lesson_idx == F_FRI_1300);
+    CHECK(a.alarm_unix == sched_local_to_unix(2026, 10, 16, 12, 0));
+    a = next_alarm(l, F_COUNT, sched_local_to_unix(2026, 10, 22, 12, 0), 60);
+    CHECK(a.found && a.lesson_idx == F_FRI_0800_W10);
+    CHECK(a.alarm_unix == sched_local_to_unix(2026, 10, 23, 7, 0));
+}
+
+static void test_first_class_next_day_switch(void)
+{
+    Lesson l[F_COUNT];
+    NextAlarm a;
+
+    build_day_fixtures(l);
+    /* Mon 12 Oct 09:00:00 - the first class starts: 11:00 and 14:00 do not take over, Wednesday does. */
+    a = next_alarm(l, F_COUNT, sched_local_to_unix(2026, 10, 12, 9, 0), 60);
+    CHECK(a.found && a.lesson_idx == F_WED_1000);
+    CHECK(a.alarm_unix == sched_local_to_unix(2026, 10, 14, 9, 0));
+    a = next_alarm(l, F_COUNT, sched_local_to_unix(2026, 10, 12, 9, 30), 60);          /* mid-class */
+    CHECK(a.found && a.lesson_idx == F_WED_1000);
+    a = next_alarm(l, F_COUNT, sched_local_to_unix(2026, 10, 12, 23, 59) + 59u, 60);   /* end of the day */
+    CHECK(a.found && a.lesson_idx == F_WED_1000);
+    a = next_alarm(l, F_COUNT, sched_local_to_unix(2026, 10, 12, 0, 0), 60);           /* local midnight */
+    CHECK(a.found && a.lesson_idx == F_MON_0900);
+}
+
+static void test_first_class_lead_edge(void)
+{
+    Lesson l[F_COUNT];
+    NextAlarm a;
+
+    build_day_fixtures(l);
+    /* Mon 12 Oct 08:30: the 09:00 class has not started but its 08:00 alarm is past. The 11:00 class
+     * (alarm 10:00, still ahead) is NOT used: next day's first class. */
+    a = next_alarm(l, F_COUNT, sched_local_to_unix(2026, 10, 12, 8, 30), 60);
+    CHECK(a.found && a.lesson_idx == F_WED_1000);
+    /* A shorter lead keeps today: lead 15 -> alarm 08:45 is ahead. */
+    a = next_alarm(l, F_COUNT, sched_local_to_unix(2026, 10, 12, 8, 30), 15);
+    CHECK(a.found && a.lesson_idx == F_MON_0900);
+    CHECK(a.alarm_unix == sched_local_to_unix(2026, 10, 12, 8, 45));
+    /* Edge: exactly 60 s before the alarm does not count, 61 s does. */
+    a = next_alarm(l, F_COUNT, sched_local_to_unix(2026, 10, 12, 7, 59), 60);
+    CHECK(a.found && a.lesson_idx == F_WED_1000);
+    a = next_alarm(l, F_COUNT, sched_local_to_unix(2026, 10, 12, 7, 58) + 59u, 60);
+    CHECK(a.found && a.lesson_idx == F_MON_0900);
+}
+
+static void test_consumed_class(void)
+{
+    Lesson l[F_COUNT];
+    NextAlarm a;
+    const uint32_t mon_start = sched_local_to_unix(2026, 10, 12, 9, 0);
+
+    build_day_fixtures(l);
+    /* Mon 12 Oct 06:00 would give Monday's alarm; once it rang (class start consumed) it gives
+     * Wednesday, whatever the lead is. */
+    a = next_alarm(l, F_COUNT, sched_local_to_unix(2026, 10, 12, 6, 0), 60, mon_start);
+    CHECK(a.found && a.lesson_idx == F_WED_1000);
+    a = next_alarm(l, F_COUNT, sched_local_to_unix(2026, 10, 12, 6, 0), 15, mon_start);
+    CHECK(a.found && a.lesson_idx == F_WED_1000);
+    /* A consumed class from an earlier day changes nothing; 0 = nothing consumed. */
+    a = next_alarm(l, F_COUNT, sched_local_to_unix(2026, 10, 12, 6, 0), 60, sched_local_to_unix(2026, 10, 5, 9, 0));
+    CHECK(a.found && a.lesson_idx == F_MON_0900);
+    a = next_alarm(l, F_COUNT, sched_local_to_unix(2026, 10, 12, 6, 0), 60, 0u);
+    CHECK(a.found && a.lesson_idx == F_MON_0900);
+}
+
+/* ---------------- alarm_action ---------------- */
+static const uint32_t kAlarmA = 1800000000u;
+static const uint32_t kAlarmB = 1800086400u;
+
+static void test_alarm_action_session(void)
+{
+    /* Session active: nothing, in every state, with or without a TIME_SYNC. */
+    CHECK(alarm_action(kAlarmA, kAlarmA, PROTO_STATE_ARMED, true, true) == ALARM_ACTION_NONE);   /* snooze re-send blocked */
+    CHECK(alarm_action(kAlarmA, kAlarmA, PROTO_STATE_ARMED, true, false) == ALARM_ACTION_NONE);
+    CHECK(alarm_action(kAlarmB, kAlarmA, PROTO_STATE_ARMED, true, true) == ALARM_ACTION_NONE);   /* even a new alarm */
+    CHECK(alarm_action(kAlarmA, 0u, PROTO_STATE_IDLE, true, true) == ALARM_ACTION_NONE);
+    CHECK(alarm_action(0u, kAlarmA, PROTO_STATE_ARMED, true, true) == ALARM_ACTION_NONE);        /* no cancel either */
+    CHECK(alarm_action(0u, kAlarmA, PROTO_STATE_ARMED, true, false) == ALARM_ACTION_NONE);
+    CHECK(alarm_action(kAlarmA, kAlarmA, PROTO_STATE_BOMB_ACTIVE, true, true) == ALARM_ACTION_NONE);
+}
+
+static void test_alarm_action_set(void)
+{
+    /* New or changed alarm: send. */
+    CHECK(alarm_action(kAlarmA, 0u, PROTO_STATE_IDLE, false, false) == ALARM_ACTION_SEND_SET_ALARM);
+    CHECK(alarm_action(kAlarmB, kAlarmA, PROTO_STATE_ARMED, false, false) == ALARM_ACTION_SEND_SET_ALARM);
+    /* Unchanged alarm: only re-sent after a TIME_SYNC. */
+    CHECK(alarm_action(kAlarmA, kAlarmA, PROTO_STATE_ARMED, false, false) == ALARM_ACTION_NONE);
+    CHECK(alarm_action(kAlarmA, kAlarmA, PROTO_STATE_IDLE, false, false) == ALARM_ACTION_NONE);
+    CHECK(alarm_action(kAlarmA, kAlarmA, PROTO_STATE_ARMED, false, true) == ALARM_ACTION_SEND_SET_ALARM);
+    CHECK(alarm_action(kAlarmA, kAlarmA, PROTO_STATE_IDLE, false, true) == ALARM_ACTION_SEND_SET_ALARM);
+}
+
+static void test_alarm_action_cancel(void)
+{
+    /* Cancel: only when nothing is wanted, the MCX is ARMED, no session, and something was sent. */
+    CHECK(alarm_action(0u, kAlarmA, PROTO_STATE_ARMED, false, false) == ALARM_ACTION_SEND_CANCEL);
+    CHECK(alarm_action(0u, kAlarmA, PROTO_STATE_ARMED, false, true) == ALARM_ACTION_SEND_CANCEL);
+    CHECK(alarm_action(0u, 0u, PROTO_STATE_ARMED, false, false) == ALARM_ACTION_NONE);          /* nothing was sent */
+    CHECK(alarm_action(0u, 0u, PROTO_STATE_ARMED, false, true) == ALARM_ACTION_NONE);
+    CHECK(alarm_action(0u, kAlarmA, PROTO_STATE_IDLE, false, false) == ALARM_ACTION_NONE);      /* not ARMED */
+    CHECK(alarm_action(0u, kAlarmA, PROTO_STATE_BOMB_ACTIVE, false, false) == ALARM_ACTION_NONE);
+    CHECK(alarm_action(0u, kAlarmA, PROTO_STATE_DEFUSED, false, false) == ALARM_ACTION_NONE);
+    CHECK(alarm_action(0u, kAlarmA, PROTO_STATE_EXPLODED, false, false) == ALARM_ACTION_NONE);
+}
+
+static void test_session_next(void)
+{
+    CHECK(!session_next(false, PROTO_STATE_IDLE));
+    CHECK(!session_next(false, PROTO_STATE_ARMED));                  /* ARMED alone is not a session */
+    CHECK(session_next(false, PROTO_STATE_BOMB_ACTIVE));             /* first BOMB_ACTIVE starts it */
+    CHECK(session_next(true, PROTO_STATE_BOMB_ACTIVE));
+    CHECK(session_next(true, PROTO_STATE_ARMED));                    /* snooze keeps it */
+    CHECK(session_next(true, PROTO_STATE_EXPLODED));                 /* explosion -> next bomb keeps it */
+    CHECK(session_next(true, PROTO_STATE_DEFUSED));                  /* 30 s hold keeps it */
+    CHECK(!session_next(true, PROTO_STATE_IDLE));                    /* IDLE ends it */
+    CHECK(!session_next(false, PROTO_STATE_DEFUSED));                /* no BOMB_ACTIVE seen: not a session */
+}
+
 int main(void)
 {
     build_fixtures();
@@ -389,6 +550,14 @@ int main(void)
     test_next_alarm_semester_end();
     test_next_alarm_sunday_rollover();
     test_next_alarm_bad_input();
+    test_first_class_only();
+    test_first_class_next_day_switch();
+    test_first_class_lead_edge();
+    test_consumed_class();
+    test_alarm_action_session();
+    test_alarm_action_set();
+    test_alarm_action_cancel();
+    test_session_next();
 
     printf("test_schedule: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed == 0 ? 0 : 1;

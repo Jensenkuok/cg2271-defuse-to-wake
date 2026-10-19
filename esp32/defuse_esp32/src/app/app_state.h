@@ -20,6 +20,9 @@ struct AppState {
     proto_game_state_t game;
     bool game_valid;
     uint32_t game_version;        /* ESP32-side counter: +1 per GAME_STATE received */
+    bool session_active;          /* first BOMB_ACTIVE seen, MCX not back in IDLE yet (session_next) */
+    uint32_t session_starts;      /* +1 per session start */
+    uint32_t session_ends;        /* +1 per session end (IDLE reached) */
     proto_telemetry_t telem;
     bool telem_valid;
     proto_result_msg_t last_result;
