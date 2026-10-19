@@ -17,7 +17,16 @@ Comms protocol (reliable `BOMB_CONFIG`), Sync, Task design.
   unknowns. If every call fails with `FAILED http (...)` before any HTTP status, see section 4.
 
 New serial commands (115200, ESP32 Serial): `puzzles` (regenerate now), `ai` (print the stored set,
-answers included: debug only), `diff` (print the difficulty rule applied to the stored mornings).
+answers included: debug only), `diff` (print the difficulty rule applied to the stored mornings),
+`brief` (generate the morning briefing + coach message now, section 2.13).
+
+**Who does what (changed):** `BOMB_CONFIG` triggers and the BOOT demo ring now run in the **link
+task** (priority 4), not in the network task (priority 1). The network task can sit in an LLM call
+for up to 30 s, and the MCX starts the next bomb 3 s after EXPLODED, so a fresh config sent from
+there could miss that window. The link task never blocks on the network or on flash: it reads the
+puzzle set under a short mutex hold, and the "used pair" flags it changes are written to flash by
+the network task later (dirty flag). New texts on the OLED (puzzle riddle, hints, DEFUSED pages) are
+in sections 2.11-2.13; the host tests for the text logic are `tools/test_text.cpp`.
 
 ## 1. Setup
 
@@ -104,6 +113,11 @@ Run four bombs in a row (each explosion or each demo ring after a defuse uses th
 the 4th bomb starts: `[ai] pair 3 used, mask 0x0 (all pairs used: starting over)`; the next config
 is pair 0 again. PASS: the log line appears and no config is missing.
 
+### 2.7b "Used" flags survive a reboot (deferred flash write)
+After a bomb has started (`[ai] pair 0 used, mask 0x1`) wait a few seconds (the network task writes
+the mask on its next pass), then reset the ESP32. Expect `used mask 0x1` in the
+`puzzle set loaded from flash` line and `next pair 1` in `ai`. PASS: the mask is the one before the reset.
+
 ### 2.8 Flash survives a reboot
 Reset the ESP32. Expect `[ai] puzzle set loaded from flash: 8 AI-verified puzzles, ... used mask 0x...`
 and no new run (the set is younger than 24 h). `ai` shows the same riddles. PASS: identical set.
@@ -125,6 +139,75 @@ PASS: in all three cases the bomb still starts with a config the MCX accepts.
 Type `puzzles` while a bomb is running: only `[cmd] puzzle run requested` is printed; the run waits
 until the session ends. PASS: no `[llm]` / `[ai]` lines while the OLED shows ACTIVE.
 
+### 2.11 BOOT rings within 1 s, even during a `puzzles` run
+Type `puzzles`, wait for the first `[llm] model=...` line (a call is in flight, up to 30 s), then
+press BOOT at once. Expect within about a second, while the LLM call is still running:
+
+```
+[btn] BOOT pressed: demo ring requested
+[cfg] BOMB_CONFIG queued (demo ring): pair N, ...
+[btn] RING_NOW queued
+[cfg] BOMB_CONFIG ACKed: ...
+```
+
+The bomb starts 3 s after the press (OLED ACTIVE). The puzzle run then pauses until the session
+ends. Repeat once with no run going. PASS: both presses ring in 3 s +- 1 s; the `[cfg]` line comes
+before `RING_NOW queued`; `bomb_config=N/0` on the MCX stats (no rejected config).
+
+Also, the explosion case (2.5) is the other half of this fix: start `puzzles`, let a bomb explode
+while a call is in flight. PASS: `BOMB_CONFIG queued (explosion)` appears within ~1 s of EXPLODED,
+never after the next bomb has started.
+
+### 2.12 OLED puzzle text and hints
+Run a bomb (BOOT). Layout, size-1 font, 21 x 8 characters:
+
+- **Dial module:** timer + strike boxes on top, the four digit boxes, then 3 rows of text: the dial
+  riddle of the config the ESP32 sent (compare it with `ai`: the riddle of the pair in the
+  `[cfg] BOMB_CONFIG queued` line). Over 63 characters the last row scrolls (about 5 characters per
+  second).
+- **Wires module:** the wires with their number 1..N under each (the cursor is the inverted
+  number), then 2 rows with the wire riddle (the last one scrolls if it does not fit).
+- **Tripwire:** unchanged.
+
+After an **explosion** the next bomb shows a different riddle (the next pair), also on the OLED.
+Make **one strike** (wrong dial digit, or cut a wrong wire):
+
+- dial: the last text row becomes `Hint: 4 2 _ _` (the first 2 digits; a second strike shows 3);
+- wires: the last text row becomes `Hint: not 1` (the lowest-numbered wrong wire that is not cut
+  yet) and that wire's number is shown as `X`.
+
+The hint is gone in the next bomb (strikes are per bomb). With no OLED the same rows appear in the
+1 Hz `[oled-off] ... text=[row / row / row]` line. PASS: riddle matches `ai`, hints appear only
+after a strike, the scrolling row moves, the X is on a wrong wire.
+
+### 2.13 DEFUSED pages and the briefing (`brief`)
+After network + puzzles are up, with a timetable loaded (`link` set) type `brief`. Expect
+(latencies vary):
+
+```
+[cmd] briefing run requested
+[brief] generating for local day 20xxx: 3 classes, alarm Fri 07:30 (chain starts with x-test-2)
+[llm] model=x-test-2 HTTP 200 3120 ms
+[brief] stored for local day 20xxx (briefing: LLM, coach: LLM, model x-test-2)
+[brief] briefing: "First: CG2271 LEC 14:00 @LT19. Then ..."
+[brief] coach:    "..."
+```
+
+Briefing is at most 120 characters, coach at most 80, plain ASCII. A run also starts by itself
+after every finished puzzle run. If the model replies with something unusable the log says so and
+the template fills the gap (`briefing: template`); `coach: template` is the deterministic line
+from the history (streak, snoozes, average strikes).
+
+Defuse a bomb **on the day the briefing is for** (set the lead time so the alarm is today, or use
+BOOT after `brief` while the stored day is today). The DEFUSED screen (30 s) shows a title, three
+page dots and rotates every 4 s: `Defused 2:31, 1 strike, 0 snoozes` -> the briefing -> the coach
+message. Long text wraps to the 6 rows below the title; the last row scrolls if it does not fit.
+If the stored text is for another day the screen shows the template built from today's timetable
+(or `Good morning! Check your timetable.` with no clock/timetable). PASS: three pages in that
+order, 4 s each; text readable; after a reboot the stored briefing is loaded
+(`[brief] loaded from flash: for local day N`).
+Also try a wrong key (2.9b): `brief` ends with `no model gave a usable text: the template is used`.
+
 ## 3. Results
 
 | Test | Result (PASS/FAIL) | Notes (models, latency, counts) |
@@ -141,6 +224,10 @@ until the session ends. PASS: no `[llm]` / `[ai]` lines while the OLED shows ACT
 | 2.9b LLM failing: bank fallback, old set kept | | |
 | 2.9c nothing stored, offline: bank config works | | |
 | 2.10 no LLM calls during a bomb | | |
+| 2.11 BOOT rings in <= 1 s during a `puzzles` run; explosion config in time | | |
+| 2.12 OLED riddle matches `ai`; hints after a strike; X on a wrong wire | | |
+| 2.13 `brief` text valid; DEFUSED pages rotate 4 s each; stored text loads after reboot | | |
+| 2.7b used mask survives a reboot | | |
 | Verified puzzles in a run (of 8) / average calls | | |
 
 ## 4. Troubleshooting
@@ -153,8 +240,13 @@ until the session ends. PASS: no `[llm]` / `[ai]` lines while the OLED shows ACT
 - `FAILED empty`: the model spent all `max_tokens` (600) on reasoning. Raise `APP_LLM_MAX_TOKENS`.
 - `did not return a usable {"puzzle"}`: the riddle was longer than 80 (wire: 60) characters or the
   JSON was broken; the attempt counts and the next one tries again.
-- The BOOT button reaches the MCX through the network task: while one LLM call is in flight (up to
-  30 s) the demo ring waits for it.
+- The BOOT button and the `BOMB_CONFIG` triggers run in the link task, so an LLM call in flight does
+  not delay them. If the demo ring is still slow, look at the `[stack bytes free]` line of the 10 s
+  status block: `link=` should stay well above 1000.
+- To see what the real models do with the puzzle prompts without flashing, run
+  `tools/soclaas_probe.ps1` on the PC (needs `$env:SOCLAAS_API_KEY`): per call it prints the model,
+  HTTP status, latency, the first 200 characters of the raw content and the extracted JSON, then a
+  summary table. Paste the table into the results above if a model behaves oddly.
 
 ## 5. Build numbers
 
@@ -163,6 +255,6 @@ until the session ends. PASS: no `[llm]` / `[ai]` lines while the OLED shows ACT
 
 | | Value |
 |---|---|
-| Sketch (flash) | 1,176,488 bytes (37 % of 3,145,728) |
-| Global variables (RAM) | 65,636 bytes (20 % of 327,680) |
+| Sketch (flash) | 1,184,524 bytes (37 % of 3,145,728) |
+| Global variables (RAM) | 73,652 bytes (22 % of 327,680) |
 | Your run of the same command | |
