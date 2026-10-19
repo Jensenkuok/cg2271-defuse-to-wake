@@ -2,10 +2,11 @@
  * Defuse to Wake - link task (highest priority). The ONLY owner of the proto_link_t,
  * over Serial1. Every other task sends through the TX queue (link_send); received
  * frames are delivered into the shared app state.
- * Also polls the BOOT button (GPIO0) every 50 ms as a demo trigger: a press is handed to the
- * network task (link_ring_requested), which sends a fresh BOMB_CONFIG before CMD RING_NOW so the
- * demo bomb gets the next puzzle pair.
- * It also reports each BOMB_CONFIG's outcome (ACKed / dropped after the retries) to app_state.
+ * Also polls the BOOT button (GPIO0) every 50 ms as a demo trigger and answers a press itself:
+ * a fresh BOMB_CONFIG for the next puzzle pair, then CMD RING_NOW. It runs bomb_config_service()
+ * too (ACK bookkeeping, explosion / snooze triggers), because the MCX starts the next bomb 3 s
+ * after EXPLODED and only this task is guaranteed never to be stuck in an LLM call or a flash write.
+ * It reports each BOMB_CONFIG's outcome (ACKed / dropped after the retries) to app_state.
  */
 #ifndef LINK_TASK_H
 #define LINK_TASK_H
@@ -27,9 +28,6 @@ bool link_send(uint8_t type, const uint8_t *payload, uint8_t len);
 /* Network task: next RESULT frame received from the MCX, oldest first (never blocks).
  * The link task only queues them; recording them (flash writes) happens in the network task. */
 bool link_result_pop(proto_result_msg_t *out);
-
-/* Network task: true once per BOOT button press (never blocks). */
-bool link_ring_requested(void);
 
 /* Free slots in the TX queue (a task that needs to queue a pair checks this first). */
 uint32_t link_tx_space(void);

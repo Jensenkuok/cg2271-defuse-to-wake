@@ -42,9 +42,20 @@ uint32_t puzzle_set_generation(void);
 
 /* Index of the pair the next bomb should use (first one not yet used). */
 int puzzle_next_pair(void);
+
+/* Link task: the next unused pair and the set generation it came from, read in ONE short lock of
+ * the puzzle mutex (a generation run swaps a whole new set in under that same lock, so the two
+ * puzzles always belong together). Copies just the two puzzles. False if the set is busy. */
+bool puzzle_take_next_pair(Puzzle *dial, Puzzle *wire, int *pair, uint32_t *gen);
+
 /* A bomb started with this pair: mark it used (ignored if the set was replaced meanwhile).
- * When all pairs are used the list starts over. */
-void puzzle_consume_pair(int pair, uint32_t gen);
+ * When all pairs are used the list starts over. RAM only, safe for the link task: the flash
+ * write is deferred to puzzle_flush_used() in the network task (dirty flag). False only when the
+ * set lock could not be taken in time (nothing was marked: call again). */
+bool puzzle_consume_pair(int pair, uint32_t gen);
+
+/* Network task, every loop: write the used mask to flash if the link task changed it. */
+void puzzle_flush_used(void);
 
 /* Serial "ai": the active set with sources, models, verification and the answers (debug only). */
 void puzzle_print_set(void);

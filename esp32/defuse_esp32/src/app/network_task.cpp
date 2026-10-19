@@ -78,13 +78,9 @@ static void fmt_local(char *dst, size_t n, uint32_t unix_s)
 }
 
 /* The MCX only accepts SET_ALARM in IDLE or ARMED (it drops it silently in BOMB_ACTIVE, EXPLODED
- * and the 30 s DEFUSED hold), so nothing is sent in those states and force_send stays set until
- * the MCX is back in IDLE. ARMED is fine: a new lead time or timetable must be able to move a
- * pending alarm. */
-static bool game_ringing(const AppState &st)
-{
-    return st.game_valid && st.game.state != PROTO_STATE_IDLE && st.game.state != PROTO_STATE_ARMED;
-}
+ * and the 30 s DEFUSED hold: game_ringing() in app_state.h), so nothing is sent in those states
+ * and force_send stays set until the MCX is back in IDLE. ARMED is fine: a new lead time or
+ * timetable must be able to move a pending alarm. */
 
 /* Each helper queues one frame for the link task; false if the queue refused it. */
 static bool queue_time_sync(uint32_t unix_now)
@@ -384,51 +380,19 @@ static bool puzzle_calls_allowed(const NetCtx &c, const AppState &st, uint32_t u
     return true;
 }
 
-/* BOOT button: BOMB_CONFIG with the next puzzle pair first, then CMD RING_NOW (3 s). */
-static void handle_ring_request(void)
-{
-    AppState st;
-    proto_cmd_t cmd;
-    uint8_t pl[PROTO_SIZE_CMD];
+/* The BOOT demo ring and bomb_config_service() live in the LINK task now (see bomb_config.h):
+ * the LLM jobs below can block this task for up to 30 s per call. */
 
-    if (!link_ring_requested()) {
-        return;
-    }
-    if (!app_state_read(&st) || !st.link_up) {
-        Serial.println("[btn] ring ignored: MCX link is down");
-        return;
-    }
-    if (game_ringing(st)) {
-        Serial.println("[btn] ring ignored: a bomb is already running");
-        return;
-    }
-    if (!bomb_config_send("demo ring")) {
-        Serial.println("[btn] no new BOMB_CONFIG queued: the MCX keeps its previous config");
-    }
-    cmd.cmd = PROTO_CMD_RING_NOW;
-    cmd.arg = APP_BOOT_RING_DELAY_S;
-    if (proto_pack_cmd(&cmd, pl, sizeof(pl)) != 0u && link_send(PROTO_MSG_CMD, pl, PROTO_SIZE_CMD)) {
-        Serial.println("[btn] RING_NOW queued");
-    } else {
-        Serial.println("[btn] RING_NOW could not be queued (TX queue full)");
-    }
-}
-
-static void service_puzzles(const NetCtx &c, uint32_t now_ms, uint32_t unix_now)
+/* LLM jobs: the puzzle run does at most ONE LLM call per pass, so the loop (timetable, results,
+ * alarm sync) is back within one call's timeout. */
+static void service_llm_jobs(const NetCtx &c, uint32_t now_ms, uint32_t unix_now)
 {
-    AppState st;
+    static AppState st;                            /* static: ~1.3 KB that would stay on the stack during the TLS call */
     const bool gen_ok = app_state_read(&st) && puzzle_calls_allowed(c, st, unix_now);
+    const bool net_ok = c.wifi_up && c.time_valid;
+    const uint32_t unix_valid = c.time_valid ? unix_now : 0u;
 
-    puzzle_gen_service(now_ms, c.time_valid ? unix_now : 0u, c.wifi_up && c.time_valid, gen_ok);
-}
-
-static void service_bomb_config(void)
-{
-    AppState st;
-
-    if (app_state_read(&st)) {
-        bomb_config_service(st);
-    }
+    puzzle_gen_service(now_ms, unix_valid, net_ok, gen_ok);
 }
 
 /* ================= Wi-Fi + SNTP ================= */
@@ -551,7 +515,7 @@ static void network_task(void *arg)
         serial_commands(c, unix_valid);
         handle_settings(c, now);
         handle_results(c, unix_valid);
-        handle_ring_request();
+        puzzle_flush_used();                       /* the link task marks pairs used in RAM; the flash write is ours */
         if (c.time_valid) {
             if (c.wifi_up) {
                 service_timetable(c, now, unix_now);
@@ -563,10 +527,8 @@ static void network_task(void *arg)
             unix_now = (uint32_t)time(nullptr);
             sync_with_mcx(c, now, unix_now);
         }
-        /* Independent of the clock: ACK bookkeeping and the explosion / snooze triggers must work
-         * offline. The puzzle run does at most one LLM call per pass, after the MCX work above. */
-        service_bomb_config();
-        service_puzzles(c, millis(), c.time_valid ? (uint32_t)time(nullptr) : 0u);
+        /* The puzzle run / briefing do at most one LLM call per pass, after the MCX work above. */
+        service_llm_jobs(c, millis(), c.time_valid ? (uint32_t)time(nullptr) : 0u);
         pending = (uint8_t)mirror_pending();
         if (pending != c.seen_mirror_pending) {
             c.seen_mirror_pending = pending;
@@ -588,7 +550,7 @@ bool network_task_start(void)
         Serial.println("[net] could not create the storage objects");
         return false;
     }
-    bomb_config_init();
+    bomb_config_init();                            /* last: from now on the link task may send BOMB_CONFIG */
     (void)mirror_init();
     (void)timetable_load_cache();                  /* offline-first: the cache works with no network */
     app_state_set_timetable_info((uint8_t)timetable_count(), timetable_fetched_unix());

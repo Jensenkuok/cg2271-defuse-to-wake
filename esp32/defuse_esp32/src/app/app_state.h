@@ -95,8 +95,15 @@ void app_state_set_mirror_pending(uint8_t pending);
 void app_state_set_bomb_config(uint8_t wires, uint8_t trip_min, uint8_t trip_max, uint8_t max_strikes);
 /* Link task: one BOMB_CONFIG finished (ACKed or dropped after the retries). */
 void app_state_note_config_result(bool acked);
-/* Network task: the pair the MCX now holds. */
+/* Link task: the pair the MCX now holds (the MCX ACKed that BOMB_CONFIG). */
 void app_state_set_active_puzzle(const ActivePuzzle &p);
+
+/* Is the MCX in a state where it ignores SET_ALARM and where a demo ring would be refused
+ * (BOMB_ACTIVE, DEFUSED hold, EXPLODED hold)? IDLE and ARMED are not "ringing". */
+static inline bool game_ringing(const AppState &st)
+{
+    return st.game_valid && st.game.state != PROTO_STATE_IDLE && st.game.state != PROTO_STATE_ARMED;
+}
 
 uint32_t app_state_lock_timeouts(void);
 

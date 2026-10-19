@@ -33,7 +33,10 @@ uint8_t s_prev_state = STATE_UNKNOWN;
 bool s_need_trigger;        /* a trigger fired but the config could not be queued yet */
 uint32_t s_seen_set_gen;
 bool s_resend_new_set;
-PuzzleSet s_snap;           /* ~1.1 KB, network task only: off the stack */
+volatile bool s_ready;      /* the puzzle set and the history exist (the link task starts before the network task) */
+SemaphoreHandle_t s_lock;   /* guards every static above: bomb_config_send is called by the link task AND (for the
+                             * SET_ALARM case) the network task, bomb_config_service by the link task */
+#define CFG_LOCK_WAIT_MS 20u /* short: the link task has 100 ms retransmit timing; a missed pass is retried in 50 ms */
 
 Difficulty current_difficulty(void)
 {
@@ -43,11 +46,8 @@ Difficulty current_difficulty(void)
     return difficulty(recs, n);
 }
 
-void make_view(ActivePuzzle *v, int pair, uint32_t gen, const PuzzleSet &set)
+void make_view(ActivePuzzle *v, int pair, uint32_t gen, const Puzzle &d, const Puzzle &w)
 {
-    const Puzzle &d = set.dial[pair];
-    const Puzzle &w = set.wire[pair];
-
     memset(v, 0, sizeof(*v));
     v->valid = true;
     v->pair = (uint8_t)pair;
@@ -58,7 +58,8 @@ void make_view(ActivePuzzle *v, int pair, uint32_t gen, const PuzzleSet &set)
     v->dial_source = d.source;
     v->wire_source = w.source;
     snprintf(v->dial_text, sizeof(v->dial_text), "%s", d.text);
-    snprintf(v->wire_text, sizeof(v->wire_text), "%s", w.text);
+    /* a wire riddle is at most PUZZLE_WIRE_TEXT_MAX characters (validate_puzzle); cut explicitly */
+    snprintf(v->wire_text, sizeof(v->wire_text), "%.*s", PUZZLE_WIRE_TEXT_MAX, w.text);
 }
 
 void on_ack(void)
@@ -92,26 +93,37 @@ bool in_trigger_state(const AppState &st)
 
 void bomb_config_init(void)
 {
+    s_lock = xSemaphoreCreateMutex();                   /* priority inheritance: the link task is never held up by a low-priority holder */
     s_seen_set_gen = puzzle_set_generation();
+    s_ready = (s_lock != NULL);
 }
 
-bool bomb_config_send(const char *why)
+void bomb_config_difficulty(Difficulty *out)
+{
+    if (out != NULL) {
+        *out = current_difficulty();
+    }
+}
+
+/* s_lock held by the caller. */
+static bool send_locked(const char *why)
 {
     proto_bomb_config_t cfg;
     Difficulty diff;
+    Puzzle dial;
+    Puzzle wire;
     uint8_t pl[PROTO_SIZE_BOMB_CONFIG];
     uint32_t gen = 0u;
-    int pair;
+    int pair = 0;
 
     if (s_pending.active && (uint32_t)(millis() - s_pending.since_ms) < APP_CONFIG_PENDING_MS) {
         return false;                                   /* one at a time: wait for the ACK */
     }
-    if (!puzzle_set_snapshot(&s_snap, &gen) || link_tx_space() < 1u) {
+    if (link_tx_space() < 1u || !puzzle_take_next_pair(&dial, &wire, &pair, &gen)) {
         return false;
     }
-    pair = puzzle_next_pair();
     diff = current_difficulty();
-    puzzle_build_config(diff, s_snap.dial[pair], s_snap.wire[pair], &cfg);
+    puzzle_build_config(diff, dial, wire, &cfg);
     if (proto_pack_bomb_config(&cfg, pl, sizeof(pl)) == 0u || !link_send(PROTO_MSG_BOMB_CONFIG, pl, PROTO_SIZE_BOMB_CONFIG)) {
         return false;
     }
@@ -119,7 +131,7 @@ bool bomb_config_send(const char *why)
     s_pending.pair = pair;
     s_pending.gen = gen;
     s_pending.since_ms = millis();
-    make_view(&s_pending.view, pair, gen, s_snap);
+    make_view(&s_pending.view, pair, gen, dial, wire);
     Serial.printf("[cfg] BOMB_CONFIG queued (%s): pair %d, %u modules, %us, %u wires (cut %u), dial %u%u%u%u [%s]\n", why,
                   pair, (unsigned)cfg.module_count, (unsigned)cfg.time_limit_s, (unsigned)cfg.wire_count,
                   (unsigned)cfg.correct_wire + 1u, (unsigned)cfg.dial_code[0], (unsigned)cfg.dial_code[1],
@@ -127,7 +139,20 @@ bool bomb_config_send(const char *why)
     return true;
 }
 
-void bomb_config_service(const AppState &st)
+bool bomb_config_send(const char *why)
+{
+    bool sent;
+
+    if (!s_ready || xSemaphoreTake(s_lock, pdMS_TO_TICKS(CFG_LOCK_WAIT_MS)) != pdTRUE) {
+        return false;
+    }
+    sent = send_locked(why);
+    xSemaphoreGive(s_lock);
+    return sent;
+}
+
+/* s_lock held by the caller. */
+static void service_locked(const AppState &st)
 {
     uint8_t state;
     uint32_t gen;
@@ -156,8 +181,8 @@ void bomb_config_service(const AppState &st)
     state = st.game.state;
 
     if (bomb_just_started(s_prev_state, state) && s_active_pair >= 0 && !s_active_consumed) {
-        s_active_consumed = true;                       /* the bomb took the config the MCX held */
-        puzzle_consume_pair(s_active_pair, s_active_gen);
+        /* the bomb took the config the MCX held; if the puzzle lock is busy, try again next pass */
+        s_active_consumed = puzzle_consume_pair(s_active_pair, s_active_gen);
     }
     if (config_trigger_needed(s_prev_state, state, st.session_active)) {
         s_need_trigger = true;
@@ -167,19 +192,28 @@ void bomb_config_service(const AppState &st)
     if (s_need_trigger) {
         if (!in_trigger_state(st)) {
             s_need_trigger = false;                     /* the state moved on before we could send */
-        } else if (st.link_up && bomb_config_send(state == PROTO_STATE_EXPLODED ? "explosion" : "snooze")) {
+        } else if (st.link_up && send_locked(state == PROTO_STATE_EXPLODED ? "explosion" : "snooze")) {
             s_need_trigger = false;
         }
     }
     if (s_resend_new_set) {
         if (state == PROTO_STATE_ARMED && !st.session_active) {
-            if (st.link_up && bomb_config_send("new puzzle set")) {
+            if (st.link_up && send_locked("new puzzle set")) {
                 s_resend_new_set = false;
             }
         } else if (state == PROTO_STATE_IDLE) {
             s_resend_new_set = false;                   /* the next SET_ALARM carries the new set */
         }
     }
+}
+
+void bomb_config_service(const AppState &st)
+{
+    if (!s_ready || xSemaphoreTake(s_lock, pdMS_TO_TICKS(CFG_LOCK_WAIT_MS)) != pdTRUE) {
+        return;                                         /* retried on the next 50 ms pass */
+    }
+    service_locked(st);
+    xSemaphoreGive(s_lock);
 }
 
 void bomb_config_print_difficulty(void)

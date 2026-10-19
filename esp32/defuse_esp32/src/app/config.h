@@ -35,6 +35,8 @@
 #define APP_BOOT_BUTTON_PIN         0       /* GPIO0, active low */
 #define APP_BUTTON_POLL_MS          50u     /* polled inside the link task loop */
 #define APP_BOOT_RING_DELAY_S       3u      /* CMD RING_NOW arg */
+#define APP_BOMB_CFG_POLL_MS        50u     /* link task: BOMB_CONFIG bookkeeping + triggers; the MCX starts the
+                                             * next bomb 3 s after EXPLODED, so this is far inside that window */
 
 /* ---- Task priorities (FreeRTOS: larger = more urgent). One core, no pinning. ---- */
 #define APP_PRIO_LINK               4u  /* serial RX must never overflow, ACK/retransmit timing (100 ms) */
@@ -43,7 +45,7 @@
 #define APP_PRIO_NETWORK            1u  /* slow, blocks in Wi-Fi calls, latency tolerant: lowest */
 
 /* ---- Task stacks. ESP32 Arduino xTaskCreate takes BYTES. ---- */
-#define APP_STACK_LINK              4096u
+#define APP_STACK_LINK              6144u   /* proto_link + BOMB_CONFIG build (2 puzzles, difficulty, history copy) + Serial.printf */
 #define APP_STACK_GYRO              4096u
 #define APP_STACK_DISPLAY           6144u   /* Adafruit GFX + snprintf */
 #define APP_STACK_NETWORK           12288u  /* Wi-Fi, SNTP, TLS handshake + ArduinoJson parsing */

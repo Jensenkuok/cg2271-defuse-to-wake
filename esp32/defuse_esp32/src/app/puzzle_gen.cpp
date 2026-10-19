@@ -73,6 +73,7 @@ SemaphoreHandle_t s_mutex;
 PuzzleSet s_set;                        /* the active set; guarded by s_mutex */
 uint32_t s_set_gen;                     /* guarded */
 uint8_t s_used;                         /* used-pair bit mask; guarded */
+bool s_used_dirty;                      /* s_used changed in RAM and is not in flash yet; guarded */
 PuzzleSet s_blob;                       /* flash buffer */
 
 Gen s_gen;
@@ -159,7 +160,9 @@ void save_set(void)
     }
 }
 
-/* Replace the active set (network task). Resets the used mask. */
+/* Replace the active set (network task). The new set was built in s_gen.work, a buffer no other
+ * task reads, so the lock is held only for one struct copy (~1.1 KB, microseconds): the link task,
+ * which reads the set to build a BOMB_CONFIG, never waits for a flash write or an LLM call. */
 void install_set(const PuzzleSet &work)
 {
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(SET_LOCK_WAIT_MS)) != pdTRUE) {
@@ -169,6 +172,7 @@ void install_set(const PuzzleSet &work)
     s_set = work;
     s_set_gen++;
     s_used = 0u;
+    s_used_dirty = false;               /* save_used(0) below covers it */
     xSemaphoreGive(s_mutex);
     save_set();
     save_used(0u);
@@ -573,27 +577,67 @@ int puzzle_next_pair(void)
     return pair < 0 ? 0 : pair;
 }
 
-void puzzle_consume_pair(int pair, uint32_t gen)
+bool puzzle_take_next_pair(Puzzle *dial, Puzzle *wire, int *pair, uint32_t *gen)
+{
+    int p;
+
+    if (dial == NULL || wire == NULL || pair == NULL || gen == NULL || s_mutex == NULL ||
+        xSemaphoreTake(s_mutex, pdMS_TO_TICKS(SET_LOCK_WAIT_MS)) != pdTRUE) {
+        return false;
+    }
+    p = pair_next_unused(s_used, PUZZLE_PAIRS);
+    p = (p < 0) ? 0 : p;
+    *dial = s_set.dial[p];                              /* ~120 bytes each: not the whole 1.1 KB set */
+    *wire = s_set.wire[p];
+    *pair = p;
+    *gen = s_set_gen;
+    xSemaphoreGive(s_mutex);
+    return true;
+}
+
+/* Link task (through bomb_config_service): RAM only. The flash write waits for the network task
+ * (puzzle_flush_used), because a flash write can take tens of ms and the link task must not stall. */
+bool puzzle_consume_pair(int pair, uint32_t gen)
 {
     bool cycled = false;
     bool applied = false;
     uint8_t used = 0u;
 
     if (s_mutex == NULL || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(SET_LOCK_WAIT_MS)) != pdTRUE) {
-        return;
+        return false;                                   /* lock busy: the caller tries again */
     }
     if (gen == s_set_gen) {
         s_used = pair_mark_used(s_used, pair, PUZZLE_PAIRS, &cycled);
+        s_used_dirty = true;
         used = s_used;
         applied = true;
     }
     xSemaphoreGive(s_mutex);
     if (!applied) {
         Serial.printf("[ai] pair %d came from an older set: nothing to mark\n", pair);
+        return true;
+    }
+    Serial.printf("[ai] pair %d used, mask 0x%x%s\n", pair, (unsigned)used, cycled ? " (all pairs used: starting over)" : "");
+    return true;
+}
+
+void puzzle_flush_used(void)
+{
+    uint8_t used = 0u;
+    bool dirty = false;
+
+    if (!s_used_dirty || s_mutex == NULL || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(SET_LOCK_WAIT_MS)) != pdTRUE) {
         return;
     }
-    save_used(used);
-    Serial.printf("[ai] pair %d used, mask 0x%x%s\n", pair, (unsigned)used, cycled ? " (all pairs used: starting over)" : "");
+    if (s_used_dirty) {
+        used = s_used;
+        s_used_dirty = false;           /* cleared under the lock: a later change sets it again */
+        dirty = true;
+    }
+    xSemaphoreGive(s_mutex);
+    if (dirty) {
+        save_used(used);
+    }
 }
 
 void puzzle_print_set(void)

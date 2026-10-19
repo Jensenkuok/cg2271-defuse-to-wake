@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "app_state.h"
+#include "bomb_config.h"
 #include "config.h"
 #include "../shared/proto_link.h"
 #include "../shared/protocol.h"
@@ -16,9 +17,10 @@ struct TxMsg {
 
 static QueueHandle_t s_tx_queue;
 static QueueHandle_t s_result_queue;   /* RESULT frames for the network task (it records them in flash) */
-static QueueHandle_t s_ring_queue;     /* BOOT presses for the network task (length 1: a press is a level, not a count) */
 static TaskHandle_t s_task;
 static proto_link_t s_link;        /* owned by the link task only */
+static AppState s_st;              /* link task only: a local copy would take ~1 KB of its 4 KB stack */
+static bool s_boot_pressed;        /* set by poll_button, consumed by service_game_config (both in this task) */
 static uint32_t s_tx_backpressure;
 static uint8_t s_cfg_handed;       /* BOMB_CONFIG frames given to proto_link whose outcome is not reported yet */
 static uint8_t s_cfg_failed_events;/* PROTO_EVT_SEND_FAILED for BOMB_CONFIG not yet reported */
@@ -90,15 +92,7 @@ bool link_task_init(void)
 {
     s_tx_queue = xQueueCreate(APP_TX_QUEUE_LEN, sizeof(TxMsg));
     s_result_queue = xQueueCreate(APP_RESULT_QUEUE_LEN, sizeof(proto_result_msg_t));
-    s_ring_queue = xQueueCreate(1, sizeof(uint8_t));
-    return s_tx_queue != NULL && s_result_queue != NULL && s_ring_queue != NULL;
-}
-
-bool link_ring_requested(void)
-{
-    uint8_t v;
-
-    return xQueueReceive(s_ring_queue, &v, 0) == pdTRUE;
+    return s_tx_queue != NULL && s_result_queue != NULL;
 }
 
 bool link_result_pop(proto_result_msg_t *out)
@@ -181,25 +175,69 @@ static void report_config_results(void)
     }
 }
 
-/* BOOT button (GPIO0, active low), 50 ms poll = debounce: a press asks the network task for a
- * demo ring. The network task sends the BOMB_CONFIG first, then CMD RING_NOW. */
+/* BOOT button (GPIO0, active low), 50 ms poll = debounce. A press is only noted here; the demo
+ * ring itself runs in service_game_config() of the same pass. */
 static void poll_button(void)
 {
     static bool s_was_down;
     bool down = (digitalRead(APP_BOOT_BUTTON_PIN) == LOW);
-    const uint8_t pressed = 1u;
 
     if (down && !s_was_down) {
-        (void)xQueueOverwrite(s_ring_queue, &pressed);
+        s_boot_pressed = true;
         Serial.println("[btn] BOOT pressed: demo ring requested");
     }
     s_was_down = down;
+}
+
+/* Demo ring: BOMB_CONFIG with the next puzzle pair first, then CMD RING_NOW (3 s). This runs in the
+ * LINK task on purpose (priority 4): the old home, the network task (priority 1), can sit in an LLM
+ * call for up to 30 s, so a press during a "puzzles" run rang only after it. Both frames go into the
+ * TX queue now and leave in this very pass (drain_tx_queue runs right after). */
+static void demo_ring(const AppState &st)
+{
+    proto_cmd_t cmd;
+    uint8_t pl[PROTO_SIZE_CMD];
+
+    if (!st.link_up) {
+        Serial.println("[btn] ring ignored: MCX link is down");
+        return;
+    }
+    if (game_ringing(st)) {
+        Serial.println("[btn] ring ignored: a bomb is already running");
+        return;
+    }
+    if (!bomb_config_send("demo ring")) {
+        Serial.println("[btn] no new BOMB_CONFIG queued: the MCX keeps its previous config");
+    }
+    cmd.cmd = PROTO_CMD_RING_NOW;
+    cmd.arg = APP_BOOT_RING_DELAY_S;
+    if (proto_pack_cmd(&cmd, pl, sizeof(pl)) != 0u && link_send(PROTO_MSG_CMD, pl, PROTO_SIZE_CMD)) {
+        Serial.println("[btn] RING_NOW queued");
+    } else {
+        Serial.println("[btn] RING_NOW could not be queued (TX queue full)");
+    }
+}
+
+/* BOMB_CONFIG bookkeeping + triggers and the BOOT demo ring, every APP_BOMB_CFG_POLL_MS. Only RAM
+ * and the non-blocking TX queue are touched (see bomb_config.h); app_state_read waits at most
+ * APP_STATE_MUTEX_WAIT_MS for a short memcpy. */
+static void service_game_config(void)
+{
+    if (!app_state_read(&s_st)) {
+        return;                                    /* retried next period; a press stays pending */
+    }
+    if (s_boot_pressed) {
+        s_boot_pressed = false;
+        demo_ring(s_st);
+    }
+    bomb_config_service(s_st);
 }
 
 static void link_task(void *arg)
 {
     TickType_t wake = xTaskGetTickCount();
     uint32_t last_button = 0;
+    uint32_t last_cfg = 0;
     uint32_t last_stats = 0;
     proto_link_cfg_t cfg;
     uint32_t now;
@@ -226,6 +264,10 @@ static void link_task(void *arg)
         if ((uint32_t)(now - last_button) >= APP_BUTTON_POLL_MS) {
             last_button = now;
             poll_button();
+        }
+        if (s_boot_pressed || (uint32_t)(now - last_cfg) >= APP_BOMB_CFG_POLL_MS) {
+            last_cfg = now;
+            service_game_config();         /* before the drain: what it queues leaves in this pass */
         }
         drain_tx_queue(now);
         report_config_results();
