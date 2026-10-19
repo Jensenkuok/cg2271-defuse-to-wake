@@ -64,6 +64,8 @@
 #define APP_BOOM_FLASH_MS           250u    /* inverted-screen flash half-period */
 #define APP_CLUE_PLACEHOLDER        "Clue: (AI clue pending)"
 #define APP_CLUE_MAX_CHARS          21      /* 128 px / 6 px per char */
+#define APP_BRIEF_GENERIC           "Good morning! Check your timetable."  /* DEFUSED page 1 with no briefing for today */
+#define APP_COACH_GENERIC           "Defused. Now go be brilliant."          /* DEFUSED page 2 likewise */
 
 /* ---- Gyro / tamper ---- */
 #define APP_GYRO_PERIOD_MS          20u     /* 50 Hz */
