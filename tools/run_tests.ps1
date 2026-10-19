@@ -38,12 +38,17 @@ if (-not $cxx) { Write-Error 'No C++ compiler (g++/clang++) found.'; exit 1 }
 $app = Join-Path $root 'esp32\defuse_esp32\src\app'
 $cxxPrograms = @(
     @{ Name = 'test_schedule'; Sources = @('esp32\defuse_esp32\src\app\schedule.cpp') },
-    @{ Name = 'test_history';  Sources = @('esp32\defuse_esp32\src\app\history_ring.cpp', 'esp32\defuse_esp32\src\app\schedule.cpp') }
+    @{ Name = 'test_history';  Sources = @('esp32\defuse_esp32\src\app\history_ring.cpp', 'esp32\defuse_esp32\src\app\schedule.cpp') },
+    # test_puzzle solves every 4-digit code by brute force: optimised build to keep it to seconds.
+    @{ Name = 'test_puzzle';   Sources = @('esp32\defuse_esp32\src\app\puzzle_logic.cpp', 'esp32\defuse_esp32\src\app\history_ring.cpp',
+                                           'esp32\defuse_esp32\src\app\schedule.cpp', 'shared\protocol.c'); Flags = @('-O2') }
 )
 foreach ($p in $cxxPrograms) {
     $exe = Join-Path $build "$($p.Name).exe"
     $srcs = @(Join-Path $root "tools\$($p.Name).cpp") + ($p.Sources | ForEach-Object { Join-Path $root $_ })
-    & $cxx -std=c++11 -Wall -Wextra -Werror -pedantic -I $app @srcs -o $exe
+    $flags = @()
+    if ($p.Flags) { $flags = @($p.Flags) }
+    & $cxx -std=c++11 -Wall -Wextra -Werror -pedantic @flags -I $app @srcs -o $exe
     if ($LASTEXITCODE -ne 0) { Write-Error "Build of $($p.Name) failed ($cxx)."; exit 1 }
     Write-Host "== $($p.Name)"
     & $exe
