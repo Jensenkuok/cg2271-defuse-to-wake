@@ -46,10 +46,11 @@
 #define APP_STACK_LINK              4096u
 #define APP_STACK_GYRO              4096u
 #define APP_STACK_DISPLAY           6144u   /* Adafruit GFX + snprintf */
-#define APP_STACK_NETWORK           8192u   /* Wi-Fi + SNTP calls */
+#define APP_STACK_NETWORK           12288u  /* Wi-Fi, SNTP, TLS handshake + ArduinoJson parsing */
 
 /* ---- Queues ---- */
 #define APP_TX_QUEUE_LEN            8u      /* other tasks -> link task */
+#define APP_RESULT_QUEUE_LEN        8u      /* link task -> network task: RESULT frames to record */
 
 /* ---- Link task ---- */
 #define APP_LINK_LOOP_MS            5u      /* RX drain + proto_link_poll period */
@@ -81,6 +82,47 @@
 #define APP_TZ_OFFSET_S             (8 * 3600)  /* Asia/Singapore, UTC+8, no DST */
 #define APP_TIME_SYNC_PERIOD_MS     600000u /* re-send TIME_SYNC every 10 min */
 #define APP_MIN_VALID_UNIX          1700000000u /* anything earlier means SNTP has not set the clock */
+
+/* ---- Settings and flash (Preferences namespace shared by all stored data) ---- */
+#define APP_PREFS_NAMESPACE         "defuse"
+#define APP_FLASH_MUTEX_WAIT_MS     2000u   /* a flash write can take tens of ms; bounded, never forever */
+#define APP_KEY_LINK                "nusmods_link"
+#define APP_KEY_LEAD                "lead_min"
+#define APP_KEY_TIMETABLE           "tt_cache"
+#define APP_KEY_HISTORY             "hist"
+#define APP_KEY_MIRROR              "mirror"
+#define APP_LINK_MAX_CHARS          512
+#define APP_LEAD_MIN_DEFAULT        60      /* minutes of wake-up lead before the first lecture */
+#define APP_LEAD_MIN_LOW            15
+#define APP_LEAD_MIN_HIGH           180
+
+/* ---- Timetable (NUSMods) ---- */
+#define APP_NUSMODS_URL_PREFIX      "https://api.nusmods.com/v2/2026-2027/modules/"
+#define APP_NUSMODS_SEMESTER        1
+#define APP_HTTP_TIMEOUT_MS         10000u  /* every network call: connect and read, at most 10 s */
+#define APP_HTTP_TIMEOUT_S          10u     /* same limit for the TLS client (takes seconds) */
+#define APP_TT_NIGHTLY_HOUR         22      /* local hour of the nightly timetable refresh */
+#define APP_TT_RETRY_MS             300000u /* retry a failed refresh after 5 min */
+#define APP_TT_MODULE_URL_MAX       112
+#define APP_TT_CACHE_MAGIC          0x54544331u /* "TTC1": bump when Lesson changes */
+
+/* ---- Morning history + Firebase mirror ---- */
+#define APP_HIST_MAGIC              0x48495331u /* "HIS1" */
+#define APP_MIRROR_MAGIC            0x4D495231u /* "MIR1" */
+#define APP_MIRROR_PERIOD_MS        60000u  /* first retry delay; also the normal upload cadence */
+#define APP_MIRROR_BACKOFF_MAX_MS   600000u /* failed uploads back off 60 s -> 10 min */
+#define APP_FIREBASE_PATH           "mornings.json?auth="
+#define APP_FIREBASE_URL_MAX        320
+#define APP_FIREBASE_BODY_MAX       192
+#define APP_RING_RECENT_S           (3 * 3600)  /* a fired alarm still names the lesson for 3 h */
+
+/* TLS: 0 = verify servers with the core's built-in CA bundle (default), 1 = encrypted but
+ * NOT server-authenticated (setInsecure). Use 1 only to diagnose a certificate problem. */
+#define APP_TLS_INSECURE            0
+
+/* ---- Serial test commands ("lead 90", "link <url>", "refresh") ---- */
+#define APP_CMD_MAX_CHARS           (APP_LINK_MAX_CHARS + 16)
+#define APP_SERIAL_RX_BUF           1024u
 
 /* ---- Status print ---- */
 #define APP_STATUS_PERIOD_MS        10000u

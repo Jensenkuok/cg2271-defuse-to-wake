@@ -214,6 +214,41 @@ bool sched_class_no_equal(const char *a, const char *b)
     return strcmp(a, b) == 0;
 }
 
+int sched_weekday_from_name(const char *day)
+{
+    static const char *const k_days[] = { "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+    int i;
+
+    if (day == NULL) {
+        return 0;
+    }
+    for (i = 0; i < SCHED_MAX_WEEKDAY; i++) {
+        if (strcmp(day, k_days[i]) == 0) {
+            return i + 1;
+        }
+    }
+    return 0;
+}
+
+int sched_parse_hhmm(const char *hhmm)
+{
+    int i;
+    int hh;
+    int mm;
+
+    if (hhmm == NULL || strlen(hhmm) != 4u) {
+        return -1;
+    }
+    for (i = 0; i < 4; i++) {
+        if (hhmm[i] < '0' || hhmm[i] > '9') {
+            return -1;
+        }
+    }
+    hh = (hhmm[0] - '0') * 10 + (hhmm[1] - '0');
+    mm = (hhmm[2] - '0') * 10 + (hhmm[3] - '0');
+    return (hh < 24 && mm < 60) ? hh * 60 + mm : -1;
+}
+
 int teaching_week(int year, int month, int day)
 {
     const int64_t n = days_from_civil(year, month, day) -

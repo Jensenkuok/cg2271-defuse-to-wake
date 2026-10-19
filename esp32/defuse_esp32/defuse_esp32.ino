@@ -20,6 +20,10 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_SSD1306.h>
+#include <ArduinoJson.h>
+#include <HTTPClient.h>
+#include <NetworkClientSecure.h>
+#include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiMulti.h>
 #include <Wire.h>
@@ -28,6 +32,7 @@ void setup()
 {
     bool ok;
 
+    Serial.setRxBufferSize(APP_SERIAL_RX_BUF); /* room for a pasted "link <url>" test command */
     Serial.begin(APP_DEBUG_BAUD);
     Serial.println("\n[boot] Defuse to Wake ESP32-S2");
 

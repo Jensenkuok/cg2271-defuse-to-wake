@@ -81,6 +81,12 @@ const char *sched_lesson_type_name(const char *abbrev);
  * exact strings ("A1" != "a1"). */
 bool sched_class_no_equal(const char *a, const char *b);
 
+/* NUSMods "day" ("Monday".."Saturday") -> 1..6, 0 if not a teaching day name. */
+int sched_weekday_from_name(const char *day);
+
+/* NUSMods "HHMM" -> minutes after midnight, -1 if it is not four digits with hh < 24, mm < 60. */
+int sched_parse_hhmm(const char *hhmm);
+
 /* Teaching week 1..13 for a local date, or 0 for recess, before week 1 and after week 13. */
 int teaching_week(int year, int month, int day);
 

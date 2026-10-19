@@ -149,6 +149,25 @@ static void test_parse_malformed(void)
     CHECK(s.skipped == 1);
 }
 
+static void test_api_field_parsers(void)
+{
+    CHECK(sched_weekday_from_name("Monday") == 1);
+    CHECK(sched_weekday_from_name("Saturday") == 6);
+    CHECK(sched_weekday_from_name("Sunday") == 0);
+    CHECK(sched_weekday_from_name("monday") == 0);
+    CHECK(sched_weekday_from_name(NULL) == 0);
+    CHECK(sched_parse_hhmm("0800") == 480);
+    CHECK(sched_parse_hhmm("1600") == 960);
+    CHECK(sched_parse_hhmm("2359") == 1439);
+    CHECK(sched_parse_hhmm("0000") == 0);
+    CHECK(sched_parse_hhmm("2400") == -1);
+    CHECK(sched_parse_hhmm("0860") == -1);
+    CHECK(sched_parse_hhmm("800") == -1);
+    CHECK(sched_parse_hhmm("08:00") == -1);
+    CHECK(sched_parse_hhmm("08a0") == -1);
+    CHECK(sched_parse_hhmm(NULL) == -1);
+}
+
 /* ---------------- calendar ---------------- */
 static void test_local_time_and_weekday(void)
 {
@@ -359,6 +378,7 @@ int main(void)
     test_class_no_padding();
     test_parse_abbreviations();
     test_parse_malformed();
+    test_api_field_parsers();
     test_local_time_and_weekday();
     test_teaching_week();
     test_next_alarm_basic();
