@@ -13,6 +13,7 @@
 #include "config.h"
 #include "puzzle_logic.h"
 #include "schedule.h"
+#include "text_logic.h"
 #include "../shared/proto_link.h"
 #include "../shared/protocol.h"
 
@@ -68,6 +69,10 @@ struct AppState {
     uint32_t cfg_fails;
     ActivePuzzle active;
 
+    /* DEFUSED-screen texts (network task writes, the display picks by date, see brief_pick) */
+    BriefText brief;              /* the LLM (or fallback) briefing + coach stored for one day */
+    BriefText brief_today;        /* deterministic template built from today's timetable + history */
+
     /* current bomb as the display knows it (default until BOMB_CONFIG is tracked) */
     uint8_t wire_count;
     uint8_t trip_min_cm;
@@ -97,6 +102,9 @@ void app_state_set_bomb_config(uint8_t wires, uint8_t trip_min, uint8_t trip_max
 void app_state_note_config_result(bool acked);
 /* Link task: the pair the MCX now holds (the MCX ACKed that BOMB_CONFIG). */
 void app_state_set_active_puzzle(const ActivePuzzle &p);
+/* Network task: the stored briefing/coach and today's template. */
+void app_state_set_brief(const BriefText &b);
+void app_state_set_brief_today(const BriefText &b);
 
 /* Is the MCX in a state where it ignores SET_ALARM and where a demo ring would be refused
  * (BOMB_ACTIVE, DEFUSED hold, EXPLODED hold)? IDLE and ARMED are not "ringing". */

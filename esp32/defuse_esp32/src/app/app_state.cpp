@@ -151,6 +151,16 @@ void app_state_set_active_puzzle(const ActivePuzzle &p)
     with_lock([&]() { s_state.active = p; });
 }
 
+void app_state_set_brief(const BriefText &b)
+{
+    with_lock([&]() { s_state.brief = b; });
+}
+
+void app_state_set_brief_today(const BriefText &b)
+{
+    with_lock([&]() { s_state.brief_today = b; });
+}
+
 uint32_t app_state_lock_timeouts(void)
 {
     return s_lock_timeouts;

@@ -145,6 +145,13 @@
 #define APP_KEY_PUZZLE_USED         "pz_used"
 #define APP_CONFIG_PENDING_MS       5000u   /* one BOMB_CONFIG at a time; give up on its ACK after this */
 
+/* ---- Briefing + coach (one LLM call after each nightly puzzle run, same setter chain) ---- */
+#define APP_BRIEF_TEMP              0.7f
+#define APP_BRIEF_MAX_TOKENS        600
+#define APP_BRIEF_MAGIC             0x42524631u /* "BRF1": bump when BriefText changes */
+#define APP_KEY_BRIEF               "brief"
+#define APP_BRIEF_PROMPT_MAX        640     /* user message: alarm, <= 6 classes, history, difficulty */
+
 /* TLS: 0 = verify servers with the core's built-in CA bundle (default), 1 = encrypted but
  * NOT server-authenticated (setInsecure). Use 1 only to diagnose a certificate problem. */
 #define APP_TLS_INSECURE            0

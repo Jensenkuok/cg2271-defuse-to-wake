@@ -10,6 +10,7 @@
 #include "../../secrets.h"
 #include "app_state.h"
 #include "bomb_config.h"
+#include "briefing.h"
 #include "config.h"
 #include "flash_store.h"
 #include "history.h"
@@ -383,8 +384,9 @@ static bool puzzle_calls_allowed(const NetCtx &c, const AppState &st, uint32_t u
 /* The BOOT demo ring and bomb_config_service() live in the LINK task now (see bomb_config.h):
  * the LLM jobs below can block this task for up to 30 s per call. */
 
-/* LLM jobs: the puzzle run does at most ONE LLM call per pass, so the loop (timetable, results,
- * alarm sync) is back within one call's timeout. */
+/* LLM jobs: the puzzle run and the briefing. Together they do at most ONE LLM call per pass: the
+ * briefing waits while a puzzle run is in progress, so the loop (timetable, results, alarm sync)
+ * is back within one call's timeout. */
 static void service_llm_jobs(const NetCtx &c, uint32_t now_ms, uint32_t unix_now)
 {
     static AppState st;                            /* static: ~1.3 KB that would stay on the stack during the TLS call */
@@ -393,6 +395,9 @@ static void service_llm_jobs(const NetCtx &c, uint32_t now_ms, uint32_t unix_now
     const uint32_t unix_valid = c.time_valid ? unix_now : 0u;
 
     puzzle_gen_service(now_ms, unix_valid, net_ok, gen_ok);
+    if (!puzzle_gen_busy()) {
+        briefing_service(now_ms, unix_valid, net_ok, gen_ok);
+    }
 }
 
 /* ================= Wi-Fi + SNTP ================= */
@@ -463,8 +468,11 @@ static void run_command(NetCtx &c, const char *cmd, uint32_t unix_now)
         puzzle_print_set();
     } else if (strcmp(cmd, "diff") == 0) {
         bomb_config_print_difficulty();
+    } else if (strcmp(cmd, "brief") == 0) {
+        briefing_request();
+        Serial.println("[cmd] briefing run requested");
     } else {
-        Serial.println("[cmd] commands: lead <15..180> | link <url> | refresh | resched | hist | puzzles | ai | diff");
+        Serial.println("[cmd] commands: lead <15..180> | link <url> | refresh | resched | hist | puzzles | ai | diff | brief");
     }
 }
 
@@ -550,6 +558,7 @@ bool network_task_start(void)
         Serial.println("[net] could not create the storage objects");
         return false;
     }
+    (void)briefing_init();
     bomb_config_init();                            /* last: from now on the link task may send BOMB_CONFIG */
     (void)mirror_init();
     (void)timetable_load_cache();                  /* offline-first: the cache works with no network */

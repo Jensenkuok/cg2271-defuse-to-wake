@@ -74,6 +74,7 @@ PuzzleSet s_set;                        /* the active set; guarded by s_mutex */
 uint32_t s_set_gen;                     /* guarded */
 uint8_t s_used;                         /* used-pair bit mask; guarded */
 bool s_used_dirty;                      /* s_used changed in RAM and is not in flash yet; guarded */
+uint32_t s_runs_done;                   /* finished generation runs; written by the network task only */
 PuzzleSet s_blob;                       /* flash buffer */
 
 Gen s_gen;
@@ -276,6 +277,7 @@ void gen_finish(void)
         }
     }
     s_gen.phase = PH_IDLE;
+    s_runs_done++;                      /* the briefing generator starts after every finished run */
 }
 
 /* The attempt failed (bad riddle, wrong checker answer, nobody answered): next attempt or bank. */
@@ -638,6 +640,11 @@ void puzzle_flush_used(void)
     if (dirty) {
         save_used(used);
     }
+}
+
+uint32_t puzzle_gen_runs_done(void)
+{
+    return s_runs_done;                                 /* 32-bit read: atomic */
 }
 
 void puzzle_print_set(void)

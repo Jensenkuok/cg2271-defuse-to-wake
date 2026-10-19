@@ -57,6 +57,9 @@ bool puzzle_consume_pair(int pair, uint32_t gen);
 /* Network task, every loop: write the used mask to flash if the link task changed it. */
 void puzzle_flush_used(void);
 
+/* Finished generation runs since boot (any outcome); the briefing starts after each one. */
+uint32_t puzzle_gen_runs_done(void);
+
 /* Serial "ai": the active set with sources, models, verification and the answers (debug only). */
 void puzzle_print_set(void);
 

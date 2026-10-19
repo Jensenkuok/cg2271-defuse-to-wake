@@ -41,7 +41,11 @@ $cxxPrograms = @(
     @{ Name = 'test_history';  Sources = @('esp32\defuse_esp32\src\app\history_ring.cpp', 'esp32\defuse_esp32\src\app\schedule.cpp') },
     # test_puzzle solves every 4-digit code by brute force: optimised build to keep it to seconds.
     @{ Name = 'test_puzzle';   Sources = @('esp32\defuse_esp32\src\app\puzzle_logic.cpp', 'esp32\defuse_esp32\src\app\history_ring.cpp',
-                                           'esp32\defuse_esp32\src\app\schedule.cpp', 'shared\protocol.c'); Flags = @('-O2') }
+                                           'esp32\defuse_esp32\src\app\schedule.cpp', 'shared\protocol.c'); Flags = @('-O2') },
+    # test_text: OLED wrap/marquee, hints, summary, briefing/coach templates and LLM reply validation.
+    @{ Name = 'test_text';     Sources = @('esp32\defuse_esp32\src\app\text_logic.cpp', 'esp32\defuse_esp32\src\app\puzzle_logic.cpp',
+                                           'esp32\defuse_esp32\src\app\history_ring.cpp', 'esp32\defuse_esp32\src\app\schedule.cpp',
+                                           'shared\protocol.c') }
 )
 foreach ($p in $cxxPrograms) {
     $exe = Join-Path $build "$($p.Name).exe"
