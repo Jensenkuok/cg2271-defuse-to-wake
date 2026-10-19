@@ -116,11 +116,38 @@
 #define APP_FIREBASE_BODY_MAX       192
 #define APP_RING_RECENT_S           (3 * 3600)  /* a fired alarm still names the lesson for 3 h */
 
+/* ---- SoCLaaS LLM + puzzle pipeline (network task, lowest priority, never at alarm time) ----
+ * The API key stays in secrets.h (SOCLAAS_API_KEY); everything else is here. SoCLaaS swaps the
+ * models behind these IDs without notice, so the chains are the only place to change them. The
+ * checker chain starts with the model that did NOT write the puzzle (see checker_order()). */
+#define APP_SOCLAAS_BASE_URL        "https://soclaas-api.comp.nus.edu.sg/v1"
+#define APP_SOCLAAS_CHAT_PATH       "/chat/completions"
+#define APP_LLM_CHAIN_LEN           4
+#define APP_LLM_SETTER_CHAIN        { "x-test-2", "x-test-1", "qwen3.6:35b", "default" }
+#define APP_LLM_CHECKER_CHAIN       { "x-test-1", "x-test-2", "qwen3.6:35b", "default" }
+#define APP_LLM_TIMEOUT_MS          30000u  /* one request: connect and read, at most 30 s */
+#define APP_LLM_TIMEOUT_S           30u     /* same limit for the TLS client */
+#define APP_LLM_MAX_TOKENS          600     /* reasoning models spend part of it before the JSON */
+#define APP_LLM_SETTER_TEMP         0.9f
+#define APP_LLM_CHECKER_TEMP        0.0f
+#define APP_LLM_REPLY_MAX           2048    /* reply text kept per call */
+#define APP_LLM_BODY_MAX            16384   /* larger HTTP bodies are refused */
+#define APP_PUZZLE_ATTEMPTS         3       /* setter + checker rounds per puzzle before the bank */
+#define APP_PUZZLE_DEAD_CHAINS      2       /* chains that failed outright in a row: stop asking the LLM */
+#define APP_PUZZLE_FRESH_S          (24 * 3600) /* a stored set younger than this needs no new run at boot */
+#define APP_PUZZLE_NIGHTLY_HOUR     22      /* local hour of the nightly run */
+#define APP_PUZZLE_RETRY_MS         1800000u /* a run with no verified puzzle is retried after 30 min... */
+#define APP_PUZZLE_RETRIES          2       /* ...at most this many times per trigger */
+#define APP_PUZZLE_QUIET_S          300     /* no LLM calls this close to (or just after) the alarm */
+#define APP_KEY_PUZZLES             "pz_set"
+#define APP_KEY_PUZZLE_USED         "pz_used"
+#define APP_CONFIG_PENDING_MS       5000u   /* one BOMB_CONFIG at a time; give up on its ACK after this */
+
 /* TLS: 0 = verify servers with the core's built-in CA bundle (default), 1 = encrypted but
  * NOT server-authenticated (setInsecure). Use 1 only to diagnose a certificate problem. */
 #define APP_TLS_INSECURE            0
 
-/* ---- Serial test commands ("lead 90", "link <url>", "refresh") ---- */
+/* ---- Serial test commands ("lead 90", "link <url>", "refresh", "puzzles", "ai", "diff") ---- */
 #define APP_CMD_MAX_CHARS           (APP_LINK_MAX_CHARS + 16)
 #define APP_SERIAL_RX_BUF           1024u
 

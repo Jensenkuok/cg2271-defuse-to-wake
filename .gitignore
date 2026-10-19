@@ -8,3 +8,6 @@ tools/build/
 /CG2271_As4.pdf
 dist/
 .mcux_ws/
+# IDE-local files
+*.launch
+mcxc444/**/.settings/language.settings.xml
