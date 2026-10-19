@@ -8,6 +8,7 @@
 #include "config.h"
 #include "display_task.h"
 #include "gyro_task.h"
+#include "history.h"
 #include "link_task.h"
 #include "network_task.h"
 
@@ -37,6 +38,10 @@ static void status_print(uint32_t now_ms)
                   (unsigned)st.link_stats.crc_errors, (unsigned)st.link_stats.len_errors,
                   (unsigned)st.link_stats.dup_drops, (unsigned)st.link_stats.nacks_sent,
                   (unsigned)st.tx_backpressure, (unsigned)app_state_lock_timeouts());
+    Serial.printf("[online] lessons=%u fetched=%u alarm=%u mirror_pending=%u hist=%d streak=%d\n",
+                  (unsigned)st.tt_lessons, (unsigned)st.tt_fetched_unix, (unsigned)st.alarm_unix,
+                  (unsigned)st.mirror_pending, history_count(),
+                  history_current_streak(st.time_valid ? (uint32_t)time(nullptr) : 0u));
     Serial.print("[stack bytes free]");
     print_stack("link", link_task_handle());
     print_stack("gyro", gyro_task_handle());

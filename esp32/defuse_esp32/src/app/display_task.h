@@ -27,6 +27,7 @@ struct ScreenModel {
     bool colon_on;            /* IDLE clock colon blink */
     bool invert;              /* EXPLODED flash */
     char clock_text[8];       /* IDLE "HH:MM" or "--:--" */
+    char next_text[APP_CLUE_MAX_CHARS + 1]; /* IDLE bottom line, e.g. "Fri 15:00 CG2271 LT19", "" if none */
     int32_t ring_in_s;        /* ARMED: seconds until the alarm, -1 unknown */
     char timer_text[8];       /* ACTIVE "MM:SS" */
     uint8_t strikes;

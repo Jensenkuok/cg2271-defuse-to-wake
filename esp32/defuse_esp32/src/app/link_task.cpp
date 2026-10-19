@@ -15,6 +15,7 @@ struct TxMsg {
 };
 
 static QueueHandle_t s_tx_queue;
+static QueueHandle_t s_result_queue;   /* RESULT frames for the network task (it records them in flash) */
 static TaskHandle_t s_task;
 static proto_link_t s_link;        /* owned by the link task only */
 static uint32_t s_tx_backpressure;
@@ -47,7 +48,10 @@ static void link_deliver(const proto_frame_t *f, void *ctx)
     case PROTO_MSG_RESULT:
         if (proto_unpack_result(f->payload, f->len, &res)) {
             app_state_set_result(res);
-            /* The next step stores this (Firebase); for now it is only logged. */
+            /* Never write flash from this prio-4 task: hand the result to the network task. */
+            if (xQueueSend(s_result_queue, &res, 0) != pdTRUE) {
+                Serial.println("[result] queue full: result not recorded");
+            }
             Serial.printf("[result] outcome=%u duration=%us strikes=%u snoozes=%u\n", res.outcome,
                           res.duration_s, res.strikes, res.snoozes);
         }
@@ -79,7 +83,13 @@ static void link_event(proto_event_t evt, uint8_t type, uint8_t seq, void *ctx)
 bool link_task_init(void)
 {
     s_tx_queue = xQueueCreate(APP_TX_QUEUE_LEN, sizeof(TxMsg));
-    return s_tx_queue != NULL;
+    s_result_queue = xQueueCreate(APP_RESULT_QUEUE_LEN, sizeof(proto_result_msg_t));
+    return s_tx_queue != NULL && s_result_queue != NULL;
+}
+
+bool link_result_pop(proto_result_msg_t *out)
+{
+    return xQueueReceive(s_result_queue, out, 0) == pdTRUE;
 }
 
 bool link_send(uint8_t type, const uint8_t *payload, uint8_t len)

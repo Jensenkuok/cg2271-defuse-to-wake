@@ -78,6 +78,19 @@ void build_model(const AppState &st, uint32_t now_ms, uint32_t unix_now, ScreenM
         snprintf(out->clock_text, sizeof(out->clock_text), "--:--");
     }
 
+    if (st.next_valid && st.alarm_unix != 0u) {
+        /* The wake-up time (alarm), not the class start: that is what the sleeper cares about. */
+        static const char *const k_weekday[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+        time_t at = (time_t)(st.alarm_unix + (uint32_t)APP_TZ_OFFSET_S);
+        struct tm tm_local;
+        char full[SCHED_MODULE_LEN + SCHED_VENUE_LEN + 16] = { 0 };
+
+        gmtime_r(&at, &tm_local);   /* UTC+8 added by hand, as for the clock above */
+        snprintf(full, sizeof(full), "%s %02d:%02d %s %s", k_weekday[tm_local.tm_wday % 7], tm_local.tm_hour,
+                 tm_local.tm_min, st.next_module, st.next_venue);
+        memcpy(out->next_text, full, sizeof(out->next_text) - 1u);   /* longer text is cut to the 21-char screen width */
+    }
+
     out->ring_in_s = (st.alarm_unix != 0u && st.time_valid && st.alarm_unix > unix_now)
                          ? (int32_t)(st.alarm_unix - unix_now) : -1;
 
@@ -116,7 +129,7 @@ static void print_summary(const ScreenModel &m)
                   m.wifi_up ? "up" : "down");
     switch (m.screen) {
     case SCR_IDLE:
-        Serial.printf(" clock=%s", m.clock_text);
+        Serial.printf(" clock=%s next=[%s]", m.clock_text, m.next_text);
         break;
     case SCR_ARMED:
         Serial.printf(" ring_in=%ds", (int)m.ring_in_s);
@@ -310,6 +323,11 @@ static void draw_oled(const ScreenModel &m)
             buf[2] = ' ';
         }
         text_centered(buf, 22, 4);
+        if (m.next_text[0] != '\0') {
+            s_display.setTextSize(1);
+            s_display.setCursor(0, CLUE_Y);
+            s_display.print(m.next_text);
+        }
         draw_wifi_icon(96, 0, m.wifi_up);
         draw_link_icon(114, 0, !m.link_down);
         break;

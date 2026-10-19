@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 #include "config.h"
+#include "schedule.h"
 #include "../shared/proto_link.h"
 #include "../shared/protocol.h"
 
@@ -34,6 +35,14 @@ struct AppState {
     bool wifi_up;
     bool time_valid;
     uint32_t alarm_unix;          /* 0 = none */
+    bool next_valid;              /* a next class exists (alarm_unix != 0) */
+    uint32_t next_start_unix;     /* start of that class */
+    char next_module[SCHED_MODULE_LEN];
+    char next_type[SCHED_ABBREV_LEN];
+    char next_venue[SCHED_VENUE_LEN];
+    uint8_t tt_lessons;           /* lessons in the timetable cache */
+    uint32_t tt_fetched_unix;     /* last successful NUSMods fetch, 0 = never */
+    uint8_t mirror_pending;       /* morning records waiting for Firebase */
 
     /* current bomb as the display knows it (default until BOMB_CONFIG is tracked) */
     uint8_t wire_count;
@@ -55,6 +64,10 @@ void app_state_set_link_stats(const proto_link_stats_t &s, uint32_t tx_backpress
 void app_state_set_wifi(bool up);
 void app_state_set_time_valid(bool valid);
 void app_state_set_alarm(uint32_t alarm_unix);
+/* The scheduler's answer: the alarm and the class it is for. alarm_unix = 0 / lesson NULL = no class. */
+void app_state_set_schedule(uint32_t alarm_unix, uint32_t class_start_unix, const Lesson *lesson);
+void app_state_set_timetable_info(uint8_t lessons, uint32_t fetched_unix);
+void app_state_set_mirror_pending(uint8_t pending);
 void app_state_set_bomb_config(uint8_t wires, uint8_t trip_min, uint8_t trip_max, uint8_t max_strikes);
 
 uint32_t app_state_lock_timeouts(void);

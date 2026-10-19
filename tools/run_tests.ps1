@@ -37,7 +37,8 @@ foreach ($name in 'g++', 'clang++') {
 if (-not $cxx) { Write-Error 'No C++ compiler (g++/clang++) found.'; exit 1 }
 $app = Join-Path $root 'esp32\defuse_esp32\src\app'
 $cxxPrograms = @(
-    @{ Name = 'test_schedule'; Sources = @('esp32\defuse_esp32\src\app\schedule.cpp') }
+    @{ Name = 'test_schedule'; Sources = @('esp32\defuse_esp32\src\app\schedule.cpp') },
+    @{ Name = 'test_history';  Sources = @('esp32\defuse_esp32\src\app\history_ring.cpp', 'esp32\defuse_esp32\src\app\schedule.cpp') }
 )
 foreach ($p in $cxxPrograms) {
     $exe = Join-Path $build "$($p.Name).exe"

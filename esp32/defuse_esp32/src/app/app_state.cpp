@@ -89,6 +89,33 @@ void app_state_set_alarm(uint32_t alarm_unix)
     with_lock([&]() { s_state.alarm_unix = alarm_unix; });
 }
 
+void app_state_set_schedule(uint32_t alarm_unix, uint32_t class_start_unix, const Lesson *lesson)
+{
+    with_lock([&]() {
+        s_state.alarm_unix = alarm_unix;
+        s_state.next_valid = (alarm_unix != 0u) && (lesson != NULL);
+        s_state.next_start_unix = s_state.next_valid ? class_start_unix : 0u;
+        memset(s_state.next_module, 0, sizeof(s_state.next_module));
+        memset(s_state.next_type, 0, sizeof(s_state.next_type));
+        memset(s_state.next_venue, 0, sizeof(s_state.next_venue));
+        if (s_state.next_valid) {
+            memcpy(s_state.next_module, lesson->module, sizeof(s_state.next_module) - 1u);
+            memcpy(s_state.next_type, lesson->type, sizeof(s_state.next_type) - 1u);
+            memcpy(s_state.next_venue, lesson->venue, sizeof(s_state.next_venue) - 1u);
+        }
+    });
+}
+
+void app_state_set_timetable_info(uint8_t lessons, uint32_t fetched_unix)
+{
+    with_lock([&]() { s_state.tt_lessons = lessons; s_state.tt_fetched_unix = fetched_unix; });
+}
+
+void app_state_set_mirror_pending(uint8_t pending)
+{
+    with_lock([&]() { s_state.mirror_pending = pending; });
+}
+
 void app_state_set_bomb_config(uint8_t wires, uint8_t trip_min, uint8_t trip_max, uint8_t max_strikes)
 {
     with_lock([&]() {
