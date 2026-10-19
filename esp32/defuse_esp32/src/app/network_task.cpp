@@ -9,11 +9,13 @@
 
 #include "../../secrets.h"
 #include "app_state.h"
+#include "bomb_config.h"
 #include "config.h"
 #include "flash_store.h"
 #include "history.h"
 #include "link_task.h"
 #include "mirror.h"
+#include "puzzle_gen.h"
 #include "schedule.h"
 #include "settings.h"
 #include "status.h"
@@ -290,7 +292,9 @@ static void track_session(NetCtx &c, const AppState &st, uint32_t unix_now)
  * TX queue was full; nothing is marked as sent and the caller retries on the next loop. */
 static bool send_to_mcx(NetCtx &c, uint32_t unix_now, AlarmAction action, bool send_sync, uint32_t alarm)
 {
-    const uint32_t need = (send_sync ? 1u : 0u) + (action != ALARM_ACTION_NONE ? 1u : 0u);
+    /* a SET_ALARM travels with a BOMB_CONFIG: one more slot */
+    const uint32_t need = (send_sync ? 1u : 0u) + (action != ALARM_ACTION_NONE ? 1u : 0u) +
+                          (action == ALARM_ACTION_SEND_SET_ALARM ? 1u : 0u);
 
     if (link_tx_space() < need) {
         return false;
@@ -299,6 +303,11 @@ static bool send_to_mcx(NetCtx &c, uint32_t unix_now, AlarmAction action, bool s
         return false;
     }
     if (action == ALARM_ACTION_SEND_SET_ALARM) {
+        /* Outside a session (alarm_action sends nothing inside one): the bomb this alarm starts gets
+         * the next puzzle pair and the current difficulty. Order on the wire: TIME_SYNC, BOMB_CONFIG,
+         * SET_ALARM. A config that cannot be queued (one still waiting for its ACK) never holds the
+         * alarm back. */
+        (void)bomb_config_send("alarm");
         if (!queue_set_alarm(alarm)) {
             return false;
         }
@@ -358,6 +367,68 @@ static void sync_with_mcx(NetCtx &c, uint32_t now_ms, uint32_t unix_now)
         }
     }
     c.force_send = false;
+}
+
+/* ================= puzzles + BOMB_CONFIG ================= */
+/* LLM calls (up to 30 s each) only when nothing time-critical is going on: no bomb session, the MCX
+ * is not ringing, and the alarm is not about to fire or has just fired. */
+static bool puzzle_calls_allowed(const NetCtx &c, const AppState &st, uint32_t unix_now)
+{
+    if (st.session_active || game_ringing(st)) {
+        return false;
+    }
+    if (c.time_valid && c.cur_alarm_unix != 0u && unix_now + APP_PUZZLE_QUIET_S >= c.cur_alarm_unix &&
+        unix_now <= c.cur_alarm_unix + ALARM_GRACE_S) {
+        return false;
+    }
+    return true;
+}
+
+/* BOOT button: BOMB_CONFIG with the next puzzle pair first, then CMD RING_NOW (3 s). */
+static void handle_ring_request(void)
+{
+    AppState st;
+    proto_cmd_t cmd;
+    uint8_t pl[PROTO_SIZE_CMD];
+
+    if (!link_ring_requested()) {
+        return;
+    }
+    if (!app_state_read(&st) || !st.link_up) {
+        Serial.println("[btn] ring ignored: MCX link is down");
+        return;
+    }
+    if (game_ringing(st)) {
+        Serial.println("[btn] ring ignored: a bomb is already running");
+        return;
+    }
+    if (!bomb_config_send("demo ring")) {
+        Serial.println("[btn] no new BOMB_CONFIG queued: the MCX keeps its previous config");
+    }
+    cmd.cmd = PROTO_CMD_RING_NOW;
+    cmd.arg = APP_BOOT_RING_DELAY_S;
+    if (proto_pack_cmd(&cmd, pl, sizeof(pl)) != 0u && link_send(PROTO_MSG_CMD, pl, PROTO_SIZE_CMD)) {
+        Serial.println("[btn] RING_NOW queued");
+    } else {
+        Serial.println("[btn] RING_NOW could not be queued (TX queue full)");
+    }
+}
+
+static void service_puzzles(const NetCtx &c, uint32_t now_ms, uint32_t unix_now)
+{
+    AppState st;
+    const bool gen_ok = app_state_read(&st) && puzzle_calls_allowed(c, st, unix_now);
+
+    puzzle_gen_service(now_ms, c.time_valid ? unix_now : 0u, c.wifi_up && c.time_valid, gen_ok);
+}
+
+static void service_bomb_config(void)
+{
+    AppState st;
+
+    if (app_state_read(&st)) {
+        bomb_config_service(st);
+    }
 }
 
 /* ================= Wi-Fi + SNTP ================= */
@@ -421,8 +492,15 @@ static void run_command(NetCtx &c, const char *cmd, uint32_t unix_now)
         c.resched_pending = true;
     } else if (strcmp(cmd, "hist") == 0) {
         print_history(unix_now);
+    } else if (strcmp(cmd, "puzzles") == 0) {
+        puzzle_gen_request();
+        Serial.println("[cmd] puzzle run requested");
+    } else if (strcmp(cmd, "ai") == 0) {
+        puzzle_print_set();
+    } else if (strcmp(cmd, "diff") == 0) {
+        bomb_config_print_difficulty();
     } else {
-        Serial.println("[cmd] commands: lead <15..180> | link <url> | refresh | resched | hist");
+        Serial.println("[cmd] commands: lead <15..180> | link <url> | refresh | resched | hist | puzzles | ai | diff");
     }
 }
 
@@ -473,6 +551,7 @@ static void network_task(void *arg)
         serial_commands(c, unix_valid);
         handle_settings(c, now);
         handle_results(c, unix_valid);
+        handle_ring_request();
         if (c.time_valid) {
             if (c.wifi_up) {
                 service_timetable(c, now, unix_now);
@@ -484,6 +563,10 @@ static void network_task(void *arg)
             unix_now = (uint32_t)time(nullptr);
             sync_with_mcx(c, now, unix_now);
         }
+        /* Independent of the clock: ACK bookkeeping and the explosion / snooze triggers must work
+         * offline. The puzzle run does at most one LLM call per pass, after the MCX work above. */
+        service_bomb_config();
+        service_puzzles(c, millis(), c.time_valid ? (uint32_t)time(nullptr) : 0u);
         pending = (uint8_t)mirror_pending();
         if (pending != c.seen_mirror_pending) {
             c.seen_mirror_pending = pending;
@@ -501,10 +584,11 @@ bool network_task_start(void)
     c.tt_due = true;                               /* fetch once at boot, as soon as Wi-Fi + time are valid */
     c.tt_last_nightly_day = -1;
     c.resched_pending = true;                      /* schedule from the flash cache as soon as the time is valid */
-    if (!flash_store_init() || !timetable_init() || !history_init()) {
+    if (!flash_store_init() || !timetable_init() || !history_init() || !puzzle_gen_init()) {
         Serial.println("[net] could not create the storage objects");
         return false;
     }
+    bomb_config_init();
     (void)mirror_init();
     (void)timetable_load_cache();                  /* offline-first: the cache works with no network */
     app_state_set_timetable_info((uint8_t)timetable_count(), timetable_fetched_unix());

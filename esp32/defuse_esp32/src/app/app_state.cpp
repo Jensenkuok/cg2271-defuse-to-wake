@@ -135,6 +135,22 @@ void app_state_set_bomb_config(uint8_t wires, uint8_t trip_min, uint8_t trip_max
     });
 }
 
+void app_state_note_config_result(bool acked)
+{
+    with_lock([&]() {
+        if (acked) {
+            s_state.cfg_acks++;
+        } else {
+            s_state.cfg_fails++;
+        }
+    });
+}
+
+void app_state_set_active_puzzle(const ActivePuzzle &p)
+{
+    with_lock([&]() { s_state.active = p; });
+}
+
 uint32_t app_state_lock_timeouts(void)
 {
     return s_lock_timeouts;

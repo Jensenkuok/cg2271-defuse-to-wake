@@ -16,9 +16,12 @@ struct TxMsg {
 
 static QueueHandle_t s_tx_queue;
 static QueueHandle_t s_result_queue;   /* RESULT frames for the network task (it records them in flash) */
+static QueueHandle_t s_ring_queue;     /* BOOT presses for the network task (length 1: a press is a level, not a count) */
 static TaskHandle_t s_task;
 static proto_link_t s_link;        /* owned by the link task only */
 static uint32_t s_tx_backpressure;
+static uint8_t s_cfg_handed;       /* BOMB_CONFIG frames given to proto_link whose outcome is not reported yet */
+static uint8_t s_cfg_failed_events;/* PROTO_EVT_SEND_FAILED for BOMB_CONFIG not yet reported */
 
 /* ---- proto_link callbacks (run inside the link task) ---- */
 static void link_write(const uint8_t *buf, size_t len, void *ctx)
@@ -75,6 +78,9 @@ static void link_event(proto_event_t evt, uint8_t type, uint8_t seq, void *ctx)
         break;
     case PROTO_EVT_SEND_FAILED:
         Serial.printf("[link] SEND_FAILED type=0x%02x seq=%u\n", type, seq);
+        if (type == PROTO_MSG_BOMB_CONFIG && s_cfg_failed_events < 0xFFu) {
+            s_cfg_failed_events++;
+        }
         break;
     }
 }
@@ -84,7 +90,15 @@ bool link_task_init(void)
 {
     s_tx_queue = xQueueCreate(APP_TX_QUEUE_LEN, sizeof(TxMsg));
     s_result_queue = xQueueCreate(APP_RESULT_QUEUE_LEN, sizeof(proto_result_msg_t));
-    return s_tx_queue != NULL && s_result_queue != NULL;
+    s_ring_queue = xQueueCreate(1, sizeof(uint8_t));
+    return s_tx_queue != NULL && s_result_queue != NULL && s_ring_queue != NULL;
+}
+
+bool link_ring_requested(void)
+{
+    uint8_t v;
+
+    return xQueueReceive(s_ring_queue, &v, 0) == pdTRUE;
 }
 
 bool link_result_pop(proto_result_msg_t *out)
@@ -128,25 +142,56 @@ static void drain_tx_queue(uint32_t now)
             s_tx_backpressure++;
             break;
         }
+        if (m.type == PROTO_MSG_BOMB_CONFIG && s_cfg_handed < 0xFFu) {
+            s_cfg_handed++;
+        }
         (void)xQueueReceive(s_tx_queue, &m, 0);
     }
 }
 
-/* BOOT button (GPIO0, active low), 50 ms poll = debounce: a press queues RING_NOW. */
+/* BOMB_CONFIG frames still inside proto_link (outstanding or waiting in its FIFO). The link task
+ * owns the link, so reading these fields here is the owner reading its own state. */
+static uint8_t cfg_frames_in_link(void)
+{
+    uint8_t n = (s_link.out_active && s_link.out_type == PROTO_MSG_BOMB_CONFIG) ? 1u : 0u;
+    uint8_t i;
+
+    for (i = 0; i < s_link.fifo_count; i++) {
+        if (s_link.fifo[(s_link.fifo_head + i) % PROTO_LINK_TX_DEPTH].type == PROTO_MSG_BOMB_CONFIG) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* A BOMB_CONFIG that left proto_link was either ACKed or dropped after the retries (the
+ * SEND_FAILED event counted above). The network task learns the outcome through app_state. */
+static void report_config_results(void)
+{
+    const uint8_t in_link = cfg_frames_in_link();
+
+    while (s_cfg_handed > in_link) {
+        s_cfg_handed--;
+        if (s_cfg_failed_events > 0u) {
+            s_cfg_failed_events--;
+            app_state_note_config_result(false);
+        } else {
+            app_state_note_config_result(true);
+        }
+    }
+}
+
+/* BOOT button (GPIO0, active low), 50 ms poll = debounce: a press asks the network task for a
+ * demo ring. The network task sends the BOMB_CONFIG first, then CMD RING_NOW. */
 static void poll_button(void)
 {
     static bool s_was_down;
     bool down = (digitalRead(APP_BOOT_BUTTON_PIN) == LOW);
-    proto_cmd_t c;
-    uint8_t pl[PROTO_SIZE_CMD];
+    const uint8_t pressed = 1u;
 
     if (down && !s_was_down) {
-        c.cmd = PROTO_CMD_RING_NOW;
-        c.arg = APP_BOOT_RING_DELAY_S;
-        if (proto_pack_cmd(&c, pl, sizeof(pl)) != 0) {
-            (void)link_send(PROTO_MSG_CMD, pl, PROTO_SIZE_CMD);
-            Serial.println("[btn] BOOT pressed: RING_NOW");
-        }
+        (void)xQueueOverwrite(s_ring_queue, &pressed);
+        Serial.println("[btn] BOOT pressed: demo ring requested");
     }
     s_was_down = down;
 }
@@ -183,6 +228,7 @@ static void link_task(void *arg)
             poll_button();
         }
         drain_tx_queue(now);
+        report_config_results();
 
         if ((uint32_t)(now - last_stats) >= APP_LINK_STATS_MS) {
             last_stats = now;

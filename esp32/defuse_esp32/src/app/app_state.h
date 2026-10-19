@@ -11,9 +11,25 @@
 #include <stdint.h>
 
 #include "config.h"
+#include "puzzle_logic.h"
 #include "schedule.h"
 #include "../shared/proto_link.h"
 #include "../shared/protocol.h"
+
+/* The puzzle pair of the last BOMB_CONFIG the MCX ACKed: what the next (or the running) bomb
+ * asks for. The display and the web page show its texts; the answers stay on the MCX side. */
+struct ActivePuzzle {
+    bool valid;
+    uint8_t pair;                       /* index in the puzzle set */
+    uint32_t set_gen;                   /* which generation of the set it came from */
+    uint8_t dial_code[PROTO_DIAL_DIGITS];
+    uint8_t wire_count;
+    uint8_t wire_k;                     /* 1-based from the left */
+    uint8_t dial_source;                /* PuzzleSource */
+    uint8_t wire_source;
+    char dial_text[PUZZLE_TEXT_BUF];
+    char wire_text[PUZZLE_WIRE_TEXT_MAX + 1];
+};
 
 struct AppState {
     /* from the MCX */
@@ -47,6 +63,11 @@ struct AppState {
     uint32_t tt_fetched_unix;     /* last successful NUSMods fetch, 0 = never */
     uint8_t mirror_pending;       /* morning records waiting for Firebase */
 
+    /* BOMB_CONFIG results reported by the link task (+1 per ACKed / failed config) */
+    uint32_t cfg_acks;
+    uint32_t cfg_fails;
+    ActivePuzzle active;
+
     /* current bomb as the display knows it (default until BOMB_CONFIG is tracked) */
     uint8_t wire_count;
     uint8_t trip_min_cm;
@@ -72,6 +93,10 @@ void app_state_set_schedule(uint32_t alarm_unix, uint32_t class_start_unix, cons
 void app_state_set_timetable_info(uint8_t lessons, uint32_t fetched_unix);
 void app_state_set_mirror_pending(uint8_t pending);
 void app_state_set_bomb_config(uint8_t wires, uint8_t trip_min, uint8_t trip_max, uint8_t max_strikes);
+/* Link task: one BOMB_CONFIG finished (ACKed or dropped after the retries). */
+void app_state_note_config_result(bool acked);
+/* Network task: the pair the MCX now holds. */
+void app_state_set_active_puzzle(const ActivePuzzle &p);
 
 uint32_t app_state_lock_timeouts(void);
 
