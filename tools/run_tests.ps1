@@ -29,6 +29,26 @@ foreach ($p in $programs) {
     if ($LASTEXITCODE -ne 0) { Write-Error "$($p.Name) failed."; exit 1 }
 }
 
+# ESP32 pure-logic modules (C++11, no Arduino headers) built with g++.
+$cxx = $null
+foreach ($name in 'g++', 'clang++') {
+    if (Get-Command $name -ErrorAction SilentlyContinue) { $cxx = $name; break }
+}
+if (-not $cxx) { Write-Error 'No C++ compiler (g++/clang++) found.'; exit 1 }
+$app = Join-Path $root 'esp32\defuse_esp32\src\app'
+$cxxPrograms = @(
+    @{ Name = 'test_schedule'; Sources = @('esp32\defuse_esp32\src\app\schedule.cpp') }
+)
+foreach ($p in $cxxPrograms) {
+    $exe = Join-Path $build "$($p.Name).exe"
+    $srcs = @(Join-Path $root "tools\$($p.Name).cpp") + ($p.Sources | ForEach-Object { Join-Path $root $_ })
+    & $cxx -std=c++11 -Wall -Wextra -Werror -pedantic -I $app @srcs -o $exe
+    if ($LASTEXITCODE -ne 0) { Write-Error "Build of $($p.Name) failed ($cxx)."; exit 1 }
+    Write-Host "== $($p.Name)"
+    & $exe
+    if ($LASTEXITCODE -ne 0) { Write-Error "$($p.Name) failed."; exit 1 }
+}
+
 # Synced copies (tools/sync_shared.ps1) must be byte-identical to the canonical sources.
 $copies = @(
     @{ From = 'shared'; To = 'esp32\defuse_esp32\src\shared'; Files = @('protocol.h', 'protocol.c', 'proto_link.h', 'proto_link.c') },
