@@ -102,7 +102,10 @@ Stretch (only after core is done): laser tripwire, magnetic key (reed/Hall), cla
   - "Engineering" (demo): live bomb state, link stats + log of the last 20 frames
     (type/seq/ACK/NACK/retransmit), AI panel (tonight's puzzles, setter model, checker answer,
     verified/rejected), Firebase mirror queue, fault buttons: "Corrupt next packet" (bad CRC on
-    the next ESP32->MCX frame), "Simulate Wi-Fi down".
+    the next ESP32->MCX frame), "Simulate internet outage" (60 s: block outbound HTTPS calls but
+    keep Wi-Fi, because the page itself is served over Wi-Fi).
+  - Reachable at http://defuse.local (ESPmDNS, built into the ESP32 core) or the IP shown on the
+    OLED IDLE screen and Serial.
   - Plain HTML/JS served from flash, JSON status endpoint polled about every 500 ms; no
     external CDNs or async web server libraries.
 - STRETCH (Week 12, only after integration passes): online monitor = static page on Firebase
