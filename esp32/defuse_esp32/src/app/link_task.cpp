@@ -6,6 +6,8 @@
 #include "app_state.h"
 #include "bomb_config.h"
 #include "config.h"
+#include "fault.h"
+#include "frame_log.h"
 #include "../shared/proto_link.h"
 #include "../shared/protocol.h"
 
@@ -20,16 +22,107 @@ static QueueHandle_t s_result_queue;   /* RESULT frames for the network task (it
 static TaskHandle_t s_task;
 static proto_link_t s_link;        /* owned by the link task only */
 static AppState s_st;              /* link task only: a local copy would take ~1 KB of its 4 KB stack */
-static bool s_boot_pressed;        /* set by poll_button, consumed by service_game_config (both in this task) */
 static uint32_t s_tx_backpressure;
 static uint8_t s_cfg_handed;       /* BOMB_CONFIG frames given to proto_link whose outcome is not reported yet */
 static uint8_t s_cfg_failed_events;/* PROTO_EVT_SEND_FAILED for BOMB_CONFIG not yet reported */
 
+/* ---- demo-ring request: the BOOT button (this task) or the web page's "Ring now" (web task) ---- */
+static portMUX_TYPE s_ring_mux = portMUX_INITIALIZER_UNLOCKED;
+static bool s_ring_requested;      /* guarded by s_ring_mux; consumed by service_game_config */
+
+static void ring_request_set(void)
+{
+    taskENTER_CRITICAL(&s_ring_mux);
+    s_ring_requested = true;
+    taskEXIT_CRITICAL(&s_ring_mux);
+}
+
+static bool ring_request_pending(void)
+{
+    bool pending;
+
+    taskENTER_CRITICAL(&s_ring_mux);
+    pending = s_ring_requested;
+    taskEXIT_CRITICAL(&s_ring_mux);
+    return pending;
+}
+
+static bool ring_request_take(void)
+{
+    bool pending;
+
+    taskENTER_CRITICAL(&s_ring_mux);
+    pending = s_ring_requested;
+    s_ring_requested = false;
+    taskEXIT_CRITICAL(&s_ring_mux);
+    return pending;
+}
+
+/* ---- frame log (Engineering tab): the last FRAME_LOG_LEN frames of the MCX link ----
+ * The link task writes, the web task copies. A critical section (not a mutex): the push and the copy
+ * are a few dozen bytes, and the priority-4 link task must never wait on a lower-priority reader. */
+static portMUX_TYPE s_log_mux = portMUX_INITIALIZER_UNLOCKED;
+static FrameLogRing s_frame_log;   /* guarded by s_log_mux */
+static proto_decoder_t s_rx_tap;   /* link task only: a second decoder fed the same bytes as proto_link, so ACK /
+                                    * NACK / duplicate frames and CRC errors (which proto_link consumes) are logged */
+static uint32_t s_seen_retx;       /* proto_link's retransmit counter at the previous write */
+
+static void log_frame(uint8_t dir, uint8_t type, uint8_t seq, uint8_t len, uint8_t outcome)
+{
+    const FrameLogEntry e = frame_log_entry(millis(), dir, type, seq, len, outcome);
+
+    taskENTER_CRITICAL(&s_log_mux);
+    (void)frame_log_record(&s_frame_log, APP_FRAME_LOG_PERIODIC != 0, e);
+    taskEXIT_CRITICAL(&s_log_mux);
+}
+
+/* Every byte that goes to proto_link goes through here first. A CRC or length error is recorded as
+ * CRC_ERR (the frame's type is unknown); a good frame by its type, seq and outcome. */
+static void rx_tap_byte(uint8_t byte)
+{
+    proto_frame_t f;
+    const uint32_t errors_before = s_rx_tap.crc_errors + s_rx_tap.len_errors;
+    const proto_result_t res = proto_decoder_feed(&s_rx_tap, byte, &f);
+
+    if (s_rx_tap.crc_errors + s_rx_tap.len_errors != errors_before) {
+        log_frame(FLOG_RX, 0u, 0u, 0u, FLOG_CRC_ERR);
+    }
+    if (res == PROTO_FRAME_OK) {
+        log_frame(FLOG_RX, f.type, frame_log_seq(f.type, f.seq, f.payload, f.len), f.len, frame_rx_outcome(f.type));
+    }
+}
+
 /* ---- proto_link callbacks (run inside the link task) ---- */
+/* One call per whole frame. Also the single place where the fault button's "corrupt the next packet"
+ * is applied: the CRC byte of one outgoing frame is flipped on its way to the UART, proto_link keeps
+ * its intact copy for the retransmit. A retransmit is recognised by proto_link's counter, which it
+ * increments just before it writes the frame again. */
 static void link_write(const uint8_t *buf, size_t len, void *ctx)
 {
+    uint8_t copy[PROTO_MAX_FRAME];
+    const bool whole = (len >= PROTO_HEADER_SIZE + 1u) && (len <= sizeof(copy));
+    const uint8_t type = whole ? buf[1] : 0u;
+    const uint8_t seq = whole ? buf[2] : 0u;
+    const uint8_t plen = whole ? buf[3] : 0u;
+    const bool retx = (s_link.stats.retransmits != s_seen_retx);
+    bool corrupted = false;
+
     (void)ctx;
-    Serial1.write(buf, len); /* a frame is <= 37 bytes; the core's TX buffer holds several */
+    s_seen_retx = s_link.stats.retransmits;
+    if (whole && (APP_FAULT_CORRUPT_RELIABLE_ONLY == 0 || frame_type_is_reliable(type)) && fault_corrupt_take()) {
+        memcpy(copy, buf, len);
+        frame_corrupt_crc(copy, len);
+        Serial1.write(copy, len);
+        corrupted = true;
+        Serial.printf("[fault] CRC of %s seq=%u corrupted on the wire (the MCX should NACK, we retransmit)\n",
+                      frame_type_name(type), (unsigned)seq);
+    } else {
+        Serial1.write(buf, len); /* a frame is <= 37 bytes; the core's TX buffer holds several */
+    }
+    if (whole) {
+        log_frame(FLOG_TX, type, frame_log_seq(type, seq, buf + PROTO_HEADER_SIZE, plen), plen,
+                  frame_tx_outcome(type, retx, corrupted));
+    }
 }
 
 static void link_deliver(const proto_frame_t *f, void *ctx)
@@ -80,6 +173,7 @@ static void link_event(proto_event_t evt, uint8_t type, uint8_t seq, void *ctx)
         break;
     case PROTO_EVT_SEND_FAILED:
         Serial.printf("[link] SEND_FAILED type=0x%02x seq=%u\n", type, seq);
+        log_frame(FLOG_TX, type, seq, 0u, FLOG_SEND_FAIL);
         if (type == PROTO_MSG_BOMB_CONFIG && s_cfg_failed_events < 0xFFu) {
             s_cfg_failed_events++;
         }
@@ -123,6 +217,28 @@ uint32_t link_tx_space(void)
 TaskHandle_t link_task_handle(void)
 {
     return s_task;
+}
+
+int link_frame_log_copy(FrameLogEntry *out, int max)
+{
+    int n;
+    int i;
+
+    if (out == NULL || max <= 0) {
+        return 0;
+    }
+    taskENTER_CRITICAL(&s_log_mux);
+    n = s_frame_log.size() < max ? s_frame_log.size() : max;
+    for (i = 0; i < n; i++) {
+        out[i] = s_frame_log.newest(i);
+    }
+    taskEXIT_CRITICAL(&s_log_mux);
+    return n;
+}
+
+void link_request_demo_ring(void)
+{
+    ring_request_set();
 }
 
 /* Move queued messages into proto_link. If its FIFO is full the head STAYS in the queue
@@ -183,7 +299,7 @@ static void poll_button(void)
     bool down = (digitalRead(APP_BOOT_BUTTON_PIN) == LOW);
 
     if (down && !s_was_down) {
-        s_boot_pressed = true;
+        ring_request_set();
         Serial.println("[btn] BOOT pressed: demo ring requested");
     }
     s_was_down = down;
@@ -226,8 +342,7 @@ static void service_game_config(void)
     if (!app_state_read(&s_st)) {
         return;                                    /* retried next period; a press stays pending */
     }
-    if (s_boot_pressed) {
-        s_boot_pressed = false;
+    if (ring_request_take()) {
         demo_ring(s_st);
     }
     bomb_config_service(s_st);
@@ -246,6 +361,7 @@ static void link_task(void *arg)
     Serial1.begin(APP_UART_BAUD, SERIAL_8N1, APP_UART_RX_PIN, APP_UART_TX_PIN);
     pinMode(APP_BOOT_BUTTON_PIN, INPUT_PULLUP);
 
+    proto_decoder_init(&s_rx_tap);
     memset(&cfg, 0, sizeof(cfg)); /* timeout / retries 0 -> proto_link defaults */
     cfg.write_fn = link_write;
     cfg.deliver_fn = link_deliver;
@@ -257,7 +373,10 @@ static void link_task(void *arg)
         now = millis();
 
         while (Serial1.available() > 0) {
-            proto_link_rx_byte(&s_link, (uint8_t)Serial1.read(), now);
+            const uint8_t byte = (uint8_t)Serial1.read();
+
+            rx_tap_byte(byte);
+            proto_link_rx_byte(&s_link, byte, now);
         }
         proto_link_poll(&s_link, now);
 
@@ -265,7 +384,7 @@ static void link_task(void *arg)
             last_button = now;
             poll_button();
         }
-        if (s_boot_pressed || (uint32_t)(now - last_cfg) >= APP_BOMB_CFG_POLL_MS) {
+        if (ring_request_pending() || (uint32_t)(now - last_cfg) >= APP_BOMB_CFG_POLL_MS) {
             last_cfg = now;
             service_game_config();         /* before the drain: what it queues leaves in this pass */
         }

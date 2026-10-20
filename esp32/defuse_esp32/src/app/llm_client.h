@@ -17,7 +17,8 @@ enum LlmStatus {
     LLM_ERR_HTTP,       /* transport error / timeout (code < 0) or HTTP status != 200 */
     LLM_ERR_BODY,       /* reply body too large or unreadable */
     LLM_ERR_PARSE,      /* reply is not the JSON we expect */
-    LLM_ERR_EMPTY       /* choices[0].message.content missing, empty, or only <think> text */
+    LLM_ERR_EMPTY,      /* choices[0].message.content missing, empty, or only <think> text */
+    LLM_ERR_OUTAGE      /* the web page's "simulated internet outage" is on: failed before any network use */
 };
 
 struct LlmReply {

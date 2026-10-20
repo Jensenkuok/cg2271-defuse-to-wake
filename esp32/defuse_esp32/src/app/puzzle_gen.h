@@ -60,6 +60,20 @@ void puzzle_flush_used(void);
 /* Finished generation runs since boot (any outcome); the briefing starts after each one. */
 uint32_t puzzle_gen_runs_done(void);
 
+/* What the web page's AI panel shows about the generator itself. Plain words written by the network
+ * task and read by the web task without a lock: each field is a single machine word, and a reader
+ * that catches two fields from different moments only shows a slightly stale picture. */
+struct PuzzleRunInfo {
+    bool busy;              /* a run is in progress */
+    bool queued;            /* a run was requested and has not started yet */
+    uint8_t progress;       /* puzzles finished in the running run, 0..2*PUZZLE_PAIRS */
+    uint32_t runs_done;
+    uint32_t last_unix;     /* start time of the last finished run, 0 = none since boot */
+    uint8_t last_ai;        /* AI-verified puzzles that run produced */
+    bool last_installed;    /* false: nothing was verified, the previous set stayed active (bank fallback) */
+};
+void puzzle_gen_info(PuzzleRunInfo *out);
+
 /* Serial "ai": the active set with sources, models, verification and the answers (debug only). */
 void puzzle_print_set(void);
 

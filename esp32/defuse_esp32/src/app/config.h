@@ -43,12 +43,14 @@
 #define APP_PRIO_GYRO               3u  /* fixed 50 Hz sampling must not jitter; tamper latency matters */
 #define APP_PRIO_DISPLAY            2u  /* 10 fps drawing; a late frame is harmless */
 #define APP_PRIO_NETWORK            1u  /* slow, blocks in Wi-Fi calls, latency tolerant: lowest */
+#define APP_PRIO_WEB                1u  /* web page: same level as the network task, a page a little late is harmless */
 
 /* ---- Task stacks. ESP32 Arduino xTaskCreate takes BYTES. ---- */
 #define APP_STACK_LINK              6144u   /* proto_link + BOMB_CONFIG build (2 puzzles, difficulty, history copy) + Serial.printf */
 #define APP_STACK_GYRO              4096u
 #define APP_STACK_DISPLAY           6144u   /* Adafruit GFX + snprintf */
 #define APP_STACK_NETWORK           12288u  /* Wi-Fi, SNTP, TLS handshake + ArduinoJson parsing */
+#define APP_STACK_WEB               8192u   /* WebServer request parsing + snprintf; the big buffers are static */
 
 /* ---- Queues ---- */
 #define APP_TX_QUEUE_LEN            8u      /* other tasks -> link task */
@@ -161,6 +163,21 @@
 /* ---- Serial test commands ("lead 90", "link <url>", "refresh", "puzzles", "ai", "diff") ---- */
 #define APP_CMD_MAX_CHARS           (APP_LINK_MAX_CHARS + 16)
 #define APP_SERIAL_RX_BUF           1024u
+
+/* ---- Local web page (CLAUDE.md "Local web page (CORE)"): WebServer + ESPmDNS, own task ---- */
+#define APP_WEB_PORT                80
+#define APP_MDNS_HOSTNAME           "defuse"    /* http://defuse.local */
+#define APP_WEB_LOOP_MS             10u     /* delay between handleClient() calls: lets the equal-priority network task run */
+#define APP_WEB_WIFI_POLL_MS        500u    /* how often the web task looks at the Wi-Fi link (server + mDNS start/restart) */
+#define APP_WEB_STATUS_MAX          8192u   /* /api/status response buffer; a longer answer is refused, never truncated */
+#define APP_WEB_SMALL_MAX           256u    /* short replies (settings result, errors) */
+#define APP_IP_TEXT_LEN             16      /* "255.255.255.255" + NUL */
+#define APP_FRAME_LOG_PERIODIC      0       /* 1 = also log HEARTBEAT / GAME_STATE / TELEMETRY (floods a 20-entry ring) */
+
+/* ---- Fault injection from the web page (demo of the protocol and of the offline fallbacks) ---- */
+#define APP_FAULT_OUTAGE_S          60u     /* "Simulate internet outage": HTTPS calls fail fast, Wi-Fi stays up */
+#define APP_FAULT_CORRUPT_RELIABLE_ONLY 1   /* 1 = the CRC byte of the next RELIABLE frame is flipped, so the MCX's NACK
+                                             * visibly causes a retransmit; 0 = literally the next frame (usually a heartbeat) */
 
 /* ---- Status print ---- */
 #define APP_STATUS_PERIOD_MS        10000u

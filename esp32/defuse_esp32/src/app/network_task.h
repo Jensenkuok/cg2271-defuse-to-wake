@@ -25,4 +25,8 @@ bool network_task_start(void);
 
 TaskHandle_t network_task_handle(void);
 
+/* Web task (any task): ask the network task for a puzzle run now, like the serial command "puzzles".
+ * Never blocks; the run itself starts when Wi-Fi, the clock and the game state allow it. */
+void network_request_puzzles(void);
+
 #endif /* NETWORK_TASK_H */

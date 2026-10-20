@@ -45,11 +45,15 @@ $cxxPrograms = @(
     # test_text: OLED wrap/marquee, hints, summary, briefing/coach templates and LLM reply validation.
     @{ Name = 'test_text';     Sources = @('esp32\defuse_esp32\src\app\text_logic.cpp', 'esp32\defuse_esp32\src\app\puzzle_logic.cpp',
                                            'esp32\defuse_esp32\src\app\history_ring.cpp', 'esp32\defuse_esp32\src\app\schedule.cpp',
-                                           'shared\protocol.c') }
+                                           'shared\protocol.c') },
+    # test_web: settings validation, outage expiry, JSON writer/escaping, answer hiding (web page helpers).
+    @{ Name = 'test_web';      Sources = @('esp32\defuse_esp32\src\app\web_logic.cpp', 'esp32\defuse_esp32\src\app\schedule.cpp') },
+    # test_framelog: link frame log ring, names, filter and the corrupt-CRC fault helper.
+    @{ Name = 'test_framelog'; Sources = @('esp32\defuse_esp32\src\app\frame_log.cpp', 'shared\protocol.c') }
 )
 foreach ($p in $cxxPrograms) {
     $exe = Join-Path $build "$($p.Name).exe"
-    $srcs = @(Join-Path $root "tools\$($p.Name).cpp") + ($p.Sources | ForEach-Object { Join-Path $root $_ })
+    $srcs = @(Join-Path $root "tools\$($p.Name).cpp") + @($p.Sources | ForEach-Object { Join-Path $root $_ })
     $flags = @()
     if ($p.Flags) { $flags = @($p.Flags) }
     & $cxx -std=c++11 -Wall -Wextra -Werror -pedantic @flags -I $app @srcs -o $exe

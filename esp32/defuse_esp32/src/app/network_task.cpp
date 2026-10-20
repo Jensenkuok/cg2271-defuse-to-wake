@@ -12,6 +12,7 @@
 #include "bomb_config.h"
 #include "briefing.h"
 #include "config.h"
+#include "fault.h"
 #include "flash_store.h"
 #include "history.h"
 #include "link_task.h"
@@ -61,6 +62,8 @@ struct NetCtx {
 };
 
 static TaskHandle_t s_task;
+static portMUX_TYPE s_req_mux = portMUX_INITIALIZER_UNLOCKED;
+static bool s_regen_requested;      /* guarded by s_req_mux: set by the web task, taken by this task */
 static WiFiMulti s_multi;
 static NetCtx s_ctx;
 static Lesson s_lessons[SCHED_MAX_LESSONS];    /* scheduler input, network task only */
@@ -500,6 +503,44 @@ static void serial_commands(NetCtx &c, uint32_t unix_now)
     }
 }
 
+/* ================= requests from the web task, fault recovery ================= */
+static bool regen_take(void)
+{
+    bool requested;
+
+    taskENTER_CRITICAL(&s_req_mux);
+    requested = s_regen_requested;
+    s_regen_requested = false;
+    taskEXIT_CRITICAL(&s_req_mux);
+    return requested;
+}
+
+/* "Regenerate puzzles" from the web page: the same entry as the serial command "puzzles". */
+static void service_web_requests(void)
+{
+    if (regen_take()) {
+        puzzle_gen_request();
+        Serial.println("[web] puzzle run requested");
+    }
+}
+
+/* The web page's simulated outage ended: forget the Firebase back-off and retry the timetable now,
+ * instead of waiting out delays that were only growing because of the simulated outage. */
+static void service_outage_end(NetCtx &c, uint32_t now_ms)
+{
+    static bool s_was_active;
+    const bool active = fault_outage_active();
+
+    if (s_was_active && !active) {
+        mirror_wifi_up();
+        if (c.tt_due) {
+            c.tt_next_try_ms = now_ms;
+        }
+        Serial.println("[fault] simulated outage over: Firebase and timetable retry now");
+    }
+    s_was_active = active;
+}
+
 /* ================= task ================= */
 static void network_task(void *arg)
 {
@@ -521,6 +562,8 @@ static void network_task(void *arg)
         unix_valid = c.time_valid ? unix_now : 0u;
 
         serial_commands(c, unix_valid);
+        service_web_requests();
+        service_outage_end(c, now);
         handle_settings(c, now);
         handle_results(c, unix_valid);
         puzzle_flush_used();                       /* the link task marks pairs used in RAM; the flash write is ours */
@@ -572,4 +615,11 @@ bool network_task_start(void)
 TaskHandle_t network_task_handle(void)
 {
     return s_task;
+}
+
+void network_request_puzzles(void)
+{
+    taskENTER_CRITICAL(&s_req_mux);
+    s_regen_requested = true;
+    taskEXIT_CRITICAL(&s_req_mux);
 }

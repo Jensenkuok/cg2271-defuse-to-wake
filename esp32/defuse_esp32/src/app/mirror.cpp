@@ -8,6 +8,7 @@
 
 #include "../../secrets.h"
 #include "config.h"
+#include "fault.h"
 #include "flash_store.h"
 #include "net_tls.h"
 
@@ -55,6 +56,10 @@ bool post_record(const HistRecord &rec)
     HTTPClient http;
     int code;
 
+    if (fault_net_blocked()) {
+        Serial.println("[mirror] simulated outage: upload not attempted");   /* the web page's fault button */
+        return false;
+    }
     if (len == 0u || !build_url(url, sizeof(url))) {
         Serial.println("[mirror] record or URL too long, cannot upload");
         return false;

@@ -75,6 +75,9 @@ uint32_t s_set_gen;                     /* guarded */
 uint8_t s_used;                         /* used-pair bit mask; guarded */
 bool s_used_dirty;                      /* s_used changed in RAM and is not in flash yet; guarded */
 uint32_t s_runs_done;                   /* finished generation runs; written by the network task only */
+uint32_t s_last_run_unix;               /* these three: the last finished run, for the web page (puzzle_gen_info) */
+uint8_t s_last_run_ai;
+bool s_last_run_installed;
 PuzzleSet s_blob;                       /* flash buffer */
 
 Gen s_gen;
@@ -277,6 +280,9 @@ void gen_finish(void)
         }
     }
     s_gen.phase = PH_IDLE;
+    s_last_run_unix = s_gen.started_unix;
+    s_last_run_ai = s_gen.ai_count;
+    s_last_run_installed = (s_gen.ai_count > 0u);
     s_runs_done++;                      /* the briefing generator starts after every finished run */
 }
 
@@ -645,6 +651,20 @@ void puzzle_flush_used(void)
 uint32_t puzzle_gen_runs_done(void)
 {
     return s_runs_done;                                 /* 32-bit read: atomic */
+}
+
+void puzzle_gen_info(PuzzleRunInfo *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    out->busy = (s_gen.phase != PH_IDLE);
+    out->queued = s_requested;
+    out->progress = out->busy ? (uint8_t)(s_gen.idx < 2u * PUZZLE_PAIRS ? s_gen.idx : 2u * PUZZLE_PAIRS) : 0u;
+    out->runs_done = s_runs_done;
+    out->last_unix = s_last_run_unix;
+    out->last_ai = s_last_run_ai;
+    out->last_installed = s_last_run_installed;
 }
 
 void puzzle_print_set(void)

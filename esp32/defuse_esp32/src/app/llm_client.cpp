@@ -9,6 +9,7 @@
 
 #include "../../secrets.h"
 #include "config.h"
+#include "fault.h"
 #include "net_tls.h"
 #include "puzzle_logic.h"
 
@@ -18,6 +19,8 @@ void log_result(const char *model, const LlmReply &r)
 {
     if (r.status == LLM_OK) {
         Serial.printf("[llm] model=%s HTTP %d %u ms\n", model, r.http_code, (unsigned)r.latency_ms);
+    } else if (r.status == LLM_ERR_OUTAGE) {
+        Serial.printf("[llm] model=%s FAILED simulated outage\n", model);
     } else if (r.http_code < 0) {
         Serial.printf("[llm] model=%s FAILED %s (%s) %u ms\n", model, llm_status_name(r.status),
                       HTTPClient::errorToString(r.http_code).c_str(), (unsigned)r.latency_ms);
@@ -82,6 +85,7 @@ const char *llm_status_name(LlmStatus s)
     case LLM_ERR_BODY:    return "body";
     case LLM_ERR_PARSE:   return "parse";
     case LLM_ERR_EMPTY:   return "empty";
+    case LLM_ERR_OUTAGE:  return "simulated outage";
     }
     return "?";
 }
@@ -101,6 +105,12 @@ LlmReply llm_chat(const char *model, const char *system, const char *user, int m
         return rep;
     }
     out_text[0] = '\0';
+    if (fault_net_blocked()) {
+        rep.status = LLM_ERR_OUTAGE;
+        rep.http_code = HTTPC_ERROR_CONNECTION_REFUSED;   /* negative: callers count it as a transport failure */
+        log_result(model, rep);
+        return rep;
+    }
     if (SOCLAAS_API_KEY[0] == '\0') {
         rep.status = LLM_ERR_NO_KEY;
         log_result(model, rep);

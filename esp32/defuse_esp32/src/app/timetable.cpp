@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "config.h"
+#include "fault.h"
 #include "flash_store.h"
 #include "net_tls.h"
 
@@ -149,6 +150,10 @@ bool fetch_module(const char *module, const ShareLink &link, int *total, int *ad
     DeserializationError err;
     int code;
 
+    if (fault_net_blocked()) {
+        Serial.printf("[tt] %s: simulated outage\n", module);   /* the web page's fault button: fail fast */
+        return false;
+    }
     snprintf(url, sizeof(url), "%s%s.json", APP_NUSMODS_URL_PREFIX, module);
     net_tls_configure(client);
     http.setConnectTimeout(APP_HTTP_TIMEOUT_MS);
