@@ -142,6 +142,7 @@ void build_model(const AppState &st, uint32_t now_ms, uint32_t unix_now, uint32_
     }
     out->link_down = !st.link_up;
     out->wifi_up = st.wifi_up;
+    snprintf(out->ip_text, sizeof(out->ip_text), "%s", st.wifi_up ? st.ip : "");
     out->time_valid = st.time_valid;
     out->colon_on = ((now_ms / 500u) % 2u) == 0u;
     out->invert = (out->screen == SCR_EXPLODED) && (((now_ms / APP_BOOM_FLASH_MS) % 2u) == 0u);
@@ -256,7 +257,7 @@ static void print_summary(const ScreenModel &m, const TextBlock &tb)
                   m.wifi_up ? "up" : "down");
     switch (m.screen) {
     case SCR_IDLE:
-        Serial.printf(" clock=%s next=[%s]", m.clock_text, m.next_text);
+        Serial.printf(" clock=%s next=[%s] ip=%s", m.clock_text, m.next_text, m.ip_text[0] != '\0' ? m.ip_text : "-");
         break;
     case SCR_ARMED:
         Serial.printf(" ring_in=%ds", (int)m.ring_in_s);
@@ -486,6 +487,13 @@ static void draw_oled(const ScreenModel &m, const TextBlock &tb)
             s_display.setTextSize(1);
             s_display.setCursor(0, CLUE_Y);
             s_display.print(m.next_text);
+        }
+        if (m.ip_text[0] != '\0') {
+            /* The web page's address, small, in the top-left corner: the bottom row is the next-alarm
+             * line (up to the full 21 columns) and the clock fills the rows between. */
+            s_display.setTextSize(1);
+            s_display.setCursor(0, 0);
+            s_display.print(m.ip_text);
         }
         draw_wifi_icon(96, 0, m.wifi_up);
         draw_link_icon(114, 0, !m.link_down);

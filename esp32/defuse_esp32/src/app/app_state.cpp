@@ -88,6 +88,11 @@ void app_state_set_wifi(bool up)
     with_lock([&]() { s_state.wifi_up = up; });
 }
 
+void app_state_set_ip(const char *ip)
+{
+    with_lock([&]() { snprintf(s_state.ip, sizeof(s_state.ip), "%s", ip != NULL ? ip : ""); });
+}
+
 void app_state_set_time_valid(bool valid)
 {
     with_lock([&]() { s_state.time_valid = valid; });

@@ -11,6 +11,7 @@
 #include "history.h"
 #include "link_task.h"
 #include "network_task.h"
+#include "web_task.h"
 
 static void print_stack(const char *name, TaskHandle_t h)
 {
@@ -27,8 +28,9 @@ static void status_print(uint32_t now_ms)
     if (!app_state_read(&st)) {
         return;
     }
-    Serial.printf("[status] up=%us link=%s wifi=%s time=%s unix=%u game=%s v%u\n", (unsigned)(now_ms / 1000u),
-                  st.link_up ? "UP" : "DOWN", st.wifi_up ? "up" : "down", st.time_valid ? "valid" : "invalid",
+    Serial.printf("[status] up=%us link=%s wifi=%s ip=%s time=%s unix=%u game=%s v%u\n", (unsigned)(now_ms / 1000u),
+                  st.link_up ? "UP" : "DOWN", st.wifi_up ? "up" : "down", st.ip[0] != '\0' ? st.ip : "-",
+                  st.time_valid ? "valid" : "invalid",
                   st.time_valid ? (unsigned)time(nullptr) : 0u,
                   st.game_valid ? (st.game.state < 5 ? names[st.game.state] : "?") : "none",
                   (unsigned)st.game_version);
@@ -47,6 +49,7 @@ static void status_print(uint32_t now_ms)
     print_stack("gyro", gyro_task_handle());
     print_stack("display", display_task_handle());
     print_stack("net", network_task_handle());
+    print_stack("web", web_task_handle());
     Serial.printf("  heap_free=%u min_heap=%u\n", (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap());
 }
 

@@ -53,6 +53,7 @@ struct AppState {
 
     /* network */
     bool wifi_up;
+    char ip[APP_IP_TEXT_LEN];     /* "192.168.1.23" while the station has an address, "" otherwise (web task writes) */
     bool time_valid;
     uint32_t alarm_unix;          /* 0 = none */
     bool next_valid;              /* a next class exists (alarm_unix != 0) */
@@ -91,6 +92,8 @@ void app_state_set_result(const proto_result_msg_t &r);
 void app_state_set_link(bool up);
 void app_state_set_link_stats(const proto_link_stats_t &s, uint32_t tx_backpressure);
 void app_state_set_wifi(bool up);
+/* The station's IPv4 address as text, "" when there is none (truncated to APP_IP_TEXT_LEN - 1). */
+void app_state_set_ip(const char *ip);
 void app_state_set_time_valid(bool valid);
 void app_state_set_alarm(uint32_t alarm_unix);
 /* The scheduler's answer: the alarm and the class it is for. alarm_unix = 0 / lesson NULL = no class. */
