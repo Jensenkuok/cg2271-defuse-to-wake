@@ -81,9 +81,27 @@
 #define APP_TAMPER_SEND_MG          600u    /* deviation from 1 g that is sent to the MCX */
 #define APP_TAMPER_COOLDOWN_MS      500u    /* local cooldown between TAMPER_EVENTs */
 #define APP_GYRO_LOG_MS             5000u   /* peak deviation log period */
-#define APP_STANDARD_GRAVITY        9.80665f
 #define APP_MG_PER_G                1000.0f
 #define APP_TAMPER_MAX_MG           65535u  /* TAMPER_EVENT field is u16 */
+#define APP_GYRO_RETRY_MS           5000u   /* init retry period (loose wire, late power-up) */
+#define APP_GYRO_FAIL_LOG_MS        60000u  /* init failure is logged at most this often */
+#define APP_GYRO_RESET_WAIT_MS      100u    /* after the device reset, before the wake write */
+
+/* ---- MPU-6050 registers (also MPU-6500 and other GY-521 clones) ---- */
+#define APP_MPU_REG_CONFIG          0x1A    /* DLPF setting */
+#define APP_MPU_REG_ACCEL_CONFIG    0x1C    /* full-scale range */
+#define APP_MPU_REG_ACCEL_XOUT_H    0x3B    /* X, Y, Z as big-endian int16 */
+#define APP_MPU_REG_PWR_MGMT_1      0x6B
+#define APP_MPU_REG_WHO_AM_I        0x75
+#define APP_MPU_WHO_AM_I_MPU6050    0x68
+#define APP_MPU_WHO_AM_I_BUS_LOW    0x00    /* all-zero / all-one reads mean a dead or floating bus */
+#define APP_MPU_WHO_AM_I_BUS_HIGH   0xFF
+#define APP_MPU_PWR_RESET           0x80
+#define APP_MPU_PWR_WAKE_PLL        0x01    /* sleep off, PLL with gyro X clock */
+#define APP_MPU_CONFIG_DLPF_260HZ   0x00    /* keep spikes, no smoothing */
+#define APP_MPU_ACCEL_RANGE_16G     0x18    /* shakes exceed 8 g */
+#define APP_MPU_LSB_PER_G           2048.0f /* at +-16 g */
+#define APP_MPU_ACCEL_BYTES         6u
 
 /* ---- Network ---- */
 #define APP_WIFI_POLL_CONNECTED_MS  2000u   /* WiFiMulti.run() cadence when connected */

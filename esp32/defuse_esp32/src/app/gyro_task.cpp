@@ -1,8 +1,6 @@
 /* Defuse to Wake - MPU-6050 tamper detector. See gyro_task.h. */
 #include "gyro_task.h"
 
-#include <Adafruit_MPU6050.h>
-#include <Adafruit_Sensor.h>
 #include <Wire.h>
 #include <math.h>
 
@@ -13,14 +11,56 @@
 #include "../shared/protocol.h"
 
 static TaskHandle_t s_task;
-static Adafruit_MPU6050 s_mpu;
+static uint8_t s_addr = APP_MPU_ADDR;
 
-/* Acceleration magnitude minus 1 g, absolute, in mg. */
-static uint32_t deviation_mg(const sensors_event_t &a)
+/* Register access. The caller holds the I2C bus lock; any error returns false. */
+static bool mpu_write_reg(uint8_t reg, uint8_t val)
 {
-    float mag = sqrtf(a.acceleration.x * a.acceleration.x + a.acceleration.y * a.acceleration.y +
-                      a.acceleration.z * a.acceleration.z);
-    float dev = fabsf(mag - APP_STANDARD_GRAVITY) * (APP_MG_PER_G / APP_STANDARD_GRAVITY);
+    Wire.beginTransmission(s_addr);
+    Wire.write(reg);
+    Wire.write(val);
+    return Wire.endTransmission() == 0;
+}
+
+static bool mpu_read_regs(uint8_t reg, uint8_t *buf, size_t n)
+{
+    size_t i;
+
+    Wire.beginTransmission(s_addr);
+    Wire.write(reg);
+    if (Wire.endTransmission(false) != 0) {
+        return false;
+    }
+    if (Wire.requestFrom((int)s_addr, (int)n) != (int)n) {
+        return false;
+    }
+    for (i = 0; i < n; i++) {
+        buf[i] = (uint8_t)Wire.read();
+    }
+    return true;
+}
+
+/* Run one register write under the bus lock; false on lock timeout or I2C error. */
+static bool locked_write(uint8_t reg, uint8_t val)
+{
+    bool ok = false;
+
+    if (i2c_bus_lock(APP_I2C_MUTEX_WAIT_MS)) {
+        ok = mpu_write_reg(reg, val);
+        i2c_bus_unlock();
+    }
+    return ok;
+}
+
+/* Acceleration magnitude minus 1 g, absolute, in mg, from the raw counts. */
+static uint32_t deviation_mg(const uint8_t *raw)
+{
+    int16_t x = (int16_t)(((uint16_t)raw[0] << 8) | raw[1]);
+    int16_t y = (int16_t)(((uint16_t)raw[2] << 8) | raw[3]);
+    int16_t z = (int16_t)(((uint16_t)raw[4] << 8) | raw[5]);
+    float mag = sqrtf((float)x * x + (float)y * y + (float)z * z) * (APP_MG_PER_G / APP_MPU_LSB_PER_G);
+    float dev = fabsf(mag - APP_MG_PER_G);
+
     return (dev > (float)APP_TAMPER_MAX_MG) ? APP_TAMPER_MAX_MG : (uint32_t)dev;
 }
 
@@ -35,79 +75,112 @@ static void send_tamper(uint32_t mg)
     }
 }
 
+/* Own register-level init: the Adafruit library rejects clones whose WHO_AM_I is not 0x68. */
 static bool sensor_init(void)
 {
+    uint8_t who = 0;
     bool ok = false;
-    uint8_t addr = APP_MPU_ADDR;
+    bool genuine;
 
-    if (!i2c_bus_probe(addr)) {
-        addr = APP_MPU_ADDR_ALT; /* AD0 high */
-        if (!i2c_bus_probe(addr)) {
+    s_addr = APP_MPU_ADDR;
+    if (!i2c_bus_probe(s_addr)) {
+        s_addr = APP_MPU_ADDR_ALT; /* AD0 high */
+        if (!i2c_bus_probe(s_addr)) {
             return false;
         }
     }
-    Serial.printf("[gyro] MPU-6050 at 0x%02X\n", addr);
+
     if (i2c_bus_lock(APP_I2C_MUTEX_WAIT_MS)) {
-        ok = s_mpu.begin(addr, &Wire);
-        if (ok) {
-            s_mpu.setAccelerometerRange(MPU6050_RANGE_16_G); /* shakes exceed 8 g */
-            s_mpu.setFilterBandwidth(MPU6050_BAND_260_HZ);   /* keep spikes, no smoothing */
-        }
+        ok = mpu_read_regs(APP_MPU_REG_WHO_AM_I, &who, 1);
         i2c_bus_unlock();
     }
-    return ok;
+    if (!ok || who == APP_MPU_WHO_AM_I_BUS_LOW || who == APP_MPU_WHO_AM_I_BUS_HIGH) {
+        return false;
+    }
+    genuine = (who == APP_MPU_WHO_AM_I_MPU6050);
+
+    if (!locked_write(APP_MPU_REG_PWR_MGMT_1, APP_MPU_PWR_RESET)) {
+        return false;
+    }
+    vTaskDelay(pdMS_TO_TICKS(APP_GYRO_RESET_WAIT_MS)); /* lock NOT held: the OLED may use the bus */
+    if (!locked_write(APP_MPU_REG_PWR_MGMT_1, APP_MPU_PWR_WAKE_PLL) ||
+        !locked_write(APP_MPU_REG_CONFIG, APP_MPU_CONFIG_DLPF_260HZ) ||
+        !locked_write(APP_MPU_REG_ACCEL_CONFIG, APP_MPU_ACCEL_RANGE_16G)) {
+        return false;
+    }
+
+    if (!genuine) {
+        Serial.printf("[gyro] WARNING: WHO_AM_I=0x%02X is not 0x68, continuing as a compatible clone\n", who);
+    }
+    Serial.printf("[gyro] chip at 0x%02X WHO_AM_I=0x%02X (%s) ready\n", s_addr, who,
+                  genuine ? "MPU-6050" : "compatible clone");
+    return true;
 }
 
 static void gyro_task(void *arg)
 {
-    TickType_t wake = xTaskGetTickCount();
-    sensors_event_t a, g, t;
+    TickType_t wake;
+    uint8_t raw[APP_MPU_ACCEL_BYTES];
     AppState st;
     uint32_t dev;
     uint32_t peak = 0;
     uint32_t last_log = 0;
     uint32_t last_send = 0;
+    uint32_t last_fail_log = 0;
+    uint32_t read_err = 0;
     bool sent_once = false;
+    bool fail_logged = false;
+    bool got;
     uint32_t now;
 
     (void)arg;
-    if (!sensor_init()) {
-        Serial.println("[gyro] MPU-6050 not found at 0x68/0x69 (run \"i2c\" to scan): tamper detection disabled (task exits)");
-        s_task = NULL; /* so the status print does not query a deleted task */
-        vTaskDelete(NULL);
-        return;
+    /* A loose wire or a late-powered GY-521 must recover without a reset: keep retrying. */
+    while (!sensor_init()) {
+        now = millis();
+        if (!fail_logged || (uint32_t)(now - last_fail_log) >= APP_GYRO_FAIL_LOG_MS) {
+            fail_logged = true;
+            last_fail_log = now;
+            Serial.printf("[gyro] MPU init failed at 0x%02X/0x%02X (run \"i2c\" to scan); retrying every %u s\n",
+                          APP_MPU_ADDR, APP_MPU_ADDR_ALT, (unsigned)(APP_GYRO_RETRY_MS / 1000u));
+        }
+        vTaskDelay(pdMS_TO_TICKS(APP_GYRO_RETRY_MS));
     }
-    Serial.println("[gyro] MPU-6050 ready");
+    wake = xTaskGetTickCount();
 
     for (;;) {
         vTaskDelayUntil(&wake, pdMS_TO_TICKS(APP_GYRO_PERIOD_MS));
+        got = false;
 
         /* The OLED frame transfer can hold the bus; a bounded wait just skips a sample. */
-        if (!i2c_bus_lock(APP_I2C_MUTEX_WAIT_MS)) {
-            continue;
-        }
-        s_mpu.getEvent(&a, &g, &t);
-        i2c_bus_unlock();
-
-        dev = deviation_mg(a);
-        if (dev > peak) {
-            peak = dev;
+        if (i2c_bus_lock(APP_I2C_MUTEX_WAIT_MS)) {
+            got = mpu_read_regs(APP_MPU_REG_ACCEL_XOUT_H, raw, sizeof(raw));
+            i2c_bus_unlock();
+            if (!got) {
+                read_err++;
+            }
         }
         now = millis();
 
-        if (app_state_read(&st) && st.game_valid && st.game.state == PROTO_STATE_BOMB_ACTIVE &&
-            dev >= APP_TAMPER_SEND_MG && (!sent_once || (uint32_t)(now - last_send) >= APP_TAMPER_COOLDOWN_MS)) {
-            send_tamper(dev);
-            sent_once = true;
-            last_send = now;
-            Serial.printf("[gyro] TAMPER sent %u mg\n", (unsigned)dev);
+        if (got) {
+            dev = deviation_mg(raw);
+            if (dev > peak) {
+                peak = dev;
+            }
+            if (app_state_read(&st) && st.game_valid && st.game.state == PROTO_STATE_BOMB_ACTIVE &&
+                dev >= APP_TAMPER_SEND_MG &&
+                (!sent_once || (uint32_t)(now - last_send) >= APP_TAMPER_COOLDOWN_MS)) {
+                send_tamper(dev);
+                sent_once = true;
+                last_send = now;
+                Serial.printf("[gyro] TAMPER sent %u mg\n", (unsigned)dev);
+            }
         }
 
         if ((uint32_t)(now - last_log) >= APP_GYRO_LOG_MS) {
             last_log = now;
-            Serial.printf("[gyro] peak deviation %u mg in last %u s (send >= %u, MCX strikes >= %u)\n",
+            Serial.printf("[gyro] peak deviation %u mg in last %u s (send >= %u, MCX strikes >= %u) read_err=%u\n",
                           (unsigned)peak, (unsigned)(APP_GYRO_LOG_MS / 1000u), (unsigned)APP_TAMPER_SEND_MG,
-                          (unsigned)GAME_TAMPER_THRESHOLD_MG);
+                          (unsigned)GAME_TAMPER_THRESHOLD_MG, (unsigned)read_err);
             peak = 0;
         }
     }

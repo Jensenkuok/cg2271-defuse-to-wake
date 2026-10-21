@@ -21,7 +21,6 @@
 /* Library headers are also listed here so the Arduino build always finds the libraries
  * used by the files under src/app/. */
 #include <Adafruit_GFX.h>
-#include <Adafruit_MPU6050.h>
 #include <Adafruit_SSD1306.h>
 #include <ArduinoJson.h>
 #include <ESPmDNS.h>

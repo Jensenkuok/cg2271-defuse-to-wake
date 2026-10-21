@@ -10,10 +10,10 @@ The sketch compiles for `esp32:esp32:esp32s2` only when the four libraries below
 They were not installed when this was written, so the firmware has **not** been compiled
 against the real libraries. It was compiled against stand-in headers with the same API shape
 (no errors or warnings in our own files). If the first real compile shows an API mismatch,
-it will be in `display_task.cpp` (Adafruit GFX/SSD1306) or `gyro_task.cpp` (Adafruit MPU6050).
+it will be in `display_task.cpp` (Adafruit GFX/SSD1306). The gyro needs no library (plain Wire).
 
-Required libraries (Library Manager): **Adafruit SSD1306**, **Adafruit GFX Library**,
-**Adafruit MPU6050** (pulls in Adafruit Unified Sensor and Adafruit BusIO). ArduinoJson is not
+Required libraries (Library Manager): **Adafruit SSD1306**, **Adafruit GFX Library**. The MPU-6050
+is driven with plain Wire (no Adafruit MPU6050 library). ArduinoJson is not
 used yet.
 
 ## 1. Wiring
@@ -80,7 +80,7 @@ Expect on the ESP32 Serial within a few seconds:
 ```
 [boot] Defuse to Wake ESP32-S2
 [display] OLED ready          (or: OLED not found: headless mode ...)
-[gyro] MPU-6050 ready
+[gyro] chip at 0x68 WHO_AM_I=0x68 (MPU-6050) ready
 [link] UP
 ```
 
@@ -113,13 +113,23 @@ away. The MCX keeps running the game the whole time.
 ### 3.3 Shake = strike
 During a running bomb, shake the MPU-6050 board hard.
 - ESP32 Serial: `[gyro] TAMPER sent <N> mg` (at most every 0.5 s).
-- Every 5 s: `[gyro] peak deviation <N> mg in last 5 s (send >= 600, MCX strikes >= 1500)`. Use
+- Every 5 s: `[gyro] peak deviation <N> mg in last 5 s (send >= 600, MCX strikes >= 1500) read_err=<E>`. Use
   this to choose better thresholds: `APP_TAMPER_SEND_MG` (ESP32) and `GAME_TAMPER_THRESHOLD_MG`
   (MCX).
 - MCX: a strike appears only if `<N>` is 1500 or more, then there is a 2 s cooldown.
 - A gentle tap that stays under 600 mg sends nothing. Shaking while the bomb is not running
   sends nothing.
 - PASS: a hard shake adds exactly one strike per 2 s on the MCX console.
+
+Gyro boot line and what it means:
+- `[gyro] chip at 0x68 WHO_AM_I=0x68 (MPU-6050) ready`: genuine MPU-6050.
+- `WHO_AM_I=0x70` (or 0x71, 0x72, 0x98 ...) `(compatible clone) ready`, preceded by a WARNING line: a
+  GY-521 clone (0x70 = MPU-6500). It works with the same registers; this is not an error.
+- `WHO_AM_I` of 0x00 or 0xFF, or a failed read, counts as a failed init (floating or dead bus).
+- `read_err=N` in the 5 s line counts samples whose I2C read failed (skipped, not used). A few on
+  a marginal 100 kHz bus are tolerable; a number that grows by about 250 per line means the bus is down.
+- If init fails the gyro retries every 5 s (`[gyro] MPU init failed ... retrying every 5 s`, logged
+  once, then at most once a minute). A loose wire or late power-up recovers without a reset.
 
 ### 3.4 Wi-Fi and NTP time sync
 With real hotspot details in `secrets.h` and the hotspot on:
@@ -161,8 +171,8 @@ Type `i2c` in the serial monitor (also printed once at boot). It scans 0x08-0x77
 - `0x3C` = OLED. `0x68` or `0x69` = MPU-6050 gyro (0x69 when AD0 is high; the code tries both).
 - If nothing answers at 400 kHz, boot retries at 100 kHz and, if devices appear, keeps 100 kHz and says so in the line (long jumper wires).
 - `found: none` = check the module power LED, solder joints, SDA/SCL swapped (GPIO8 = SDA, GPIO9 = SCL), then press RESET.
-- Only the OLED listed: the gyro wiring, power or solder is the problem. `[gyro] MPU-6050 not found at 0x68/0x69 (run "i2c" to scan)` in the boot log means the same.
-- PASS: both 0x3C and 0x68/0x69 are listed and `[gyro] MPU-6050 ready` appears.
+- Only the OLED listed: the gyro wiring, power or solder is the problem. `[gyro] MPU init failed ... (run "i2c" to scan); retrying every 5 s` in the boot log means the same.
+- PASS: both 0x3C and 0x68/0x69 are listed and `[gyro] chip at 0x.. WHO_AM_I=0x.. (...) ready` appears.
 
 ## 4. Results (fill in)
 
