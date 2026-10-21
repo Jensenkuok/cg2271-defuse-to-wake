@@ -13,7 +13,7 @@ task), Sync (copies under locks).
   `millis()` wraparound), the JSON writer and string escaping, the frame-log ring and its filter, the
   corrupt-CRC helper (the decoder must report a CRC error), the "hide the active answer" rule, and the
   page itself (size <= 20 KB, no external assets, no `innerHTML`, all endpoints present). All pass.
-- The firmware compiles for `esp32:esp32:esp32s2:PartitionScheme=huge_app` with no warnings in our
+- The firmware compiles for `esp32:esp32:esp32s2:PartitionScheme=huge_app,PSRAM=enabled` with no warnings in our
   files (numbers in section 5).
 - **Not tested on hardware yet**: this document is that test. The unknowns are mDNS on your phone,
   how the hotspot treats client-to-client traffic (AP isolation), and the real size of the status
@@ -202,7 +202,7 @@ PASS: the shown IP opens the page.
 
 ## 5. Build numbers
 
-`arduino-cli compile --fqbn esp32:esp32:esp32s2:PartitionScheme=huge_app --warnings all`: 0 errors,
+`arduino-cli compile --fqbn esp32:esp32:esp32s2:PartitionScheme=huge_app,PSRAM=enabled --warnings all`: 0 errors,
 0 warnings in our files.
 
 | | Value |

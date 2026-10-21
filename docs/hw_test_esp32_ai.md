@@ -10,7 +10,7 @@ Comms protocol (reliable `BOMB_CONFIG`), Sync, Task design.
 - Host tests (`tools/run_tests.ps1`): JSON/`<think>` handling, puzzle validation, checker parsing,
   the template bank (every dial code 0000-9999 and every wire k of n solved by an independent
   solver), the difficulty rule, config ranges, pair selection. All pass.
-- The firmware compiles for `esp32:esp32:esp32s2:PartitionScheme=huge_app` with no warnings in our
+- The firmware compiles for `esp32:esp32:esp32s2:PartitionScheme=huge_app,PSRAM=enabled` with no warnings in our
   files (numbers in section 5).
 - **Not tested on hardware or against the real SoCLaaS yet**: this document is that test. The TLS
   certificate of the SoCLaaS host, the real latency and the way each model formats its JSON are the
@@ -250,7 +250,7 @@ Also try a wrong key (2.9b): `brief` ends with `no model gave a usable text: the
 
 ## 5. Build numbers
 
-`arduino-cli compile --fqbn esp32:esp32:esp32s2:PartitionScheme=huge_app --warnings all`: 0 errors,
+`arduino-cli compile --fqbn esp32:esp32:esp32s2:PartitionScheme=huge_app,PSRAM=enabled --warnings all`: 0 errors,
 0 warnings in our files.
 
 | | Value |

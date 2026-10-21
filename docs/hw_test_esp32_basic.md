@@ -42,13 +42,35 @@ wired as in `docs/hw_test_mcx_drivers.md`.
 4. Or compile from a terminal:
 
    ```
-   "C:\Program Files\Arduino IDE\resources\app\lib\backend\resources\arduino-cli.exe" compile --fqbn esp32:esp32:esp32s2 esp32/defuse_esp32
+   "C:\Program Files\Arduino IDE\resources\app\lib\backend\resources\arduino-cli.exe" compile --fqbn esp32:esp32:esp32s2:PartitionScheme=huge_app,PSRAM=enabled esp32/defuse_esp32
    ```
 
    Expect `0 errors`. Note the "Sketch uses ... bytes" line in the results table.
 5. Upload, then open the Serial monitor at 115200.
 6. Flash the MCX with the **default** build (`APP_DRIVER_TEST 0`, `APP_LOOPBACK_TEST 0`) and
    power it. The ESP32 firmware prints `[boot] Defuse to Wake ESP32-S2`.
+
+### 2.1 PSRAM and flashing (ESP32-S2FNR2: 4 MB flash, 2 MB PSRAM)
+
+Every HTTPS connection needs ~32 KB of internal RAM, so the big buffers (lesson lists, LLM replies,
+web JSON, puzzle sets) live in PSRAM. Without PSRAM the HTTPS calls fail.
+
+1. In the Arduino IDE set **Tools > PSRAM > Enabled**. The command-line equivalent is the
+   `PSRAM=enabled` option in the FQBN above.
+2. After a reset the first lines must show a non-zero PSRAM size, e.g.
+   `[boot] start: PSRAM size=~2000000 free=... internal free=... largest=...`.
+   `[boot] WARNING: PSRAM not enabled (Tools > PSRAM > Enabled)` means the board was flashed
+   without PSRAM: re-flash. The 10 s status block repeats the numbers as
+   `[mem] int_free=... int_largest=... int_min=... psram_free=...`. Expect `int_free` of at least
+   60 KB and `int_largest` of at least 40 KB at idle (a TLS handshake needs the largest block).
+3. The normal upload fails on this board (stub checksum error). Use the no-stub script, which
+   compiles into `.esp32_build` and flashes the four images at 115200 baud:
+
+   ```
+   toolslash_esp32.ps1 -Port COMx -Compile
+   ```
+
+   Without `-Compile` it flashes the last build. COMx is the board's USB port.
 
 ## 3. Tests
 
