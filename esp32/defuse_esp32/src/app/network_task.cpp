@@ -453,7 +453,27 @@ static void print_history(uint32_t unix_now)
     }
 }
 
-static void run_command(NetCtx &c, const char *cmd, uint32_t unix_now)
+/* The line did not match any command: show what actually arrived (printable text and hex), so a
+ * garbled USB-serial link (wrong line ending, altered bytes) is visible instead of just "help". */
+static void print_unknown_command(const char *cmd, size_t len)
+{
+    char text[APP_CMD_ECHO_BYTES + 1];
+    char hex[APP_CMD_ECHO_BYTES * 3 + 1];
+    const size_t shown = (len < APP_CMD_ECHO_BYTES) ? len : APP_CMD_ECHO_BYTES;
+    size_t i;
+
+    for (i = 0; i < shown; i++) {
+        const unsigned char b = (unsigned char)cmd[i];
+
+        text[i] = (b >= 0x20u && b <= 0x7Eu) ? (char)b : '.';
+        snprintf(&hex[i * 3u], 4u, i + 1u < shown ? "%02x " : "%02x", b);
+    }
+    text[shown] = '\0';
+    hex[shown == 0u ? 0u : shown * 3u - 1u] = '\0';
+    Serial.printf("[cmd] unknown: '%s%s' hex: %s%s\n", text, len > shown ? "..." : "", hex, len > shown ? " ..." : "");
+}
+
+static void run_command(NetCtx &c, const char *cmd, size_t len, uint32_t unix_now)
 {
     if (strncmp(cmd, "lead ", 5) == 0) {
         Serial.printf("[cmd] lead_min = %d\n", settings_set_lead_min(atoi(cmd + 5)));
@@ -477,6 +497,7 @@ static void run_command(NetCtx &c, const char *cmd, uint32_t unix_now)
         briefing_request();
         Serial.println("[cmd] briefing run requested");
     } else {
+        print_unknown_command(cmd, len);
         Serial.println("[cmd] commands: lead <15..180> | link <url> | refresh | resched | hist | puzzles | ai | diff | brief");
     }
 }
@@ -493,7 +514,7 @@ static void serial_commands(NetCtx &c, uint32_t unix_now)
         if (ch == '\r' || ch == '\n') {
             if (len > 0u && !overflow) {
                 line[len] = '\0';
-                run_command(c, line, unix_now);
+                run_command(c, line, len, unix_now);
             }
             len = 0;
             overflow = false;

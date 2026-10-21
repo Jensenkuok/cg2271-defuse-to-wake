@@ -69,16 +69,17 @@ bool post_record(const HistRecord &rec)
     http.setTimeout(APP_HTTP_TIMEOUT_MS);
     if (!http.begin(client, url)) {
         Serial.println("[mirror] could not start the request");
+        net_tls_log_failure("mirror", HTTPC_ERROR_CONNECTION_REFUSED, client);
         return false;
     }
     http.addHeader("Content-Type", "application/json");
     code = http.POST(reinterpret_cast<uint8_t *>(body), len);
-    http.end();
     if (code != HTTP_CODE_OK) {
         Serial.printf("[mirror] upload failed: %s %d\n", code < 0 ? "error" : "HTTP", code);
-        return false;
+        net_tls_log_failure("mirror", code, client);
     }
-    return true;
+    http.end();
+    return code == HTTP_CODE_OK;
 }
 
 }  // namespace

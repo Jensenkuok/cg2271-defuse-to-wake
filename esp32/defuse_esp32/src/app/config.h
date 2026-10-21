@@ -63,6 +63,8 @@
 /* ---- Display ---- */
 #define APP_DISPLAY_PERIOD_MS       100u    /* 10 fps */
 #define APP_HEADLESS_PRINT_MS       1000u   /* one-line summary period without an OLED */
+#define APP_HEADLESS_REFRESH_MS     30000u  /* ...printed only when its text changed, or at least this often */
+#define APP_HEADLESS_LINE_MAX       320     /* the summary line is built in memory (text rows included) */
 #define APP_BOOM_FLASH_MS           250u    /* inverted-screen flash half-period */
 #define APP_CLUE_PLACEHOLDER        "Clue: (AI clue pending)"
 #define APP_CLUE_MAX_CHARS          21      /* 128 px / 6 px per char */
@@ -163,6 +165,7 @@
 /* ---- Serial test commands ("lead 90", "link <url>", "refresh", "puzzles", "ai", "diff") ---- */
 #define APP_CMD_MAX_CHARS           (APP_LINK_MAX_CHARS + 16)
 #define APP_SERIAL_RX_BUF           1024u
+#define APP_CMD_ECHO_BYTES          32      /* an unknown command is echoed as text + hex, at most this many bytes */
 
 /* ---- Local web page (CLAUDE.md "Local web page (CORE)"): WebServer + ESPmDNS, own task ---- */
 #define APP_WEB_PORT                80

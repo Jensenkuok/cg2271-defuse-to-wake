@@ -162,11 +162,13 @@ bool fetch_module(const char *module, const ShareLink &link, int *total, int *ad
     http.useHTTP10(true);              /* no chunked encoding: the body can be parsed straight off the stream */
     if (!http.begin(client, url)) {
         Serial.printf("[tt] %s: could not start the request\n", module);
+        net_tls_log_failure("tt", HTTPC_ERROR_CONNECTION_REFUSED, client);
         return false;
     }
     code = http.GET();
     if (code != HTTP_CODE_OK) {
         Serial.printf("[tt] %s: HTTP %d (%s)\n", module, code, code < 0 ? HTTPClient::errorToString(code).c_str() : "");
+        net_tls_log_failure("tt", code, client);
         http.end();
         return false;
     }

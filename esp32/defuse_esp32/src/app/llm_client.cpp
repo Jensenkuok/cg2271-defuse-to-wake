@@ -124,6 +124,7 @@ LlmReply llm_chat(const char *model, const char *system, const char *user, int m
     http.setTimeout(APP_LLM_TIMEOUT_MS);
     http.useHTTP10(true);                      /* no chunked encoding from the server */
     if (!http.begin(client, APP_SOCLAAS_BASE_URL APP_SOCLAAS_CHAT_PATH)) {
+        net_tls_log_failure("llm", rep.http_code, client);
         rep.latency_ms = millis() - t0;
         log_result(model, rep);
         return rep;
@@ -134,6 +135,7 @@ LlmReply llm_chat(const char *model, const char *system, const char *user, int m
     payload = String();
     if (rep.http_code != HTTP_CODE_OK) {
         rep.status = LLM_ERR_HTTP;
+        net_tls_log_failure("llm", rep.http_code, client);
         http.end();
         rep.latency_ms = millis() - t0;
         log_result(model, rep);

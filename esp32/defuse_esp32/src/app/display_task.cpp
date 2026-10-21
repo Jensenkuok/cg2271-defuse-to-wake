@@ -251,47 +251,76 @@ static void layout_text(const ScreenModel &m, uint32_t now_ms, TextBlock *tb)
 }
 
 /* ================= headless summary ================= */
-static void print_summary(const ScreenModel &m, const TextBlock &tb)
+/* The summary is built in memory first, so the task can print it only when it changed. */
+class SummaryLine : public Print {
+public:
+    size_t write(uint8_t c) override
+    {
+        if (len_ + 1u < sizeof(buf_)) {
+            buf_[len_++] = (char)c;
+            buf_[len_] = '\0';
+            return 1u;
+        }
+        return 0u;                             /* too long: the tail is dropped */
+    }
+    void clear(void)
+    {
+        len_ = 0u;
+        buf_[0] = '\0';
+    }
+    const char *text(void) const { return buf_; }
+    void copy_to(SummaryLine &other) const
+    {
+        memcpy(other.buf_, buf_, len_ + 1u);
+        other.len_ = len_;
+    }
+
+private:
+    char buf_[APP_HEADLESS_LINE_MAX] = { 0 };
+    size_t len_ = 0u;
+};
+
+static void print_summary(const ScreenModel &m, const TextBlock &tb, Print &out)
 {
     int i;
 
-    Serial.printf("[oled-off] %s link=%s wifi=%s", k_screen_names[m.screen], m.link_down ? "DOWN" : "up",
-                  m.wifi_up ? "up" : "down");
+    out.printf("[oled-off] %s link=%s wifi=%s", k_screen_names[m.screen], m.link_down ? "DOWN" : "up",
+               m.wifi_up ? "up" : "down");
     switch (m.screen) {
     case SCR_IDLE:
-        Serial.printf(" clock=%s next=[%s] ip=%s", m.clock_text, m.next_text, m.ip_text[0] != '\0' ? m.ip_text : "-");
+        out.printf(" clock=%s next=[%s] ip=%s", m.clock_text, m.next_text, m.ip_text[0] != '\0' ? m.ip_text : "-");
         break;
     case SCR_ARMED:
-        Serial.printf(" ring_in=%ds", (int)m.ring_in_s);
+        out.printf(" ring_in=%ds", (int)m.ring_in_s);
         break;
     case SCR_ACTIVE:
-        Serial.printf(" t=%s strikes=%u/%u %s", m.timer_text, m.strikes, m.max_strikes,
-                      m.module_type < 4 ? k_module_names[m.module_type] : "?");
+        out.printf(" t=%s strikes=%u/%u %s", m.timer_text, m.strikes, m.max_strikes,
+                   m.module_type < 4 ? k_module_names[m.module_type] : "?");
         if (m.module_type == PROTO_MODULE_DIAL) {
-            Serial.printf(" digit=%u val=%u", m.dial_digit, m.dial_value);
+            out.printf(" digit=%u val=%u", m.dial_digit, m.dial_value);
         } else if (m.module_type == PROTO_MODULE_WIRES) {
-            Serial.printf(" wires=%u cursor=%u cut=0x%02x", m.wire_count, m.wire_cursor, m.wire_cut_mask);
+            out.printf(" wires=%u cursor=%u cut=0x%02x", m.wire_count, m.wire_cursor, m.wire_cut_mask);
         } else if (m.module_type == PROTO_MODULE_TRIPWIRE) {
-            Serial.printf(" dist=%ucm band=%u..%u hold=%u%%", m.trip_cm, m.trip_min_cm, m.trip_max_cm,
-                          m.trip_hold_pct);
+            out.printf(" dist=%ucm band=%u..%u hold=%u%%", m.trip_cm, m.trip_min_cm, m.trip_max_cm,
+                       m.trip_hold_pct);
         }
         break;
     case SCR_DEFUSED:
-        Serial.printf(" taken=%s page=%u", m.taken_text, m.defused_page);
+        out.printf(" taken=%s page=%u", m.taken_text, m.defused_page);
         break;
     default:
         break;
     }
     if (tb.rows > 0) {                       /* the same rows the OLED would draw, joined with " / " */
-        Serial.print(" text=[");
+        out.print(" text=[");
         for (i = 0; i < tb.rows; i++) {
             if (tb.line[i][0] != '\0') {
-                Serial.printf("%s%s", i > 0 ? " / " : "", tb.line[i]);
+                out.printf("%s%s", i > 0 ? " / " : "", tb.line[i]);
             }
         }
-        Serial.print("]");
+        out.print("]");
     }
-    Serial.println();
+    out.println();
 }
 
 /* ================= OLED drawing ================= */
@@ -546,6 +575,9 @@ static void display_task(void *arg)
     bool was_defused = false;
     uint32_t defused_since = 0;
     uint32_t last_print = 0;
+    uint32_t last_check = 0;
+    static SummaryLine line;         /* static: the task is created once, keeps ~0.5 KB off its stack */
+    static SummaryLine last_line;
     AppState *const st = s_ui_state;  /* PSRAM, not the 6 KB stack (mem_big.h); the model and text block below stay static */
     static ScreenModel m;
     static TextBlock tb;
@@ -581,9 +613,17 @@ static void display_task(void *arg)
         layout_text(m, now, &tb);
 
         if (!oled_ok) {
-            if ((uint32_t)(now - last_print) >= APP_HEADLESS_PRINT_MS) {
-                last_print = now;
-                print_summary(m, tb);
+            if ((uint32_t)(now - last_check) >= APP_HEADLESS_PRINT_MS) {
+                last_check = now;
+                line.clear();
+                print_summary(m, tb, line);
+                /* [oled-off] only when the text changed, else once per APP_HEADLESS_REFRESH_MS (it buried the log) */
+                if (strcmp(line.text(), last_line.text()) != 0 ||
+                    (uint32_t)(now - last_print) >= APP_HEADLESS_REFRESH_MS) {
+                    last_print = now;
+                    Serial.print(line.text());
+                    line.copy_to(last_line);
+                }
             }
             continue;
         }
