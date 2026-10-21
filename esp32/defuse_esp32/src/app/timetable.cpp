@@ -149,6 +149,8 @@ bool fetch_module(const char *module, const ShareLink &link, int *total, int *ad
     JsonDocument filter;
     JsonDocument doc;
     DeserializationError err;
+    String body;
+    int expected;
     int code;
 
     if (fault_net_blocked()) {
@@ -159,7 +161,7 @@ bool fetch_module(const char *module, const ShareLink &link, int *total, int *ad
     net_tls_configure(client);
     http.setConnectTimeout(APP_HTTP_TIMEOUT_MS);
     http.setTimeout(APP_HTTP_TIMEOUT_MS);
-    http.useHTTP10(true);              /* no chunked encoding: the body can be parsed straight off the stream */
+    http.useHTTP10(true);              /* no chunked encoding: the body is read as one block */
     if (!http.begin(client, url)) {
         Serial.printf("[tt] %s: could not start the request\n", module);
         net_tls_log_failure("tt", HTTPC_ERROR_CONNECTION_REFUSED, client);
@@ -172,11 +174,23 @@ bool fetch_module(const char *module, const ShareLink &link, int *total, int *ad
         http.end();
         return false;
     }
-    build_filter(filter);
-    err = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
+    expected = http.getSize();
+    body = http.getString();           /* the whole body first: parsing off the stream stalled partway */
     http.end();
+    if (expected >= 0 && body.length() != (size_t)expected) {
+        Serial.printf("[tt] %s: short body, %u of %d bytes\n", module, (unsigned)body.length(), expected);
+        return false;
+    }
+    build_filter(filter);
+    err = deserializeJson(doc, body, DeserializationOption::Filter(filter));
     if (err) {
-        Serial.printf("[tt] %s: JSON error %s\n", module, err.c_str());
+        char want[16] = "unknown";
+
+        if (expected >= 0) {
+            snprintf(want, sizeof(want), "%d", expected);
+        }
+        Serial.printf("[tt] %s: JSON error %s (got %u bytes, expected %s)\n", module, err.c_str(),
+                      (unsigned)body.length(), want);
         return false;
     }
     *added = collect_lessons(doc, link, module, total);
