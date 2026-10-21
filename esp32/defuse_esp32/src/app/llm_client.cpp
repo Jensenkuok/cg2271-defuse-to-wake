@@ -15,7 +15,9 @@
 
 namespace {
 
-void log_result(const char *model, const LlmReply &r)
+constexpr size_t LLM_FINISH_MAX = 24;   /* "stop", "length", "content_filter"... */
+
+void log_result(const char *model, const LlmReply &r, const char *finish)
 {
     if (r.status == LLM_OK) {
         Serial.printf("[llm] model=%s HTTP %d %u ms\n", model, r.http_code, (unsigned)r.latency_ms);
@@ -24,6 +26,9 @@ void log_result(const char *model, const LlmReply &r)
     } else if (r.http_code < 0) {
         Serial.printf("[llm] model=%s FAILED %s (%s) %u ms\n", model, llm_status_name(r.status),
                       HTTPClient::errorToString(r.http_code).c_str(), (unsigned)r.latency_ms);
+    } else if (r.status == LLM_ERR_EMPTY) {
+        Serial.printf("[llm] model=%s FAILED %s HTTP %d %u ms finish_reason=%s\n", model, llm_status_name(r.status),
+                      r.http_code, (unsigned)r.latency_ms, finish[0] != '\0' ? finish : "?");
     } else {
         Serial.printf("[llm] model=%s FAILED %s HTTP %d %u ms\n", model, llm_status_name(r.status), r.http_code,
                       (unsigned)r.latency_ms);
@@ -51,9 +56,10 @@ void build_request(String &payload, const char *model, const char *system, const
     serializeJson(req, payload);
 }
 
-/* The only field we need is choices[0].message.content: the filter drops reasoning_content,
- * usage and the rest while the body is parsed. */
-LlmStatus read_content(const String &body, char *out_text, size_t out_size)
+/* The fields we need are choices[0].message.content and choices[0].finish_reason (copied to
+ * finish, "length" = the token budget ran out): the filter drops reasoning_content, usage and
+ * the rest while the body is parsed. */
+LlmStatus read_content(const String &body, char *out_text, size_t out_size, char *finish, size_t finish_size)
 {
     JsonDocument filter;
     JsonDocument doc;
@@ -61,11 +67,13 @@ LlmStatus read_content(const String &body, char *out_text, size_t out_size)
     const char *content;
 
     filter["choices"][0]["message"]["content"] = true;
+    filter["choices"][0]["finish_reason"] = true;
     err = deserializeJson(doc, body, DeserializationOption::Filter(filter));
     if (err) {
         Serial.printf("[llm] JSON error %s\n", err.c_str());
         return LLM_ERR_PARSE;
     }
+    snprintf(finish, finish_size, "%s", (const char *)(doc["choices"][0]["finish_reason"] | ""));
     content = doc["choices"][0]["message"]["content"] | "";
     if (strip_think(content, out_text, out_size) == 0u) {
         return LLM_ERR_EMPTY;
@@ -99,6 +107,7 @@ LlmReply llm_chat(const char *model, const char *system, const char *user, int m
     HTTPClient http;
     String payload;
     String body;
+    char finish[LLM_FINISH_MAX] = "";
     int size;
 
     if (out_text == NULL || out_size == 0u) {
@@ -108,12 +117,12 @@ LlmReply llm_chat(const char *model, const char *system, const char *user, int m
     if (fault_net_blocked()) {
         rep.status = LLM_ERR_OUTAGE;
         rep.http_code = HTTPC_ERROR_CONNECTION_REFUSED;   /* negative: callers count it as a transport failure */
-        log_result(model, rep);
+        log_result(model, rep, finish);
         return rep;
     }
     if (SOCLAAS_API_KEY[0] == '\0') {
         rep.status = LLM_ERR_NO_KEY;
-        log_result(model, rep);
+        log_result(model, rep, finish);
         return rep;
     }
     build_request(payload, model, system, user, max_tokens, temperature);
@@ -126,7 +135,7 @@ LlmReply llm_chat(const char *model, const char *system, const char *user, int m
     if (!http.begin(client, APP_SOCLAAS_BASE_URL APP_SOCLAAS_CHAT_PATH)) {
         net_tls_log_failure("llm", rep.http_code, client);
         rep.latency_ms = millis() - t0;
-        log_result(model, rep);
+        log_result(model, rep, finish);
         return rep;
     }
     http.addHeader("Content-Type", "application/json");
@@ -138,7 +147,7 @@ LlmReply llm_chat(const char *model, const char *system, const char *user, int m
         net_tls_log_failure("llm", rep.http_code, client);
         http.end();
         rep.latency_ms = millis() - t0;
-        log_result(model, rep);
+        log_result(model, rep, finish);
         return rep;
     }
     size = http.getSize();
@@ -150,9 +159,9 @@ LlmReply llm_chat(const char *model, const char *system, const char *user, int m
     }
     http.end();
     if (rep.status == LLM_OK) {
-        rep.status = read_content(body, out_text, out_size);
+        rep.status = read_content(body, out_text, out_size, finish, sizeof(finish));
     }
     rep.latency_ms = millis() - t0;
-    log_result(model, rep);
+    log_result(model, rep, finish);
     return rep;
 }

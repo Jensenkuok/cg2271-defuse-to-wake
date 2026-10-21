@@ -50,13 +50,13 @@ Expect lines like (latencies vary):
 
 ```
 [ai] puzzle run wanted (boot: no fresh set)
-[ai] generating 4 dial + 4 wire puzzles (setter x-test-2, checker x-test-1 first)
-[llm] model=x-test-2 HTTP 200 2310 ms          <- setter call
+[ai] generating 4 dial + 4 wire puzzles (setter qwen3.6:35b, checker x-test-1 first)
+[llm] model=qwen3.6:35b HTTP 200 2310 ms          <- setter call
 [llm] model=x-test-1 HTTP 200 1780 ms          <- checker call (a DIFFERENT model)
-[ai] D0 verified: x-test-2 wrote it, x-test-1 solved it (attempt 1)
+[ai] D0 verified: qwen3.6:35b wrote it, x-test-1 solved it (attempt 1)
 ...
 [ai] set gen=2: 8 of 8 puzzles AI-verified, generated at unix 17...
-[ai] D0 AI   verified   setter=x-test-2 checker=x-test-1 said=4271 tries=1 2310ms/1780ms ans=4271 "..."
+[ai] D0 AI   verified   setter=qwen3.6:35b checker=x-test-1 said=4271 tries=1 2310ms/1780ms ans=4271 "..."
 ...
 [ai] new set stored in flash (8 AI + 0 bank puzzles)
 ```
@@ -186,9 +186,9 @@ After network + puzzles are up, with a timetable loaded (`link` set) type `brief
 
 ```
 [cmd] briefing run requested
-[brief] generating for local day 20xxx: 3 classes, alarm Fri 07:30 (chain starts with x-test-2)
-[llm] model=x-test-2 HTTP 200 3120 ms
-[brief] stored for local day 20xxx (briefing: LLM, coach: LLM, model x-test-2)
+[brief] generating for local day 20xxx: 3 classes, alarm Fri 07:30 (chain starts with qwen3.6:35b)
+[llm] model=qwen3.6:35b HTTP 200 3120 ms
+[brief] stored for local day 20xxx (briefing: LLM, coach: LLM, model qwen3.6:35b)
 [brief] briefing: "First: CG2271 LEC 14:00 @LT19. Then ..."
 [brief] coach:    "..."
 ```

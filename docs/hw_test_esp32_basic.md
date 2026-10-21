@@ -67,7 +67,7 @@ web JSON, puzzle sets) live in PSRAM. Without PSRAM the HTTPS calls fail.
    compiles into `.esp32_build` and flashes the four images at 115200 baud:
 
    ```
-   toolslash_esp32.ps1 -Port COMx -Compile
+   tools\flash_esp32.ps1 -Port COMx -Compile
    ```
 
    Without `-Compile` it flashes the last build. COMx is the board's USB port.

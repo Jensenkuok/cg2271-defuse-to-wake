@@ -131,14 +131,14 @@
 #define APP_SOCLAAS_BASE_URL        "https://soclaas-api.comp.nus.edu.sg/v1"
 #define APP_SOCLAAS_CHAT_PATH       "/chat/completions"
 #define APP_LLM_CHAIN_LEN           4
-#define APP_LLM_SETTER_CHAIN        { "x-test-2", "x-test-1", "qwen3.6:35b", "default" }
-#define APP_LLM_CHECKER_CHAIN       { "x-test-1", "x-test-2", "qwen3.6:35b", "default" }
+#define APP_LLM_SETTER_CHAIN        { "qwen3.6:35b", "x-test-1", "x-test-2", "default" }
+#define APP_LLM_CHECKER_CHAIN       { "x-test-1", "default", "x-test-2", "qwen3.6:35b" }
 #define APP_LLM_TIMEOUT_MS          30000u  /* one request: connect and read, at most 30 s */
 #define APP_LLM_TIMEOUT_S           30u     /* same limit for the TLS client */
-#define APP_LLM_MAX_TOKENS          600     /* reasoning models spend part of it before the JSON */
+#define APP_LLM_MAX_TOKENS          2000    /* thinking models spend most of it before answering; 600 gave empty replies */
 #define APP_LLM_SETTER_TEMP         0.9f
 #define APP_LLM_CHECKER_TEMP        0.0f
-#define APP_LLM_REPLY_MAX           2048    /* reply text kept per call */
+#define APP_LLM_REPLY_MAX           8192    /* reply text kept per call (PSRAM buffers) */
 #define APP_LLM_BODY_MAX            16384   /* larger HTTP bodies are refused */
 #define APP_PUZZLE_ATTEMPTS         3       /* setter + checker rounds per puzzle before the bank */
 #define APP_PUZZLE_DEAD_CHAINS      2       /* chains that failed outright in a row: stop asking the LLM */
@@ -153,7 +153,7 @@
 
 /* ---- Briefing + coach (one LLM call after each nightly puzzle run, same setter chain) ---- */
 #define APP_BRIEF_TEMP              0.7f
-#define APP_BRIEF_MAX_TOKENS        600
+#define APP_BRIEF_MAX_TOKENS        2000    /* same thinking-model budget as APP_LLM_MAX_TOKENS */
 #define APP_BRIEF_MAGIC             0x42524631u /* "BRF1": bump when BriefText changes */
 #define APP_KEY_BRIEF               "brief"
 #define APP_BRIEF_PROMPT_MAX        640     /* user message: alarm, <= 6 classes, history, difficulty */
