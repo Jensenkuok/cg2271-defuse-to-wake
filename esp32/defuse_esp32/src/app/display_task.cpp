@@ -10,6 +10,7 @@
 
 #include "config.h"
 #include "i2c_bus.h"
+#include "mem_big.h"
 
 #define SEC_PER_MIN        60u
 #define SEC_PER_HOUR       3600u
@@ -52,6 +53,7 @@
 
 static TaskHandle_t s_task;
 static Adafruit_SSD1306 s_display(APP_OLED_WIDTH, APP_OLED_HEIGHT, &Wire, -1);
+static AppState *s_ui_state;     /* the display task's copy of the app state (PSRAM, allocated in display_task_start) */
 
 static const char *const k_screen_names[] = { "IDLE", "ARMED", "BOMB_ACTIVE", "DEFUSED", "EXPLODED" };
 static const char *const k_module_names[] = { "-", "DIAL", "WIRES", "TRIPWIRE" };
@@ -544,7 +546,7 @@ static void display_task(void *arg)
     bool was_defused = false;
     uint32_t defused_since = 0;
     uint32_t last_print = 0;
-    static AppState st;              /* static: the task is created once, and ~1.5 KB of copies would eat its 6 KB stack */
+    AppState *const st = s_ui_state;  /* PSRAM, not the 6 KB stack (mem_big.h); the model and text block below stay static */
     static ScreenModel m;
     static TextBlock tb;
     uint32_t now;
@@ -565,17 +567,17 @@ static void display_task(void *arg)
 
     for (;;) {
         vTaskDelayUntil(&wake, pdMS_TO_TICKS(APP_DISPLAY_PERIOD_MS));
-        if (!app_state_read(&st)) {
+        if (!app_state_read(st)) {
             continue;
         }
         now = millis();
         t = time(nullptr);
-        defused = st.game_valid && st.game.state == PROTO_STATE_DEFUSED;
+        defused = st->game_valid && st->game.state == PROTO_STATE_DEFUSED;
         if (defused && !was_defused) {
             defused_since = now;             /* page rotation restarts at the first DEFUSED frame */
         }
         was_defused = defused;
-        build_model(st, now, st.time_valid ? (uint32_t)t : 0u, defused ? (uint32_t)(now - defused_since) : 0u, &m);
+        build_model(*st, now, st->time_valid ? (uint32_t)t : 0u, defused ? (uint32_t)(now - defused_since) : 0u, &m);
         layout_text(m, now, &tb);
 
         if (!oled_ok) {
@@ -599,6 +601,10 @@ static void display_task(void *arg)
 
 bool display_task_start(void)
 {
+    s_ui_state = mem_big_new<AppState>(1u, "display app state");
+    if (s_ui_state == NULL) {
+        return false;
+    }
     return xTaskCreate(display_task, "display", APP_STACK_DISPLAY, NULL, APP_PRIO_DISPLAY, &s_task) == pdPASS;
 }
 

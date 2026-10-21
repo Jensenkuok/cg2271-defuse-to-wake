@@ -16,6 +16,7 @@
 #include "flash_store.h"
 #include "history.h"
 #include "link_task.h"
+#include "mem_big.h"
 #include "mirror.h"
 #include "puzzle_gen.h"
 #include "schedule.h"
@@ -66,7 +67,8 @@ static portMUX_TYPE s_req_mux = portMUX_INITIALIZER_UNLOCKED;
 static bool s_regen_requested;      /* guarded by s_req_mux: set by the web task, taken by this task */
 static WiFiMulti s_multi;
 static NetCtx s_ctx;
-static Lesson s_lessons[SCHED_MAX_LESSONS];    /* scheduler input, network task only */
+static AppState *s_puzzle_state;               /* service_llm_jobs only (PSRAM) */
+static Lesson *s_lessons;                      /* scheduler input (PSRAM, SCHED_MAX_LESSONS), network task only */
 static char s_link[APP_LINK_MAX_CHARS + 1];
 
 /* ================= helpers ================= */
@@ -392,8 +394,8 @@ static bool puzzle_calls_allowed(const NetCtx &c, const AppState &st, uint32_t u
  * is back within one call's timeout. */
 static void service_llm_jobs(const NetCtx &c, uint32_t now_ms, uint32_t unix_now)
 {
-    static AppState st;                            /* static: ~1.3 KB that would stay on the stack during the TLS call */
-    const bool gen_ok = app_state_read(&st) && puzzle_calls_allowed(c, st, unix_now);
+    AppState *const st = s_puzzle_state;           /* PSRAM: ~1.3 KB that would stay on the stack during the TLS call */
+    const bool gen_ok = app_state_read(st) && puzzle_calls_allowed(c, *st, unix_now);
     const bool net_ok = c.wifi_up && c.time_valid;
     const uint32_t unix_valid = c.time_valid ? unix_now : 0u;
 
@@ -597,11 +599,13 @@ bool network_task_start(void)
     c.tt_due = true;                               /* fetch once at boot, as soon as Wi-Fi + time are valid */
     c.tt_last_nightly_day = -1;
     c.resched_pending = true;                      /* schedule from the flash cache as soon as the time is valid */
-    if (!flash_store_init() || !timetable_init() || !history_init() || !puzzle_gen_init()) {
+    s_lessons = mem_big_new<Lesson>(SCHED_MAX_LESSONS, "network lessons");
+    s_puzzle_state = mem_big_new<AppState>(1u, "network app state");
+    if (s_lessons == NULL || s_puzzle_state == NULL || !flash_store_init() || !timetable_init() ||
+        !history_init() || !puzzle_gen_init() || !briefing_init()) {
         Serial.println("[net] could not create the storage objects");
         return false;
     }
-    (void)briefing_init();
     bomb_config_init();                            /* last: from now on the link task may send BOMB_CONFIG */
     (void)mirror_init();
     (void)timetable_load_cache();                  /* offline-first: the cache works with no network */

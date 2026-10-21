@@ -10,6 +10,7 @@
 #include "config.h"
 #include "fault.h"
 #include "flash_store.h"
+#include "mem_big.h"
 #include "net_tls.h"
 
 namespace {
@@ -22,10 +23,10 @@ struct CacheBlob {
 };
 
 SemaphoreHandle_t s_mutex;
-Lesson s_lessons[SCHED_MAX_LESSONS];   /* the live list; guarded by s_mutex */
+Lesson *s_lessons;                     /* the live list (PSRAM, SCHED_MAX_LESSONS); guarded by s_mutex */
 int s_count;
 uint32_t s_fetched_unix;
-Lesson s_scratch[SCHED_MAX_LESSONS];   /* refresh builds here; only the network task touches it */
+Lesson *s_scratch;                     /* refresh builds here (PSRAM, SCHED_MAX_LESSONS); only the network task touches it */
 CacheBlob s_blob;                      /* load/save buffer (network task / boot only) */
 
 /* Module codes go into a URL: letters and digits only. */
@@ -198,7 +199,7 @@ void save_cache(void)
     s_blob.magic = APP_TT_CACHE_MAGIC;
     s_blob.fetched_unix = s_fetched_unix;
     s_blob.count = (uint32_t)s_count;
-    memcpy(s_blob.lessons, s_lessons, sizeof(s_lessons));
+    memcpy(s_blob.lessons, s_lessons, sizeof(s_blob.lessons));
     if (!flash_write_blob(APP_KEY_TIMETABLE, &s_blob, sizeof(s_blob))) {
         Serial.println("[tt] could not write the cache to flash");
     }
@@ -209,7 +210,9 @@ void save_cache(void)
 bool timetable_init(void)
 {
     s_mutex = xSemaphoreCreateMutex();
-    return s_mutex != NULL;
+    s_lessons = mem_big_new<Lesson>(SCHED_MAX_LESSONS, "timetable lessons");
+    s_scratch = mem_big_new<Lesson>(SCHED_MAX_LESSONS, "timetable scratch");
+    return s_mutex != NULL && s_lessons != NULL && s_scratch != NULL;
 }
 
 bool timetable_load_cache(void)
@@ -224,7 +227,7 @@ bool timetable_load_cache(void)
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(APP_FLASH_MUTEX_WAIT_MS)) != pdTRUE) {
         return false;
     }
-    memcpy(s_lessons, s_blob.lessons, sizeof(s_lessons));
+    memcpy(s_lessons, s_blob.lessons, sizeof(s_blob.lessons));
     s_count = (int)s_blob.count;
     s_fetched_unix = s_blob.fetched_unix;
     xSemaphoreGive(s_mutex);
@@ -267,7 +270,7 @@ bool timetable_refresh(const char *share_link, uint32_t now_unix)
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(APP_FLASH_MUTEX_WAIT_MS)) != pdTRUE) {
         return false;
     }
-    memset(s_lessons, 0, sizeof(s_lessons));
+    memset(s_lessons, 0, sizeof(Lesson) * SCHED_MAX_LESSONS);
     memcpy(s_lessons, s_scratch, sizeof(Lesson) * (size_t)total);
     s_count = total;
     s_fetched_unix = now_unix;

@@ -10,6 +10,7 @@
 #include "gyro_task.h"
 #include "history.h"
 #include "link_task.h"
+#include "mem_big.h"
 #include "network_task.h"
 #include "web_task.h"
 
@@ -50,7 +51,8 @@ static void status_print(uint32_t now_ms)
     print_stack("display", display_task_handle());
     print_stack("net", network_task_handle());
     print_stack("web", web_task_handle());
-    Serial.printf("  heap_free=%u min_heap=%u\n", (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap());
+    Serial.println();
+    mem_status_print();
 }
 
 void status_tick(uint32_t now_ms)

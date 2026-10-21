@@ -16,6 +16,7 @@
 #include "gyro_task.h"
 #include "history.h"
 #include "link_task.h"
+#include "mem_big.h"
 #include "network_task.h"
 #include "puzzle_gen.h"
 #include "settings.h"
@@ -33,11 +34,12 @@
  * the 8 KB task stack would not hold them, and one copy is enough. */
 static TaskHandle_t s_task;
 static WebServer s_server(APP_WEB_PORT);
-static char s_json[APP_WEB_STATUS_MAX];     /* the response being built */
-static AppState s_st;
+/* The four big ones (s_json, s_st, s_set, s_lessons) live in PSRAM, allocated once in web_task_start (mem_big.h). */
+static char *s_json;                        /* the response being built, APP_WEB_STATUS_MAX bytes */
+static AppState *s_st;
 static ScreenModel s_model;
-static PuzzleSet s_set;
-static Lesson s_lessons[SCHED_MAX_LESSONS];
+static PuzzleSet *s_set;
+static Lesson *s_lessons;                   /* SCHED_MAX_LESSONS entries */
 static BriefClass s_classes[BRIEF_CLASSES_MAX];
 static FrameLogEntry s_flog[FRAME_LOG_LEN];
 static HistRecord s_hist[HIST_LEN];
@@ -101,7 +103,7 @@ static void reply(int code, bool ok, const char *key, const char *text)
 {
     JsonBuf j;
 
-    jb_init(&j, s_json, sizeof(s_json));
+    jb_init(&j, s_json, APP_WEB_STATUS_MAX);
     jb_obj(&j);
     jb_kv_bool(&j, "ok", ok);
     jb_kv_str(&j, key, text);
@@ -145,14 +147,14 @@ static void put_module_value(JsonBuf *j, uint8_t module_type)
 
 static void put_game(JsonBuf *j)
 {
-    const proto_game_state_t &g = s_st.game;
-    const uint8_t state = (s_st.game_valid && g.state < STATE_COUNT) ? g.state : 0u;
-    const bool active = s_st.game_valid && state == PROTO_STATE_BOMB_ACTIVE;
-    const uint8_t type = (s_st.game_valid && g.module_type < 4u) ? g.module_type : 0u;
+    const proto_game_state_t &g = s_st->game;
+    const uint8_t state = (s_st->game_valid && g.state < STATE_COUNT) ? g.state : 0u;
+    const bool active = s_st->game_valid && state == PROTO_STATE_BOMB_ACTIVE;
+    const uint8_t type = (s_st->game_valid && g.module_type < 4u) ? g.module_type : 0u;
 
     jb_key(j, "game");
     jb_obj(j);
-    jb_kv_bool(j, "valid", s_st.game_valid);
+    jb_kv_bool(j, "valid", s_st->game_valid);
     jb_kv_str(j, "state", k_state_names[state]);
     jb_kv_uint(j, "state_id", state);
     jb_kv_str(j, "module", k_module_names[type]);
@@ -164,7 +166,7 @@ static void put_game(JsonBuf *j)
     jb_kv_uint(j, "strikes", g.strikes);
     jb_kv_uint(j, "max_strikes", s_model.max_strikes);
     jb_kv_uint(j, "progress_pct", g.progress_pct);
-    jb_kv_uint(j, "ver", s_st.game_version);
+    jb_kv_uint(j, "ver", s_st->game_version);
     if (active) {
         put_module_value(j, type);
     } else {
@@ -179,7 +181,7 @@ static void put_game(JsonBuf *j)
 
 static void put_stats(JsonBuf *j)
 {
-    const proto_link_stats_t &s = s_st.link_stats;
+    const proto_link_stats_t &s = s_st->link_stats;
 
     jb_key(j, "stats");
     jb_obj(j);
@@ -191,7 +193,7 @@ static void put_stats(JsonBuf *j)
     jb_kv_uint(j, "len", s.len_errors);
     jb_kv_uint(j, "dup", s.dup_drops);
     jb_kv_uint(j, "nack", s.nacks_sent);
-    jb_kv_uint(j, "bp", s_st.tx_backpressure);
+    jb_kv_uint(j, "bp", s_st->tx_backpressure);
     jb_end(j);
 }
 
@@ -203,8 +205,8 @@ static void put_link(JsonBuf *j, uint32_t now_ms)
 
     jb_key(j, "link");
     jb_obj(j);
-    jb_kv_bool(j, "up", s_st.link_up);
-    jb_kv_uint(j, "ups", s_st.link_up_count);
+    jb_kv_bool(j, "up", s_st->link_up);
+    jb_kv_uint(j, "ups", s_st->link_up_count);
     jb_kv_bool(j, "corrupt_armed", fault_corrupt_armed());
     put_stats(j);
     jb_key(j, "log");
@@ -231,9 +233,9 @@ static void put_net(JsonBuf *j, uint32_t unix_now)
     fmt_local(when, sizeof(when), unix_now);
     jb_key(j, "net");
     jb_obj(j);
-    jb_kv_bool(j, "wifi", s_st.wifi_up);
-    jb_kv_str(j, "ip", s_st.wifi_up ? s_st.ip : "");
-    jb_kv_bool(j, "time_valid", s_st.time_valid);
+    jb_kv_bool(j, "wifi", s_st->wifi_up);
+    jb_kv_str(j, "ip", s_st->wifi_up ? s_st->ip : "");
+    jb_kv_bool(j, "time_valid", s_st->time_valid);
     jb_kv_uint(j, "unix", unix_now);
     jb_kv_str(j, "now_local", when);
     jb_kv_uint(j, "outage_s", fault_outage_left_s());
@@ -244,20 +246,20 @@ static void put_alarm(JsonBuf *j, uint32_t unix_now)
 {
     char when[TIME_TEXT_LEN];
     char cls[TIME_TEXT_LEN];
-    const bool valid = s_st.next_valid && s_st.alarm_unix != 0u;
+    const bool valid = s_st->next_valid && s_st->alarm_unix != 0u;
 
-    fmt_local(when, sizeof(when), valid ? s_st.alarm_unix : 0u);
-    fmt_local(cls, sizeof(cls), valid ? s_st.next_start_unix : 0u);
+    fmt_local(when, sizeof(when), valid ? s_st->alarm_unix : 0u);
+    fmt_local(cls, sizeof(cls), valid ? s_st->next_start_unix : 0u);
     jb_key(j, "alarm");
     jb_obj(j);
     jb_kv_bool(j, "valid", valid);
-    jb_kv_uint(j, "unix", valid ? s_st.alarm_unix : 0u);
+    jb_kv_uint(j, "unix", valid ? s_st->alarm_unix : 0u);
     jb_kv_str(j, "local", when);
     jb_kv_str(j, "class_local", cls);
-    jb_kv_uint(j, "in_s", (valid && unix_now != 0u && s_st.alarm_unix > unix_now) ? s_st.alarm_unix - unix_now : 0u);
-    jb_kv_str(j, "module", valid ? s_st.next_module : "");
-    jb_kv_str(j, "type", valid ? s_st.next_type : "");
-    jb_kv_str(j, "venue", valid ? s_st.next_venue : "");
+    jb_kv_uint(j, "in_s", (valid && unix_now != 0u && s_st->alarm_unix > unix_now) ? s_st->alarm_unix - unix_now : 0u);
+    jb_kv_str(j, "module", valid ? s_st->next_module : "");
+    jb_kv_str(j, "type", valid ? s_st->next_type : "");
+    jb_kv_str(j, "venue", valid ? s_st->next_venue : "");
     jb_end(j);
 }
 
@@ -330,7 +332,7 @@ static void put_history(JsonBuf *j, uint32_t unix_now)
  * engineering view shows every answer. */
 static void put_puzzle(JsonBuf *j, const Puzzle &p, char tag, unsigned idx, bool is_active_pair)
 {
-    const bool hide = answer_hidden(s_st.game_valid, s_st.game.state, s_st.session_active);
+    const bool hide = answer_hidden(s_st->game_valid, s_st->game.state, s_st->session_active);
     char id[3] = { tag, (char)('0' + idx), '\0' };
     char ans[PUZZLE_ANSWER_LEN];
 
@@ -360,10 +362,10 @@ static void put_ai_header(JsonBuf *j, uint32_t gen)
     char when[TIME_TEXT_LEN];
 
     puzzle_gen_info(&run);
-    fmt_local(when, sizeof(when), s_set.generated_unix);
+    fmt_local(when, sizeof(when), s_set->generated_unix);
     jb_kv_uint(j, "gen", gen);
     jb_kv_str(j, "generated", when);
-    jb_kv_uint(j, "ai_count", s_set.ai_count);
+    jb_kv_uint(j, "ai_count", s_set->ai_count);
     jb_kv_uint(j, "total", 2u * PUZZLE_PAIRS);
     jb_kv_bool(j, "busy", run.busy);
     jb_kv_bool(j, "queued", run.queued);
@@ -381,8 +383,8 @@ static void put_ai(JsonBuf *j)
 {
     uint32_t gen = 0u;
     unsigned i;
-    const bool have = puzzle_set_snapshot(&s_set, &gen);
-    const int active_pair = (s_st.active.valid && s_st.active.set_gen == gen) ? (int)s_st.active.pair : -1;
+    const bool have = puzzle_set_snapshot(s_set, &gen);
+    const int active_pair = (s_st->active.valid && s_st->active.set_gen == gen) ? (int)s_st->active.pair : -1;
 
     jb_key(j, "ai");
     if (!have) {
@@ -394,10 +396,10 @@ static void put_ai(JsonBuf *j)
     jb_key(j, "puzzles");
     jb_arr(j);
     for (i = 0u; i < PUZZLE_PAIRS; i++) {
-        put_puzzle(j, s_set.dial[i], 'D', i, active_pair == (int)i);
+        put_puzzle(j, s_set->dial[i], 'D', i, active_pair == (int)i);
     }
     for (i = 0u; i < PUZZLE_PAIRS; i++) {
-        put_puzzle(j, s_set.wire[i], 'W', i, active_pair == (int)i);
+        put_puzzle(j, s_set->wire[i], 'W', i, active_pair == (int)i);
     }
     jb_end(j);
     jb_end(j);
@@ -406,7 +408,7 @@ static void put_ai(JsonBuf *j)
 static void put_diff_brief(JsonBuf *j, uint32_t unix_now)
 {
     Difficulty d;
-    const BriefText *bt = (unix_now != 0u) ? brief_pick(s_st.brief, s_st.brief_today, local_day(unix_now)) : NULL;
+    const BriefText *bt = (unix_now != 0u) ? brief_pick(s_st->brief, s_st->brief_today, local_day(unix_now)) : NULL;
 
     bomb_config_difficulty(&d);
     jb_key(j, "diff");
@@ -419,7 +421,7 @@ static void put_diff_brief(JsonBuf *j, uint32_t unix_now)
     jb_obj(j);
     jb_kv_str(j, "briefing", bt != NULL ? bt->briefing : APP_BRIEF_GENERIC);
     jb_kv_str(j, "coach", bt != NULL ? bt->coach : APP_COACH_GENERIC);
-    jb_kv_str(j, "src", bt == NULL ? "generic" : (bt == &s_st.brief ? "stored" : "template"));
+    jb_kv_str(j, "src", bt == NULL ? "generic" : (bt == &s_st->brief ? "stored" : "template"));
     jb_end(j);
 }
 
@@ -432,7 +434,7 @@ static void put_system(JsonBuf *j, uint32_t now_ms)
 {
     jb_key(j, "fb");
     jb_obj(j);
-    jb_kv_uint(j, "pending", s_st.mirror_pending);
+    jb_kv_uint(j, "pending", s_st->mirror_pending);
     jb_end(j);
     jb_key(j, "sys");
     jb_obj(j);
@@ -469,11 +471,11 @@ static bool build_status(JsonBuf *j)
     const uint32_t now_ms = millis();
     uint32_t unix_now;
 
-    if (!app_state_read(&s_st)) {
+    if (!app_state_read(s_st)) {
         return false;
     }
-    unix_now = s_st.time_valid ? (uint32_t)time(nullptr) : 0u;
-    build_model(s_st, now_ms, unix_now, 0u, &s_model);   /* the same decoding the OLED uses */
+    unix_now = s_st->time_valid ? (uint32_t)time(nullptr) : 0u;
+    build_model(*s_st, now_ms, unix_now, 0u, &s_model);   /* the same decoding the OLED uses */
     jb_obj(j);
     put_game(j);
     put_link(j, now_ms);
@@ -501,12 +503,12 @@ static void handle_status(void)
     JsonBuf j;
 
     s_reduced = false;
-    jb_init(&j, s_json, sizeof(s_json));
+    jb_init(&j, s_json, APP_WEB_STATUS_MAX);
     if (!build_status(&j) && j.overflow) {
         /* Worst case (every field at its maximum) is just under the buffer; if it ever does not fit,
          * answer with a shorter log and history instead of failing the whole page. */
         s_reduced = true;
-        jb_init(&j, s_json, sizeof(s_json));
+        jb_init(&j, s_json, APP_WEB_STATUS_MAX);
         (void)build_status(&j);
     }
     if (!jb_ok(j)) {
@@ -523,7 +525,7 @@ static void send_settings(void)
     JsonBuf j;
 
     refresh_settings_cache();
-    jb_init(&j, s_json, sizeof(s_json));
+    jb_init(&j, s_json, APP_WEB_STATUS_MAX);
     jb_obj(&j);
     jb_kv_bool(&j, "ok", true);
     jb_kv_str(&j, "nusmods_link", s_cfg_link);
@@ -585,11 +587,11 @@ static void handle_ring(void)
     if (!post_allowed()) {
         return;
     }
-    if (!app_state_read(&s_st)) {
+    if (!app_state_read(s_st)) {
         reply(503, false, "error", "state busy, try again");
-    } else if (!s_st.link_up) {
+    } else if (!s_st->link_up) {
         reply(409, false, "error", "the MCX link is down");
-    } else if (game_ringing(s_st)) {
+    } else if (game_ringing(*s_st)) {
         reply(409, false, "error", "a bomb is already running");
     } else {
         link_request_demo_ring();
@@ -705,6 +707,13 @@ bool web_task_start(void)
 {
     static const char *k_headers[] = { "X-Requested-With" };   /* collectHeaders wants a non-const array */
 
+    s_json = mem_big_new<char>(APP_WEB_STATUS_MAX, "web status json");
+    s_st = mem_big_new<AppState>(1u, "web app state");
+    s_set = mem_big_new<PuzzleSet>(1u, "web puzzle set");
+    s_lessons = mem_big_new<Lesson>(SCHED_MAX_LESSONS, "web lessons");
+    if (s_json == NULL || s_st == NULL || s_set == NULL || s_lessons == NULL) {
+        return false;
+    }
     s_server.collectHeaders(k_headers, 1u);
     s_server.on("/", HTTP_GET, handle_root);
     s_server.on("/favicon.ico", HTTP_GET, handle_favicon);

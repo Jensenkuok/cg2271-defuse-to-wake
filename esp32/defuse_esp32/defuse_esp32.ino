@@ -14,6 +14,7 @@
 #include "src/app/gyro_task.h"
 #include "src/app/i2c_bus.h"
 #include "src/app/link_task.h"
+#include "src/app/mem_big.h"
 #include "src/app/network_task.h"
 #include "src/app/web_task.h"
 
@@ -39,6 +40,7 @@ void setup()
     Serial.setRxBufferSize(APP_SERIAL_RX_BUF); /* room for a pasted "link <url>" test command */
     Serial.begin(APP_DEBUG_BAUD);
     Serial.println("\n[boot] Defuse to Wake ESP32-S2");
+    mem_boot_report("start");
 
     fault_init();
     ok = app_state_init() && i2c_bus_init() && link_task_init();
@@ -51,6 +53,7 @@ void setup()
     if (!ok) {
         Serial.println("[boot] FATAL: could not create a task");
     }
+    mem_boot_report("after init");
 }
 
 void loop()
