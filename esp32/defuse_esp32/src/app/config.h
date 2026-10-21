@@ -28,6 +28,11 @@
 #define APP_OLED_WIDTH              128
 #define APP_OLED_HEIGHT             64
 #define APP_MPU_ADDR                0x68
+#define APP_MPU_ADDR_ALT            0x69    /* AD0 pin high */
+#define APP_I2C_FALLBACK_HZ         100000u /* tried when nothing answers at APP_I2C_HZ (long jumper wires) */
+#define APP_I2C_SCAN_FIRST          0x08    /* 7-bit addresses 0x00-0x07 and 0x78-0x7F are reserved */
+#define APP_I2C_SCAN_LAST           0x77
+#define APP_I2C_SCAN_MAX            (APP_I2C_SCAN_LAST - APP_I2C_SCAN_FIRST + 1)
 #define APP_I2C_MUTEX_WAIT_MS       30u     /* bounded wait for the I2C bus mutex (a frame takes ~25 ms) */
 #define APP_STATE_MUTEX_WAIT_MS     10u     /* bounded wait for the app-state mutex (held for a memcpy) */
 

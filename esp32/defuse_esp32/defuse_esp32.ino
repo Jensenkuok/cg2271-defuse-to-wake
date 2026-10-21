@@ -48,6 +48,7 @@ void setup()
         Serial.println("[boot] FATAL: could not create shared objects");
         return; /* loop() deletes the loop task; nothing else runs */
     }
+    i2c_bus_report(true); /* before the OLED/gyro tasks start: shows what is on the bus */
     ok = link_task_start() && gyro_task_start() && display_task_start() && network_task_start() &&
          web_task_start();
     if (!ok) {

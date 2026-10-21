@@ -38,12 +38,17 @@ static void send_tamper(uint32_t mg)
 static bool sensor_init(void)
 {
     bool ok = false;
+    uint8_t addr = APP_MPU_ADDR;
 
-    if (!i2c_bus_probe(APP_MPU_ADDR)) {
-        return false;
+    if (!i2c_bus_probe(addr)) {
+        addr = APP_MPU_ADDR_ALT; /* AD0 high */
+        if (!i2c_bus_probe(addr)) {
+            return false;
+        }
     }
+    Serial.printf("[gyro] MPU-6050 at 0x%02X\n", addr);
     if (i2c_bus_lock(APP_I2C_MUTEX_WAIT_MS)) {
-        ok = s_mpu.begin(APP_MPU_ADDR, &Wire);
+        ok = s_mpu.begin(addr, &Wire);
         if (ok) {
             s_mpu.setAccelerometerRange(MPU6050_RANGE_16_G); /* shakes exceed 8 g */
             s_mpu.setFilterBandwidth(MPU6050_BAND_260_HZ);   /* keep spikes, no smoothing */
@@ -67,7 +72,7 @@ static void gyro_task(void *arg)
 
     (void)arg;
     if (!sensor_init()) {
-        Serial.println("[gyro] MPU-6050 not found: tamper detection disabled (task exits)");
+        Serial.println("[gyro] MPU-6050 not found at 0x68/0x69 (run \"i2c\" to scan): tamper detection disabled (task exits)");
         s_task = NULL; /* so the status print does not query a deleted task */
         vTaskDelete(NULL);
         return;

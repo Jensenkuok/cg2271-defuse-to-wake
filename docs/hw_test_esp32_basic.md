@@ -155,6 +155,15 @@ In the 10 s `[status]` block:
 - `heap_free` stays steady over 10 minutes (no steady decline).
 - `[link] backpressure` and `lock_to` stay 0 or very small.
 
+### 3.7 I2C scan (`i2c` command)
+Type `i2c` in the serial monitor (also printed once at boot). It scans 0x08-0x77 on the shared bus and prints one line:
+`[i2c] SDA=8 SCL=9 400000 Hz found: 0x3C 0x68`
+- `0x3C` = OLED. `0x68` or `0x69` = MPU-6050 gyro (0x69 when AD0 is high; the code tries both).
+- If nothing answers at 400 kHz, boot retries at 100 kHz and, if devices appear, keeps 100 kHz and says so in the line (long jumper wires).
+- `found: none` = check the module power LED, solder joints, SDA/SCL swapped (GPIO8 = SDA, GPIO9 = SCL), then press RESET.
+- Only the OLED listed: the gyro wiring, power or solder is the problem. `[gyro] MPU-6050 not found at 0x68/0x69 (run "i2c" to scan)` in the boot log means the same.
+- PASS: both 0x3C and 0x68/0x69 are listed and `[gyro] MPU-6050 ready` appears.
+
 ## 4. Results (fill in)
 
 | Check | Expected | Result | Notes |

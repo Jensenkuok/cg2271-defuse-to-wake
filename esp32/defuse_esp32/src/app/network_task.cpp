@@ -15,6 +15,7 @@
 #include "fault.h"
 #include "flash_store.h"
 #include "history.h"
+#include "i2c_bus.h"
 #include "link_task.h"
 #include "mem_big.h"
 #include "mirror.h"
@@ -493,12 +494,14 @@ static void run_command(NetCtx &c, const char *cmd, size_t len, uint32_t unix_no
         puzzle_print_set();
     } else if (strcmp(cmd, "diff") == 0) {
         bomb_config_print_difficulty();
+    } else if (strcmp(cmd, "i2c") == 0) {
+        i2c_bus_report(false);
     } else if (strcmp(cmd, "brief") == 0) {
         briefing_request();
         Serial.println("[cmd] briefing run requested");
     } else {
         print_unknown_command(cmd, len);
-        Serial.println("[cmd] commands: lead <15..180> | link <url> | refresh | resched | hist | puzzles | ai | diff | brief");
+        Serial.println("[cmd] commands: lead <15..180> | link <url> | refresh | resched | hist | puzzles | ai | diff | brief | i2c");
     }
 }
 
