@@ -119,7 +119,10 @@ static void test_validate_puzzle(void)
 
     CHECK(validate_puzzle("1st=4; 2nd=1st-2; sum is nine", PUZZLE_DIAL, "4271"));
     CHECK(!validate_puzzle("The code is 4271 exactly", PUZZLE_DIAL, "4271"));         /* literal answer */
-    CHECK(validate_puzzle("Digits 4 2 7 1 in that order, ok", PUZZLE_DIAL, "4271"));  /* spec: substring only */
+    CHECK(!validate_puzzle("Digits 4 2 7 1 in that order, ok", PUZZLE_DIAL, "4271")); /* spells the code */
+    CHECK(!validate_puzzle("Digits are 2,5,8,7 in order.", PUZZLE_DIAL, "2587"));
+    CHECK(!validate_puzzle("2=2,5=5,8=8,7=7. Digits are 2,5,8,7 in order.", PUZZLE_DIAL, "2587"));
+    CHECK(validate_puzzle("1st=2nd-3; 3rd is 2nd+3; 4th=3rd-1; sum is 22", PUZZLE_DIAL, "2587"));
     CHECK(!validate_puzzle("1st=4; 2nd=1st-2; sum is nine", PUZZLE_DIAL, NULL));
     CHECK(!validate_puzzle("1st=4; 2nd=1st-2; sum is nine", PUZZLE_DIAL, "427"));
     CHECK(!validate_puzzle(NULL, PUZZLE_DIAL, "4271"));
@@ -400,6 +403,7 @@ static void test_dial_templates_all_codes(void)
 
                 dial_code_text(code, digits);
                 CHECK(strstr(text, digits) == NULL);                    /* never prints the code */
+                CHECK(validate_puzzle(text, PUZZLE_DIAL, digits));      /* nor spells it in its digits */
             }
             /* Uniqueness by brute force: the text for every code in the 4 base families, and the
              * struct plus text for every 37th code in all 16 variants. */

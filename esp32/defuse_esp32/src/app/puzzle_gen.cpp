@@ -25,11 +25,14 @@ const char kSetterDialSys[] =
     "You write one short logic puzzle for a bomb-defusal game. The user gives a secret 4-digit code. "
     "Write ONE puzzle of at most 80 characters, plain ASCII only, whose only solution is exactly that code "
     "and which pins down all four digits. Never write the code itself. "
+    "Never list or state the code's digits; the solver must deduce them from relations "
+    "(sums, differences, comparisons, positions). "
     "Reply ONLY with JSON: {\"puzzle\":\"...\"}";
 const char kSetterWireSys[] =
     "You write one short riddle for a bomb-defusal game. The user gives the number of wires (numbered 1..N "
     "from the left) and the wire to cut. Write ONE riddle of at most 60 characters, plain ASCII only, whose "
-    "only solution is that wire number. Never state the number directly. "
+    "only solution is that wire number. Never state the number directly; "
+    "the solver must deduce it from relations (sums, differences, comparisons, positions). "
     "Reply ONLY with JSON: {\"puzzle\":\"...\"}";
 const char kCheckerDialSys[] =
     "Solve the puzzle. The answer is a 4-digit code (digits 0-9, leading zeros allowed). "

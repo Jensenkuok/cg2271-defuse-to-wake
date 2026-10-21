@@ -132,7 +132,8 @@ struct DialClue {
 };
 
 /* variant: family = variant % 4 (chain / reverse chain / pivot + sum / pair sums and differences),
- * variant / 4 % 4 changes the details (start digit, multiply instead of add, pairing, pivot). */
+ * variant / 4 % 4 changes the details (start digit, multiply instead of add, pairing, pivot).
+ * A variant whose text would spell the code in its digits is replaced by the next valid one. */
 DialClue dial_clue_build(const uint8_t code[PROTO_DIAL_DIGITS], unsigned variant);
 /* Renders to e.g. "1st=3; 2nd=1st+4; 3rd=2nd-5; 4th=1st*3". Returns the length, 0 if it does not fit. */
 size_t dial_clue_render(const DialClue &clue, char *out, size_t out_size);

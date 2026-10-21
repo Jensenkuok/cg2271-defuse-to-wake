@@ -321,6 +321,21 @@ bool json_get_string(const char *json, const char *key, char *out, size_t out_si
 }
 
 /* ================= validation ================= */
+/* True when the text's digits alone, every other character removed, contain the answer. */
+static bool digits_spell(const char *text, const char *answer)
+{
+    char only[PUZZLE_DIAL_TEXT_MAX + 1];
+    size_t n = 0u;
+
+    for (; *text != '\0' && n < sizeof(only) - 1u; text++) {
+        if (*text >= '0' && *text <= '9') {
+            only[n++] = *text;
+        }
+    }
+    only[n] = '\0';
+    return strstr(only, answer) != NULL;
+}
+
 bool validate_puzzle(const char *text, int kind, const char *answer)
 {
     size_t len;
@@ -348,6 +363,9 @@ bool validate_puzzle(const char *text, int kind, const char *answer)
         }
         if (strstr(text, answer) != NULL) {
             return false;                           /* the riddle must not just print the code */
+        }
+        if (digits_spell(text, answer)) {
+            return false;                           /* nor list its digits: "2,5,8,7" or "2 5 8 7" */
         }
     }
     return true;
@@ -533,7 +551,7 @@ static void build_pairs(DialClue *cl, const uint8_t d[PROTO_DIAL_DIGITS], unsign
     cl->n = (uint8_t)n;
 }
 
-DialClue dial_clue_build(const uint8_t code[PROTO_DIAL_DIGITS], unsigned variant)
+static DialClue build_variant(const uint8_t code[PROTO_DIAL_DIGITS], unsigned variant)
 {
     DialClue cl;
     uint8_t d[PROTO_DIAL_DIGITS];
@@ -561,6 +579,32 @@ DialClue dial_clue_build(const uint8_t code[PROTO_DIAL_DIGITS], unsigned variant
         break;
     }
     return cl;
+}
+
+/* Some codes make a clue's digits-only form spell the code by coincidence (the constants happen to
+ * line up, e.g. 0000 in the pair family). Those are skipped: the other details of the same family
+ * come first, then the other families, so the result is still a true unique-solution clue. */
+DialClue dial_clue_build(const uint8_t code[PROTO_DIAL_DIGITS], unsigned variant)
+{
+    char text[PUZZLE_TEXT_BUF];
+    char answer[PROTO_DIAL_DIGITS + 1];
+    unsigned fam;
+    unsigned sub;
+    DialClue cl;
+
+    dial_code_text(code, answer);
+    for (fam = 0u; fam < DIAL_FAMILIES; fam++) {
+        for (sub = 0u; sub < PUZZLE_VARIANTS / DIAL_FAMILIES; sub++) {
+            const unsigned v = (variant + fam) % DIAL_FAMILIES +
+                               DIAL_FAMILIES * ((variant / DIAL_FAMILIES + sub) % (PUZZLE_VARIANTS / DIAL_FAMILIES));
+
+            cl = build_variant(code, v);
+            if (dial_clue_render(cl, text, sizeof(text)) > 0u && validate_puzzle(text, PUZZLE_DIAL, answer)) {
+                return cl;
+            }
+        }
+    }
+    return build_variant(code, variant);
 }
 
 static void render_rule(const DialRule &r, char *piece, size_t size)
