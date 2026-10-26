@@ -9,6 +9,7 @@
 #include <time.h>
 
 #include "config.h"
+#include "../game/game_dial.h"   /* game_dial_code(): the MCX validates dials with the same function */
 #include "i2c_bus.h"
 #include "mem_big.h"
 
@@ -66,9 +67,18 @@ static void fmt_mmss(char *dst, size_t n, uint32_t seconds)
 
 /* ARMED big line. Under 1 h a MM:SS countdown; under 24 h "5h 07m"; beyond that the local day and
  * time of the alarm ("Fri 11:00"), because a long countdown wrapped to MM:SS reads as minutes. */
-static void fmt_ring(ScreenModel *out, uint32_t alarm_unix)
+static void fmt_day_time(char *dst, size_t n, uint32_t alarm_unix)
 {
     static const char *const k_weekday[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+    time_t at = (time_t)(alarm_unix + (uint32_t)APP_TZ_OFFSET_S);
+    struct tm tm_local;
+
+    gmtime_r(&at, &tm_local);   /* UTC+8 added by hand, as for the IDLE next-class line */
+    snprintf(dst, n, "%s %02d:%02d", k_weekday[tm_local.tm_wday % 7], tm_local.tm_hour, tm_local.tm_min);
+}
+
+static void fmt_ring(ScreenModel *out, uint32_t alarm_unix)
+{
     const uint32_t s = (uint32_t)out->ring_in_s;
 
     out->ring_is_at = false;
@@ -78,13 +88,25 @@ static void fmt_ring(ScreenModel *out, uint32_t alarm_unix)
         snprintf(out->ring_text, sizeof(out->ring_text), "%uh %02um", (unsigned)(s / SEC_PER_HOUR),
                  (unsigned)((s % SEC_PER_HOUR) / SEC_PER_MIN));
     } else {
-        time_t at = (time_t)(alarm_unix + (uint32_t)APP_TZ_OFFSET_S);
-        struct tm tm_local;
-
-        gmtime_r(&at, &tm_local);   /* UTC+8 added by hand, as for the IDLE next-class line */
-        snprintf(out->ring_text, sizeof(out->ring_text), "%s %02d:%02d", k_weekday[tm_local.tm_wday % 7],
-                 tm_local.tm_hour, tm_local.tm_min);
+        fmt_day_time(out->ring_text, sizeof(out->ring_text), alarm_unix);
         out->ring_is_at = true;
+    }
+}
+
+/* ARMED bottom-line alarm text: "Alarm Fri 11:00" from 1 h away, "Rings in MM:SS" under 1 h. */
+static void fmt_alarm_line(ScreenModel *out, uint32_t alarm_unix)
+{
+    char part[12];
+    const uint32_t s = (uint32_t)out->ring_in_s;
+
+    if (out->ring_in_s < 0) {
+        snprintf(out->alarm_text, sizeof(out->alarm_text), "%s", APP_ALARM_SET_TEXT);
+    } else if (s < APP_ARMED_MMSS_MAX_S) {
+        fmt_mmss(part, sizeof(part), s);
+        snprintf(out->alarm_text, sizeof(out->alarm_text), APP_ALARM_IN_FMT, part);
+    } else {
+        fmt_day_time(part, sizeof(part), alarm_unix);
+        snprintf(out->alarm_text, sizeof(out->alarm_text), APP_ALARM_AT_FMT, part);
     }
 }
 
@@ -107,9 +129,20 @@ static void fill_puzzle(const AppState &st, ScreenModel *out)
         wire_k = st.active.wire_k;
     }
     if (out->module_type == PROTO_MODULE_DIAL) {
-        stored = known ? st.active.dial_text : "";
-        if (stored[0] == '\0') {
-            (void)dial_template(code, 0u, out->puzzle_text, sizeof(out->puzzle_text));
+        if (st.game.module_idx > 0u) {
+            /* A repeated dial: the MCX expects the derived code (game_dial_code, the same function it
+             * validates with), which the AI pair knows nothing about -> built-in bank clue, hint from
+             * the derived code. */
+            uint8_t derived[PROTO_DIAL_DIGITS];
+
+            game_dial_code(code, st.game.module_idx, derived);
+            memcpy(code, derived, sizeof(code));
+            (void)dial_clue_render(dial_clue_build(code, 0u), out->puzzle_text, sizeof(out->puzzle_text));
+        } else {
+            stored = known ? st.active.dial_text : "";
+            if (stored[0] == '\0') {
+                (void)dial_template(code, 0u, out->puzzle_text, sizeof(out->puzzle_text));
+            }
         }
         (void)dial_hint(code, st.game.strikes, out->hint, sizeof(out->hint));
     } else if (out->module_type == PROTO_MODULE_WIRES) {
@@ -184,14 +217,11 @@ void build_model(const AppState &st, uint32_t now_ms, uint32_t unix_now, uint32_
 
     if (st.next_valid && st.alarm_unix != 0u) {
         /* The wake-up time (alarm), not the class start: that is what the sleeper cares about. */
-        static const char *const k_weekday[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
-        time_t at = (time_t)(st.alarm_unix + (uint32_t)APP_TZ_OFFSET_S);
-        struct tm tm_local;
+        char day_time[12];
         char full[SCHED_MODULE_LEN + SCHED_VENUE_LEN + 16] = { 0 };
 
-        gmtime_r(&at, &tm_local);   /* UTC+8 added by hand, as for the clock above */
-        snprintf(full, sizeof(full), "%s %02d:%02d %s %s", k_weekday[tm_local.tm_wday % 7], tm_local.tm_hour,
-                 tm_local.tm_min, st.next_module, st.next_venue);
+        fmt_day_time(day_time, sizeof(day_time), st.alarm_unix);
+        snprintf(full, sizeof(full), "%s %s %s", day_time, st.next_module, st.next_venue);
         memcpy(out->next_text, full, sizeof(out->next_text) - 1u);   /* longer text is cut to the 21-char screen width */
     }
 
@@ -199,6 +229,11 @@ void build_model(const AppState &st, uint32_t now_ms, uint32_t unix_now, uint32_
                          ? (int32_t)(st.alarm_unix - unix_now) : -1;
     if (out->ring_in_s >= 0) {
         fmt_ring(out, st.alarm_unix);
+    }
+    if (out->screen == SCR_ARMED) {
+        /* ARMED draws the clock screen; the bottom line alternates next class / alarm (alarm only if no class). */
+        fmt_alarm_line(out, st.alarm_unix);
+        out->show_alarm = out->next_text[0] == '\0' || ((now_ms / APP_IDLE_TOGGLE_MS) % 2u) == 1u;
     }
 
     fmt_mmss(out->timer_text, sizeof(out->timer_text), st.game.time_left_s);
@@ -227,6 +262,13 @@ void build_model(const AppState &st, uint32_t now_ms, uint32_t unix_now, uint32_
         snprintf(out->taken_text, sizeof(out->taken_text), "--:--");
     }
     snprintf(out->clue, sizeof(out->clue), "%.*s", APP_CLUE_MAX_CHARS, APP_CLUE_PLACEHOLDER);
+    if (out->module_type == PROTO_MODULE_TRIPWIRE) {
+        char trip[APP_TRIP_CLUE_BUF];   /* wide enough for any 0..255 band; cut to the 21-column screen below */
+
+        snprintf(trip, sizeof(trip), APP_TRIP_CLUE_FMT, (unsigned)out->trip_min_cm, (unsigned)out->trip_max_cm,
+                 (unsigned)(GAME_TRIP_HOLD_MS / MS_PER_SEC));
+        snprintf(out->clue, sizeof(out->clue), "%.*s", APP_CLUE_MAX_CHARS, trip);
+    }
 
     if (out->screen == SCR_ACTIVE) {
         fill_puzzle(st, out);
@@ -385,6 +427,14 @@ static void draw_link_icon(int x, int y, bool up)
     }
 }
 
+/* 8x8 bell: dome, rim, clapper. Shown while an alarm is armed. */
+static void draw_bell(int x, int y)
+{
+    s_display.fillRoundRect(x + 1, y, 6, 6, 2, SSD1306_WHITE);
+    s_display.fillRect(x, y + 5, 8, 2, SSD1306_WHITE);
+    s_display.fillRect(x + 3, y + 7, 2, 1, SSD1306_WHITE);
+}
+
 static void draw_dial(const ScreenModel &m)
 {
     char c[2] = { 0, 0 };
@@ -520,7 +570,7 @@ static void draw_active(const ScreenModel &m, const TextBlock &tb)
     default: break;
     }
     if (m.module_type == PROTO_MODULE_TRIPWIRE) {
-        s_display.setTextSize(1);                /* tripwire screen unchanged */
+        s_display.setTextSize(1);                /* instruction: band and hold time */
         s_display.setCursor(0, CLUE_Y);
         s_display.print(m.clue);
     } else {
@@ -536,12 +586,20 @@ static void draw_oled(const ScreenModel &m, const TextBlock &tb)
     s_display.setTextColor(SSD1306_WHITE);
     switch (m.screen) {
     case SCR_IDLE:
+    case SCR_ARMED:                              /* ARMED = the clock screen + alarm line + bell */
         snprintf(buf, sizeof(buf), "%s", m.clock_text);
         if (!m.colon_on && m.time_valid) {
             buf[2] = ' ';
         }
         text_centered(buf, 22, 4);
-        if (m.next_text[0] != '\0') {
+        if (m.screen == SCR_ARMED) {
+            draw_bell(APP_BELL_X, APP_BELL_Y);
+        }
+        if (m.screen == SCR_ARMED && m.show_alarm) {
+            s_display.setTextSize(1);
+            s_display.setCursor(0, CLUE_Y);
+            s_display.print(m.alarm_text);
+        } else if (m.next_text[0] != '\0') {
             s_display.setTextSize(1);
             s_display.setCursor(0, CLUE_Y);
             s_display.print(m.next_text);
@@ -555,18 +613,6 @@ static void draw_oled(const ScreenModel &m, const TextBlock &tb)
         }
         draw_wifi_icon(96, 0, m.wifi_up);
         draw_link_icon(114, 0, !m.link_down);
-        break;
-    case SCR_ARMED:
-        text_centered("ARMED", 6, 3);
-        if (m.ring_in_s >= 0) {
-            text_centered(m.ring_is_at ? "RINGS AT" : "RING IN", 36, 1);
-            text_centered(m.ring_text, 46, 2);
-        } else {
-            text_centered("waiting...", 40, 1);
-        }
-        if (m.link_down) {
-            draw_link_icon(114, 0, false);
-        }
         break;
     case SCR_ACTIVE:
         draw_active(m, tb);

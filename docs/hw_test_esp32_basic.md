@@ -96,14 +96,14 @@ RING_NOW`) or with **SW3** on the MCX. Both ring in 3 s. Then check each screen:
 
 | When | Expected OLED |
 |---|---|
-| waiting | `ARMED` (big) and `waiting...` (no alarm time stored yet) |
-| armed, alarm set | `ARMED` (big), then `RING IN` with `MM:SS` under 1 h or `5h 07m` under 24 h; with the alarm 24 h or more away the label is `RINGS AT` and the line is the local day and time, e.g. `Fri 11:00` |
+| armed, no alarm time known | the IDLE clock screen with a small bell under the link icon; the bottom line is `Alarm set` (or the next class if there is one) |
+| armed, alarm set | the same clock screen as IDLE (big clock, IP, Wi-Fi and link icons) plus the bell. The bottom line swaps every 3 s between the next class (`Fri 11:00 CG2271 LT19`) and the alarm: `Alarm Fri 11:00` when it is 1 h or more away, `Rings in MM:SS` in the last hour. With no next class only the alarm text shows |
 | bomb running, dial | top bar `03:00` counting down + 3 empty strike boxes; 4 digit boxes, the current one shows its value with a caret under it |
 | after a right digit | that box shows `*`, the caret moves right |
 | wrong digit | one strike box fills in; the digit resets to 0 |
 | wires | 4 vertical wires, a cursor arrow under one; a cut wire is drawn broken |
-| tripwire | horizontal 0-50 cm gauge with the 18-22 cm band marked, a marker at the current distance, and a hold bar that fills over 3 s |
-| bottom line | `Clue: (AI clue pending)` (placeholder) |
+| tripwire | horizontal 0-50 cm gauge with the band marked, a marker at the current distance, and a hold bar that fills over 3 s; the bottom line reads `Hold hand 15-25cm 3s` (band from the config) |
+| 2nd dial in one bomb (e.g. dial, wires, tripwire, dial) | a different clue from the first dial: a built-in bank clue whose answer is the first code with each digit +3 (mod 10); entering that code clears the module, and a strike hint is built from it |
 | defused | `DEFUSED` and `TIME mm:ss` |
 | exploded | `BOOM`, the screen flashes inverted about twice a second, then a new bomb starts |
 

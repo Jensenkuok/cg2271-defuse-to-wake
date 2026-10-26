@@ -33,7 +33,9 @@ struct ScreenModel {
     char next_text[APP_CLUE_MAX_CHARS + 1]; /* IDLE bottom line, e.g. "Fri 15:00 CG2271 LT19", "" if none */
     int32_t ring_in_s;        /* ARMED: seconds until the alarm, -1 unknown */
     char ring_text[12];       /* ARMED big line: "MM:SS", "5h 07m" or "Fri 11:00" */
-    bool ring_is_at;          /* ARMED: ring_text is a day/time, so the label reads RINGS AT */
+    bool ring_is_at;          /* ring_text is a day/time rather than a countdown */
+    char alarm_text[APP_CLUE_MAX_CHARS + 1]; /* ARMED bottom line: "Alarm Fri 11:00" or "Rings in MM:SS" */
+    bool show_alarm;          /* ARMED: the bottom line shows alarm_text now, else next_text */
     char timer_text[8];       /* ACTIVE "MM:SS" */
     uint8_t strikes;
     uint8_t max_strikes;
@@ -51,7 +53,7 @@ struct ScreenModel {
     uint8_t trip_min_cm;
     uint8_t trip_max_cm;
     char taken_text[8];       /* DEFUSED "MM:SS" */
-    char clue[APP_CLUE_MAX_CHARS + 1]; /* TRIPWIRE bottom line (placeholder, unchanged) */
+    char clue[APP_CLUE_MAX_CHARS + 1]; /* TRIPWIRE bottom line: "Hold hand 15-25cm 3s" */
     /* ACTIVE DIAL / WIRES: the riddle of the ACTIVE pair (the config the MCX ACKed) and the hint */
     char puzzle_text[PUZZLE_TEXT_BUF];
     char hint[HINT_BUF];      /* "" until the current bomb has a strike */

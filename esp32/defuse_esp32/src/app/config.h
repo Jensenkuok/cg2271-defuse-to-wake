@@ -72,6 +72,15 @@
 #define APP_HEADLESS_LINE_MAX       320     /* the summary line is built in memory (text rows included) */
 #define APP_BOOM_FLASH_MS           250u    /* inverted-screen flash half-period */
 #define APP_CLUE_PLACEHOLDER        "Clue: (AI clue pending)"
+#define APP_TRIP_CLUE_FMT           "Hold hand %u-%ucm %us"  /* tripwire instruction; 21 chars at most (min 2 digits, max 100) */
+#define APP_TRIP_CLUE_BUF           32               /* scratch for the formatted instruction before it is cut to 21 chars */
+#define APP_ALARM_AT_FMT            "Alarm %s"       /* ARMED bottom line, alarm >= 1 h away: "Alarm Fri 11:00" */
+#define APP_ALARM_IN_FMT            "Rings in %s"    /* ARMED bottom line, under 1 h: "Rings in MM:SS" */
+#define APP_ALARM_SET_TEXT          "Alarm set"      /* ARMED but the alarm time is not known yet */
+#define APP_IDLE_TOGGLE_MS          3000u            /* ARMED clock screen: bottom line swaps next class / alarm this often */
+#define APP_BELL_X                  119              /* armed-alarm bell marker, under the link icon */
+#define APP_BELL_Y                  11
+#define MS_PER_SEC                  1000u
 #define APP_CLUE_MAX_CHARS          21      /* 128 px / 6 px per char */
 #define APP_BRIEF_GENERIC           "Good morning! Check your timetable."  /* DEFUSED page 1 with no briefing for today */
 #define APP_COACH_GENERIC           "Defused. Now go be brilliant."          /* DEFUSED page 2 likewise */
