@@ -64,6 +64,30 @@ static void fmt_mmss(char *dst, size_t n, uint32_t seconds)
     snprintf(dst, n, "%02u:%02u", (unsigned)((seconds / SEC_PER_MIN) % 100u), (unsigned)(seconds % SEC_PER_MIN));
 }
 
+/* ARMED big line. Under 1 h a MM:SS countdown; under 24 h "5h 07m"; beyond that the local day and
+ * time of the alarm ("Fri 11:00"), because a long countdown wrapped to MM:SS reads as minutes. */
+static void fmt_ring(ScreenModel *out, uint32_t alarm_unix)
+{
+    static const char *const k_weekday[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+    const uint32_t s = (uint32_t)out->ring_in_s;
+
+    out->ring_is_at = false;
+    if (s < APP_ARMED_MMSS_MAX_S) {
+        fmt_mmss(out->ring_text, sizeof(out->ring_text), s);
+    } else if (s < APP_ARMED_HOURS_MAX_S) {
+        snprintf(out->ring_text, sizeof(out->ring_text), "%uh %02um", (unsigned)(s / SEC_PER_HOUR),
+                 (unsigned)((s % SEC_PER_HOUR) / SEC_PER_MIN));
+    } else {
+        time_t at = (time_t)(alarm_unix + (uint32_t)APP_TZ_OFFSET_S);
+        struct tm tm_local;
+
+        gmtime_r(&at, &tm_local);   /* UTC+8 added by hand, as for the IDLE next-class line */
+        snprintf(out->ring_text, sizeof(out->ring_text), "%s %02d:%02d", k_weekday[tm_local.tm_wday % 7],
+                 tm_local.tm_hour, tm_local.tm_min);
+        out->ring_is_at = true;
+    }
+}
+
 /* The puzzle of the ACTIVE pair for the module on screen, plus its hint. The pair is the config the
  * MCX ACKed, i.e. what the running (or next) bomb asks for. Until one is known the MCX is assumed
  * to run its default bomb (game_config.h), whose clue comes from the template bank; the literal
@@ -173,6 +197,9 @@ void build_model(const AppState &st, uint32_t now_ms, uint32_t unix_now, uint32_
 
     out->ring_in_s = (st.alarm_unix != 0u && st.time_valid && st.alarm_unix > unix_now)
                          ? (int32_t)(st.alarm_unix - unix_now) : -1;
+    if (out->ring_in_s >= 0) {
+        fmt_ring(out, st.alarm_unix);
+    }
 
     fmt_mmss(out->timer_text, sizeof(out->timer_text), st.game.time_left_s);
     out->strikes = st.game.strikes;
@@ -532,9 +559,8 @@ static void draw_oled(const ScreenModel &m, const TextBlock &tb)
     case SCR_ARMED:
         text_centered("ARMED", 6, 3);
         if (m.ring_in_s >= 0) {
-            text_centered("RING IN", 36, 1);
-            fmt_mmss(buf, sizeof(buf), (uint32_t)m.ring_in_s);
-            text_centered(buf, 46, 2);
+            text_centered(m.ring_is_at ? "RINGS AT" : "RING IN", 36, 1);
+            text_centered(m.ring_text, 46, 2);
         } else {
             text_centered("waiting...", 40, 1);
         }

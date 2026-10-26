@@ -97,6 +97,7 @@ RING_NOW`) or with **SW3** on the MCX. Both ring in 3 s. Then check each screen:
 | When | Expected OLED |
 |---|---|
 | waiting | `ARMED` (big) and `waiting...` (no alarm time stored yet) |
+| armed, alarm set | `ARMED` (big), then `RING IN` with `MM:SS` under 1 h or `5h 07m` under 24 h; with the alarm 24 h or more away the label is `RINGS AT` and the line is the local day and time, e.g. `Fri 11:00` |
 | bomb running, dial | top bar `03:00` counting down + 3 empty strike boxes; 4 digit boxes, the current one shows its value with a caret under it |
 | after a right digit | that box shows `*`, the caret moves right |
 | wrong digit | one strike box fills in; the digit resets to 0 |

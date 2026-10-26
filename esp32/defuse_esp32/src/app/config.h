@@ -110,6 +110,8 @@
 #define APP_NET_LOOP_MS             250u
 #define APP_NTP_SERVER_1            "pool.ntp.org"
 #define APP_NTP_SERVER_2            "time.google.com"
+#define APP_ARMED_MMSS_MAX_S        3600u       /* ARMED countdown: below this show MM:SS */
+#define APP_ARMED_HOURS_MAX_S       86400u      /* ARMED countdown: below this show "Hh MMm", from here the alarm day/time */
 #define APP_TZ_OFFSET_S             (8 * 3600)  /* Asia/Singapore, UTC+8, no DST */
 #define APP_TIME_SYNC_PERIOD_MS     600000u /* re-send TIME_SYNC every 10 min */
 #define APP_MIN_VALID_UNIX          1700000000u /* anything earlier means SNTP has not set the clock */

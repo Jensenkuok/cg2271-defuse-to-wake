@@ -32,6 +32,8 @@ struct ScreenModel {
     char ip_text[APP_IP_TEXT_LEN]; /* IDLE top-left corner: where the web page is, "" until Wi-Fi has an address */
     char next_text[APP_CLUE_MAX_CHARS + 1]; /* IDLE bottom line, e.g. "Fri 15:00 CG2271 LT19", "" if none */
     int32_t ring_in_s;        /* ARMED: seconds until the alarm, -1 unknown */
+    char ring_text[12];       /* ARMED big line: "MM:SS", "5h 07m" or "Fri 11:00" */
+    bool ring_is_at;          /* ARMED: ring_text is a day/time, so the label reads RINGS AT */
     char timer_text[8];       /* ACTIVE "MM:SS" */
     uint8_t strikes;
     uint8_t max_strikes;
