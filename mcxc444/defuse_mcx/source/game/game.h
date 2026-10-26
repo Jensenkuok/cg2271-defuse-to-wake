@@ -129,6 +129,14 @@ void game_init(game_t *g, uint32_t now_ms);
  */
 bool game_set_config(game_t *g, const proto_bomb_config_t *cfg);
 
+/*
+ * Code a DIAL module expects at module index `module_idx` (GAME_STATE.module_idx):
+ * index 0 is the configured code, index k > 0 shifts every digit by
+ * GAME_DIAL_REPEAT_STEP * k (mod 10). Pure; the ESP32 display uses it too.
+ */
+void game_dial_code(const uint8_t base[PROTO_DIAL_DIGITS], uint8_t module_idx,
+                    uint8_t out[PROTO_DIAL_DIGITS]);
+
 /* TIME_SYNC. Returns false for unix_s == 0. */
 bool game_set_time(game_t *g, uint32_t unix_s, uint32_t now_ms);
 

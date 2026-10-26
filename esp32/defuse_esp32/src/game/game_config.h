@@ -35,6 +35,9 @@ extern "C" {
 #define GAME_MODULE_TYPE_MAX        PROTO_MODULE_TRIPWIRE
 #define GAME_MODULE_TYPE_COUNT      3u
 #define GAME_DIAL_BASE              10u    /* digits 0..9 */
+/* Repeated dial at module index k uses digit (base + STEP*k) % 10. Steps 3, 6 and 9 are
+ * non-zero mod 10, so the codes at indices 0..3 all differ from each other. */
+#define GAME_DIAL_REPEAT_STEP       3u
 #define GAME_MIN_TIME_LIMIT_S       30u
 #define GAME_MAX_TIME_LIMIT_S       600u
 #define GAME_MIN_WIRES              3u

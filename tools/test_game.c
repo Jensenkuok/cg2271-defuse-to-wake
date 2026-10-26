@@ -95,11 +95,14 @@ static void start_bomb(uint32_t start, const proto_bomb_config_t *cfg)
     drain();
 }
 
+/* Solve the current dial: the configured code, shifted for its module index. */
 static void solve_dial(void)
 {
-    static const int code[4] = { 4, 2, 7, 1 };
+    static const uint8_t base[4] = { 4, 2, 7, 1 };
+    uint8_t code[4];
     int i;
     int k;
+    game_dial_code(base, view().module_idx, code);
     for (i = 0; i < 4; i++) {
         for (k = 0; k < code[i]; k++) { ev(GAME_EVT_ENC_STEP, 1); }
         ev(GAME_EVT_ENC_PRESS, 0);
@@ -977,6 +980,69 @@ static void test_wraparound_alarm_hold_and_timeout(void)
     CHECK(view().state == PROTO_STATE_BOMB_ACTIVE);
 }
 
+/* Enter the 4-digit code `code` on the current dial. */
+static void enter_code(const uint8_t code[4])
+{
+    int i;
+    int k;
+    for (i = 0; i < 4; i++) {
+        for (k = 0; k < code[i]; k++) { ev(GAME_EVT_ENC_STEP, 1); }
+        ev(GAME_EVT_ENC_PRESS, 0);
+    }
+}
+
+static void test_dial_code_derivation(void)
+{
+    static const uint8_t codes[][4] = {
+        { 4, 2, 7, 1 }, { 0, 0, 0, 0 }, { 9, 9, 9, 9 }, { 1, 5, 8, 3 }
+    };
+    uint8_t out[4][4];
+    size_t c;
+    int a;
+    int b;
+
+    for (c = 0; c < sizeof(codes) / sizeof(codes[0]); c++) {
+        for (a = 0; a < 4; a++) { game_dial_code(codes[c], (uint8_t)a, out[a]); }
+        CHECK(memcmp(out[0], codes[c], 4) == 0);
+        for (a = 0; a < 4; a++) {
+            for (b = a + 1; b < 4; b++) { CHECK(memcmp(out[a], out[b], 4) != 0); }
+        }
+    }
+    game_dial_code(codes[0], 1, out[0]);   /* pinned: 4271 + 3 each */
+    CHECK(out[0][0] == 7 && out[0][1] == 5 && out[0][2] == 0 && out[0][3] == 4);
+    game_dial_code(codes[2], 3, out[0]);   /* 9 + 9 = 18 -> 8 */
+    CHECK(out[0][0] == 8 && out[0][3] == 8);
+}
+
+static void test_repeated_dial_bomb(void)
+{
+    static const uint8_t base[4] = { 4, 2, 7, 1 };
+    proto_bomb_config_t c;
+    uint8_t derived[4];
+    int k;
+
+    default_cfg(&c);
+    c.module_count = 4;
+    c.module_order[3] = PROTO_MODULE_DIAL;
+    start_bomb(0, &c);
+    solve_dial(); solve_wires(); solve_trip();
+    CHECK(view().state == PROTO_STATE_BOMB_ACTIVE && view().module_idx == 3);
+    CHECK(view().module_type == PROTO_MODULE_DIAL);
+    /* Base digit 4 where the derived code expects 7: one strike. */
+    for (k = 0; k < base[0]; k++) { ev(GAME_EVT_ENC_STEP, 1); }
+    ev(GAME_EVT_ENC_PRESS, 0);
+    CHECK(view().strikes == 1 && view().state == PROTO_STATE_BOMB_ACTIVE);
+    game_dial_code(base, view().module_idx, derived);
+    enter_code(derived);
+    CHECK(view().state == PROTO_STATE_DEFUSED);
+
+    start_bomb(0, &c);                      /* winnable with the derived code only */
+    solve_dial(); solve_wires(); solve_trip();
+    game_dial_code(base, 3, derived);
+    enter_code(derived);
+    CHECK(view().state == PROTO_STATE_DEFUSED && view().strikes == 0);
+}
+
 int main(void)
 {
     test_init_default_view();
@@ -1009,6 +1075,8 @@ int main(void)
     test_sound_fifo_overflow();
     test_result_fifo_overflow();
     test_wraparound_alarm_hold_and_timeout();
+    test_dial_code_derivation();
+    test_repeated_dial_bomb();
 
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
