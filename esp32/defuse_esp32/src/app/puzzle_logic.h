@@ -22,14 +22,16 @@
 
 /* ---- Sizes ---- */
 #define PUZZLE_PAIRS            4       /* dial + wire puzzles per set (pair i = dial[i] + wire[i]) */
-#define PUZZLE_DIAL_TEXT_MAX    80      /* OLED budget for the dial clue */
+#define PUZZLE_DIAL_TEXT_MAX    80      /* storage budget (buffers, flash blob) of the dial clue */
 #define PUZZLE_WIRE_TEXT_MAX    60
+#define PUZZLE_DIAL_TEXT_LIMIT  63      /* what validate_puzzle accepts (O3): 3 OLED rows of 21 columns, nothing scrolls */
+#define PUZZLE_WIRE_TEXT_LIMIT  42      /* 2 OLED rows */
 #define PUZZLE_TEXT_MIN         10
 #define PUZZLE_TEXT_BUF         (PUZZLE_DIAL_TEXT_MAX + 1)
 #define PUZZLE_MODEL_LEN        16      /* "qwen3.6:35b" + NUL */
 #define PUZZLE_ANSWER_LEN       8
 #define PUZZLE_EXPLAIN_MAX      60
-#define PUZZLE_MAGIC            0x505A4C31u /* "PZL1": bump when PuzzleSet changes */
+#define PUZZLE_MAGIC            0x505A4C32u /* "PZL2": bump when PuzzleSet changes (PZL2 added Puzzle.level) */
 
 /* ---- Difficulty rule (CLAUDE.md "Difficulty"): deterministic, from the last mornings ---- */
 #define DIFF_WINDOW             7       /* mornings looked at */
@@ -44,6 +46,7 @@
 #define DIFF_MODULES_MAX        PROTO_MAX_MODULES
 
 enum PuzzleKind { PUZZLE_DIAL = 1, PUZZLE_WIRE = 2 };
+#define PUZZLE_LEVEL_MAX        3       /* Puzzle.level: 1 EASY, 2 NORMAL, 3 HARD (the PrLevel numbers), 0 = not rated */
 enum PuzzleSource { PUZZLE_SRC_BANK = 0, PUZZLE_SRC_AI = 1 };
 
 /* One puzzle. memset the whole struct before filling it (it is stored in flash as a blob). */
@@ -58,6 +61,7 @@ struct Puzzle {
     uint8_t source;                         /* PuzzleSource */
     uint8_t verified;                       /* 1 = the checker model reproduced the answer */
     uint8_t attempts;                       /* setter/checker rounds used (0 for the bank) */
+    uint8_t level;                          /* PrLevel rating of the rules behind the text (1 EASY .. 3 HARD, 0 = not rated) */
     char setter[PUZZLE_MODEL_LEN];          /* model that wrote the text */
     char checker[PUZZLE_MODEL_LEN];         /* model that solved it */
     char checker_answer[PUZZLE_ANSWER_LEN]; /* what the checker said (also when it was wrong) */
@@ -87,8 +91,29 @@ bool extract_json_object(const char *text, char *out, size_t out_size);
  * such as 4271. False if the key is missing, malformed, or the value does not fit. */
 bool json_get_string(const char *json, const char *key, char *out, size_t out_size);
 
-/* Text length 10..80 (wire 10..60), printable ASCII only (0x20..0x7E) and, for DIAL, the 4-digit
- * answer must not appear as a literal substring. answer: "4271" for DIAL, "3" for WIRE. */
+/* Why a riddle text is refused (puzzle_text_problem), cheapest checks first. */
+enum PuzzleTextProblem {
+    PTP_OK = 0,
+    PTP_ARGS,               /* NULL text, unknown kind, or an answer of the wrong shape */
+    PTP_TOO_SHORT,          /* fewer than PUZZLE_TEXT_MIN characters */
+    PTP_TOO_LONG,           /* more than PUZZLE_DIAL_TEXT_LIMIT (dial) / PUZZLE_WIRE_TEXT_LIMIT (wire) */
+    PTP_BAD_CHAR,           /* not printable ASCII 0x20..0x7E */
+    PTP_LEAKS_CODE,         /* DIAL: the 4-digit answer appears as a literal substring */
+    PTP_LEAKS_DIGITS,       /* DIAL: the digits of the text, in order, spell the answer ("2,5,8,7") */
+    PTP_LEAKS_NUMBER        /* WIRE (O4): a standalone number token, ordinals included ("3", "3rd"), equals the answer */
+};
+int puzzle_text_problem(const char *text, int kind, const char *answer);
+const char *puzzle_text_problem_name(int problem);
+
+/* Does the text contain `value` as a standalone number token (O4)? A token is a run of digits that
+ * is not glued to a letter or digit before it, and is followed by nothing alphanumeric except an
+ * ordinal suffix (st nd rd th): "3", "n-3", "(3)" and "3rd" are tokens; "w3" and "3m" are not. */
+bool puzzle_text_has_number(const char *text, int value);
+
+/* Text length 10..63 for DIAL (O3), 10..42 for WIRE, printable ASCII only (0x20..0x7E); for DIAL
+ * the 4-digit answer must not appear as a literal substring nor as the digits of the text in order;
+ * for WIRE no standalone number token may equal the answer (O4). answer: "4271" for DIAL, "3" for
+ * WIRE. True exactly when puzzle_text_problem() is PTP_OK. */
 bool validate_puzzle(const char *text, int kind, const char *answer);
 
 /* Checker reply {"answer":"..."} -> normalised answer in out. DIAL: exactly 4 digits (spaces
@@ -191,8 +216,9 @@ int pair_next_unused(uint8_t used_mask, int count);
 /* Marks idx used. When that was the last unused pair the mask restarts at 0 and *cycled is true. */
 uint8_t pair_mark_used(uint8_t used_mask, int idx, int count, bool *cycled);
 
-/* Order in which the checker chain is tried: every model except the setter's first (chain
- * order), the setter's own model last (only used when no other model answers). Returns the count. */
+/* Order in which the checker chain is tried: every model EXCEPT the setter's own, in chain order
+ * (O5: the setter never checks itself, there is no fallback to its own model). Returns the count,
+ * which is 0 when the chain holds no other model. */
 int checker_order(const char *const *chain, int n, const char *setter, int *order_out);
 
 /* Is a stored set still good? Needs at least one AI puzzle and an age of at most max_age_s.

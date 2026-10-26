@@ -52,6 +52,10 @@ $cxxPrograms = @(
     @{ Name = 'test_framelog'; Sources = @('esp32\defuse_esp32\src\app\frame_log.cpp', 'shared\protocol.c') },
     # test_rules: puzzle rule language parser, brute-force prover and tiered difficulty rater (pure; timing printed, built without -O to be pessimistic).
     @{ Name = 'test_rules';    Sources = @('esp32\defuse_esp32\src\app\puzzle_rules.cpp') },
+    # test_gate: the LLM acceptance gate (JSON fields, text rules O3/O4, rules proof + level, checker model) fed canned replies.
+    @{ Name = 'test_gate';     Sources = @('esp32\defuse_esp32\src\app\puzzle_gate.cpp', 'esp32\defuse_esp32\src\app\puzzle_rules.cpp',
+                                           'esp32\defuse_esp32\src\app\puzzle_logic.cpp', 'esp32\defuse_esp32\src\app\history_ring.cpp',
+                                           'esp32\defuse_esp32\src\app\schedule.cpp', 'shared\protocol.c') },
     # test_page: the two embedded web pages (web_page.h, web_eng_page.h), each: 20 KB budget, no external assets, no innerHTML, endpoints.
     @{ Name = 'test_page';     Sources = @() }
 )

@@ -2,11 +2,16 @@
  * Defuse to Wake - nightly puzzle generation (network task only, lowest priority).
  *
  * A SET is 4 dial + 4 wire puzzles; pair i = dial[i] + wire[i] is used for one bomb. Per puzzle:
- *   1. the ESP32 picks the answer (esp_random): a 4-digit code, or a wire 1..N;
- *   2. the SETTER model writes a riddle for it (JSON {"puzzle":".."}), validate_puzzle() checks it;
- *   3. a different CHECKER model gets only the riddle and must answer with the same answer;
- *   4. an exact match keeps the puzzle (source AI, verified); up to 3 attempts, then the
- *      template bank (correct by construction, host-tested).
+ *   1. the ESP32 picks the answer (esp_random): a 4-digit code, or a wire 1..N, and the LEVEL
+ *      (EASY / NORMAL / HARD; NORMAL until the difficulty score exists);
+ *   2. the SETTER model writes a riddle AND the same facts as rules in the puzzle_rules.h language
+ *      (JSON {"puzzle":"..","rules":".."});
+ *   3. the gate (puzzle_gate.cpp) accepts it only if the text passes validate_puzzle, the rules have
+ *      exactly ONE solution equal to our answer, and the solver's rating of the rules equals the level;
+ *   4. a CHECKER model from a different model ID gets only the riddle text and must reach the same
+ *      answer (the setter is never its own checker);
+ *   5. an exact match keeps the puzzle (source AI, verified); up to 3 attempts, then the procedural
+ *      bank (puzzle_bank.cpp: random rules at the same level, proven by the same solver).
  * The LLM never decides an answer. The set is stored in flash; if a run produces no verified
  * puzzle at all the previous set is kept, and with no set at all the bank is used.
  *

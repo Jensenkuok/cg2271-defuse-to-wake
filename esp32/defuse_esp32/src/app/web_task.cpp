@@ -19,6 +19,7 @@
 #include "mem_big.h"
 #include "network_task.h"
 #include "puzzle_gen.h"
+#include "puzzle_rules.h"
 #include "settings.h"
 #include "timetable.h"
 #include "web_logic.h"
@@ -344,6 +345,7 @@ static void put_puzzle(JsonBuf *j, const Puzzle &p, char tag, unsigned idx, bool
     jb_kv_str(j, "id", id);
     jb_kv_str(j, "text", p.text);
     jb_kv_str(j, "src", p.source == PUZZLE_SRC_AI ? "AI" : "BANK");
+    jb_kv_str(j, "level", p.level != 0u ? pr_level_name(p.level) : "");   /* the solver's rating; "" = not rated */
     jb_kv_str(j, "setter", p.setter);
     jb_kv_str(j, "checker", p.checker);
     jb_kv_str(j, "said", p.checker_answer);

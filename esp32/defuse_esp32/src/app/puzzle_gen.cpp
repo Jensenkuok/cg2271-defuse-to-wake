@@ -9,6 +9,8 @@
 #include "flash_store.h"
 #include "llm_client.h"
 #include "mem_big.h"
+#include "puzzle_gate.h"
+#include "puzzle_rules.h"
 
 namespace {
 
@@ -16,29 +18,49 @@ namespace {
 #define SEC_PER_DAY_PZ      86400u
 #define USED_MASK_ALL       ((1u << PUZZLE_PAIRS) - 1u)
 #define SET_LOCK_WAIT_MS    100u
-#define SYS_PROMPT_MAX      256
-#define USER_PROMPT_MAX     48
+#define SYS_PROMPT_MAX      1600        /* the setter prompts (grammar + examples) are ~1.1 KB; PSRAM, see puzzle_gen_init */
+#define USER_PROMPT_MAX     96
 #define LATENCY_MAX_MS      65535u
 
-/* ---- Prompts. The riddle answer is given by the ESP32; the checker never sees it. ---- */
-const char kSetterDialSys[] =
-    "You write one short logic puzzle for a bomb-defusal game. The user gives a secret 4-digit code. "
-    "Write ONE puzzle of at most 80 characters, plain ASCII only, whose only solution is exactly that code "
-    "and which pins down all four digits. Never write the code itself. "
-    "Never list or state the code's digits; the solver must deduce them from relations "
-    "(sums, differences, comparisons, positions). "
-    "Reply ONLY with JSON: {\"puzzle\":\"...\"}";
-const char kSetterWireSys[] =
-    "You write one short riddle for a bomb-defusal game. The user gives the number of wires (numbered 1..N "
-    "from the left) and the wire to cut. Write ONE riddle of at most 60 characters, plain ASCII only, whose "
-    "only solution is that wire number. Never state the number directly; "
-    "the solver must deduce it from relations (sums, differences, comparisons, positions). "
-    "Reply ONLY with JSON: {\"puzzle\":\"...\"}";
+static_assert(APP_PUZZLE_DEFAULT_LEVEL == PR_NORMAL, "O6: until the difficulty score exists the nightly run asks for NORMAL");
+
+/* ---- Prompts. The riddle answer is given by the ESP32; the checker never sees it. The setter writes
+ * the riddle AND the same facts as rules in the puzzle_rules.h language; the ESP32 proves the rules
+ * (one solution = our answer) and rates them, so the level is computed, never taken from the LLM. ---- */
+const char kSetterDialFmt[] =
+    "You write one logic puzzle for a bomb-defusal game. The user gives a secret 4-digit code (d1 is the first digit). "
+    "Requested level: %s. "
+    "Reply ONLY with JSON: {\"puzzle\":\"<riddle>\",\"rules\":\"<rules>\"}. "
+    "RULES use this language, rules separated by ';' (at most 6): terms d1 d2 d3 d4 (digits 0-9), sum (= d1+d2+d3+d4), "
+    "whole numbers 0-99; operators + - *; relations = != < > <= >=; odd(x) even(x); alldiff (all four digits differ). "
+    "The rules must have exactly ONE solution: the secret code. "
+    "PUZZLE: the same facts as the rules, in words or short notation, at most 63 plain ASCII characters; write 1st 2nd 3rd 4th "
+    "for d1 d2 d3 d4. Never write the code or list its digits. "
+    "Levels: EASY = a chain, every rule has one unknown once the earlier digits are known, e.g. "
+    "d1=3;d2=d1+4;d3=d2-5;d4=d1*3 . "
+    "NORMAL = rules that must be solved in pairs, e.g. d1+d2=9;d1-d2=1;d3=2*d4;d3+d4=12 . "
+    "HARD = needs case elimination (trying cases), e.g. sum=17;d4-d1=1;alldiff;d1-d2=4 . "
+    "Write exactly the requested level.";
+const char kSetterWireFmt[] =
+    "You write one riddle for a bomb-defusal game. The user gives the number of wires n (numbered 1..n from the left), "
+    "the wire w to cut and the requested level. Requested level: %s. "
+    "Reply ONLY with JSON: {\"puzzle\":\"<riddle>\",\"rules\":\"<rules>\"}. "
+    "RULES use this language, rules separated by ';' (at most 6): terms w (the wire), n (the wire count), "
+    "whole numbers 0-99; operators + - *; relations = != < > <= >=; odd(x) even(x). "
+    "The rules must have exactly ONE solution w in 1..n: the wire to cut. "
+    "PUZZLE: the same facts as the rules, in words or short notation (w = wire number from the left, n = number of wires), "
+    "at most 42 plain ASCII characters. Never write the wire number itself (no 3, no 3rd). "
+    "Levels: EASY = one rule is enough, e.g. w=n-2 . "
+    "NORMAL = two rules are needed together, neither is enough alone, e.g. odd(w);w>3 for n=5 . "
+    "HARD = three rules are needed, no two are enough, e.g. even(w);w>3;w<6 for n=6 . "
+    "Write exactly the requested level.";
 const char kCheckerDialSys[] =
-    "Solve the puzzle. The answer is a 4-digit code (digits 0-9, leading zeros allowed). "
+    "Solve the puzzle. The answer is a 4-digit code (digits 0-9, leading zeros allowed); 1st 2nd 3rd 4th are its digits "
+    "from the left. "
     "Reply ONLY with JSON: {\"answer\":\"1234\"}";
 const char kCheckerWireFmt[] =
-    "Solve the puzzle. There are %d wires numbered 1..%d from the left. The answer is one wire number. "
+    "Solve the puzzle. There are %d wires numbered 1..%d from the left; w is the wire to cut, n the number of wires. "
+    "The answer is one wire number. "
     "Reply ONLY with JSON: {\"answer\":\"2\"}";
 
 const char *const k_setter_chain[APP_LLM_CHAIN_LEN] = APP_LLM_SETTER_CHAIN;
@@ -53,6 +75,7 @@ struct Gen {
     uint32_t started_unix;
     uint8_t idx;                        /* 0..PAIRS-1 dial, PAIRS..2*PAIRS-1 wire */
     uint8_t attempt;                    /* 1..APP_PUZZLE_ATTEMPTS */
+    uint8_t level;                      /* requested level of this run (PrLevel) */
     uint8_t code[PROTO_DIAL_DIGITS];    /* the answer being worked on */
     int wire_n;
     int wire_k;
@@ -88,7 +111,7 @@ Gen *s_gen;                             /* PSRAM */
 PuzzleSet *s_snap;                      /* PSRAM: scratch copy for puzzle_print_set (~1.1 KB, off the stack) */
 char *s_reply;                          /* PSRAM, APP_LLM_REPLY_MAX bytes */
 char *s_json;                           /* PSRAM, APP_LLM_REPLY_MAX bytes */
-char s_sys[SYS_PROMPT_MAX];
+char *s_sys;                            /* PSRAM, SYS_PROMPT_MAX bytes */
 char s_user[USER_PROMPT_MAX];
 
 bool s_requested;
@@ -126,8 +149,9 @@ void print_puzzle(char tag, unsigned i, const Puzzle &p)
     if (!puzzle_answer_text(p, ans, sizeof(ans))) {
         copy_str(ans, sizeof(ans), "?");
     }
-    Serial.printf("[ai] %c%u %-4s %-10s setter=%s checker=%s said=%s tries=%u %ums/%ums ans=%s", tag, i,
+    Serial.printf("[ai] %c%u %-4s %-6s %-10s setter=%s checker=%s said=%s tries=%u %ums/%ums ans=%s", tag, i,
                   p.source == PUZZLE_SRC_AI ? "AI" : "BANK",
+                  p.level != 0u ? pr_level_name(p.level) : "-",
                   p.verified ? "verified" : (p.setter[0] != '\0' ? "rejected" : "unverified"),
                   p.setter[0] != '\0' ? p.setter : "-", p.checker[0] != '\0' ? p.checker : "-",
                   p.checker_answer[0] != '\0' ? p.checker_answer : "-", (unsigned)p.attempts, (unsigned)p.setter_ms,
@@ -254,6 +278,7 @@ void gen_store_ai(const char *checker_model, uint32_t checker_ms)
     copy_str(p->text, sizeof(p->text), s_gen->text);
     p->source = PUZZLE_SRC_AI;
     p->verified = 1u;
+    p->level = s_gen->level;            /* the solver's rating of the rules equals the requested level (gate) */
     p->attempts = s_gen->attempt;
     copy_str(p->setter, sizeof(p->setter), s_gen->setter);
     copy_str(p->checker, sizeof(p->checker), checker_model);
@@ -334,6 +359,7 @@ void step_next(void)
         snprintf(s_gen->answer, sizeof(s_gen->answer), "%d", s_gen->wire_k);
     }
     s_gen->attempt = 0u;
+    s_gen->level = (uint8_t)APP_PUZZLE_DEFAULT_LEVEL;   /* O6; the difficulty score passes the real level later */
     s_gen->last_setter[0] = '\0';
     s_gen->last_checker[0] = '\0';
     s_gen->last_said[0] = '\0';
@@ -345,24 +371,37 @@ void step_next(void)
     s_gen->phase = PH_ATTEMPT;
 }
 
+/* What the ESP32 asked this attempt for; the gate checks the setter's reply against it. */
+GateTarget cur_target(void)
+{
+    GateTarget t;
+
+    t.kind = cur_is_dial() ? PUZZLE_DIAL : PUZZLE_WIRE;
+    t.wire_count = s_gen->wire_n;
+    t.answer = cur_is_dial() ? (s_gen->code[0] * 1000 + s_gen->code[1] * 100 + s_gen->code[2] * 10 + s_gen->code[3])
+                             : s_gen->wire_k;
+    t.level = s_gen->level;
+    return t;
+}
+
 /* The setter chain: one model per pass; a failing model moves on to the next one. */
 void step_setter(void)
 {
     const char *model = k_setter_chain[s_gen->setter_pos];
-    const char *sys;
     char tag[8];
+    char why[GATE_WHY_MAX];
     LlmReply r;
-    const int kind = cur_is_dial() ? PUZZLE_DIAL : PUZZLE_WIRE;
 
     if (cur_is_dial()) {
-        sys = kSetterDialSys;
-        snprintf(s_user, sizeof(s_user), "Code: %s", s_gen->answer);
+        snprintf(s_sys, SYS_PROMPT_MAX, kSetterDialFmt, pr_level_name(s_gen->level));
+        snprintf(s_user, sizeof(s_user), "Level: %s. Code: %s", pr_level_name(s_gen->level), s_gen->answer);
     } else {
-        sys = kSetterWireSys;
-        snprintf(s_user, sizeof(s_user), "Wires: %d. Cut wire: %d", s_gen->wire_n, s_gen->wire_k);
+        snprintf(s_sys, SYS_PROMPT_MAX, kSetterWireFmt, pr_level_name(s_gen->level));
+        snprintf(s_user, sizeof(s_user), "Level: %s. Wires: %d. Cut wire: %d", pr_level_name(s_gen->level),
+                 s_gen->wire_n, s_gen->wire_k);
     }
     cur_tag(tag, sizeof(tag));
-    r = llm_chat(model, sys, s_user, APP_LLM_MAX_TOKENS, APP_LLM_SETTER_TEMP, s_reply, APP_LLM_REPLY_MAX);
+    r = llm_chat(model, s_sys, s_user, APP_LLM_MAX_TOKENS, APP_LLM_SETTER_TEMP, s_reply, APP_LLM_REPLY_MAX);
     if (r.status != LLM_OK) {
         s_gen->setter_pos++;
         if (s_gen->setter_pos >= APP_LLM_CHAIN_LEN) {
@@ -372,53 +411,58 @@ void step_setter(void)
     }
     s_gen->chain_replied = true;
     s_gen->dead_chains = 0u;
-    if (!extract_json_object(s_reply, s_json, APP_LLM_REPLY_MAX) ||
-        !json_get_string(s_json, "puzzle", s_gen->text, sizeof(s_gen->text))) {
-        Serial.printf("[ai] %s attempt %u: %s did not return a usable {\"puzzle\"} (too long or not JSON)\n", tag,
-                      (unsigned)s_gen->attempt, model);
-        gen_fail_attempt();
-        return;
-    }
-    if (!validate_puzzle(s_gen->text, kind, s_gen->answer)) {
-        Serial.printf("[ai] %s attempt %u: %s riddle rejected by validation: \"%s\"\n", tag, (unsigned)s_gen->attempt,
-                      model, s_gen->text);
+    /* The gate (puzzle_gate.cpp, host-tested): JSON fields, text validation, rules parse + exactly one
+     * solution = our answer + rating = requested level. Cheapest check first; the reason is logged. */
+    if (gate_check_setter(s_reply, cur_target(), s_json, APP_LLM_REPLY_MAX, s_gen->text, sizeof(s_gen->text), why,
+                          sizeof(why)) != GATE_OK) {
+        Serial.printf("[ai] %s attempt %u: %s: %s rejected: %s\n", tag, (unsigned)s_gen->attempt, model,
+                      cur_is_dial() ? "dial" : "wire", why);
         gen_fail_attempt();
         return;
     }
     copy_str(s_gen->setter, sizeof(s_gen->setter), model);
     copy_str(s_gen->last_setter, sizeof(s_gen->last_setter), model);
     s_gen->setter_ms = clamp_ms(r.latency_ms);
-    /* The checker must be a different model whenever another one of its chain answers. */
+    /* O5: the checker is never the setter's own model. If the chain holds no other model the
+     * attempt fails here and the puzzle falls back to the bank, it is not self-checked. */
     s_gen->order_n = checker_order(k_checker_chain, APP_LLM_CHAIN_LEN, model, s_gen->order);
     s_gen->checker_pos = 0;
     s_gen->chain_replied = false;
+    if (s_gen->order_n == 0) {
+        Serial.printf("[ai] %s attempt %u: no checker model differs from the setter %s: rejected\n", tag,
+                      (unsigned)s_gen->attempt, model);
+        gen_fail_attempt();
+        return;
+    }
     s_gen->phase = PH_CHECKER;
 }
 
 void step_checker(void)
 {
     const char *model = k_checker_chain[s_gen->order[s_gen->checker_pos]];
-    const int kind = cur_is_dial() ? PUZZLE_DIAL : PUZZLE_WIRE;
-    char got[PUZZLE_ANSWER_LEN];
+    char got[PUZZLE_ANSWER_LEN] = "";
+    char why[GATE_WHY_MAX] = "";
     char tag[8];
     LlmReply r;
+    int verdict = GATE_CHECKER_UNUSABLE;
 
     if (cur_is_dial()) {
-        copy_str(s_sys, sizeof(s_sys), kCheckerDialSys);
+        copy_str(s_sys, SYS_PROMPT_MAX, kCheckerDialSys);
     } else {
-        snprintf(s_sys, sizeof(s_sys), kCheckerWireFmt, s_gen->wire_n, s_gen->wire_n);
+        snprintf(s_sys, SYS_PROMPT_MAX, kCheckerWireFmt, s_gen->wire_n, s_gen->wire_n);
     }
     cur_tag(tag, sizeof(tag));
+    /* The checker gets only the riddle TEXT: never the rules, never the answer. */
     r = llm_chat(model, s_sys, s_gen->text, APP_LLM_MAX_TOKENS, APP_LLM_CHECKER_TEMP, s_reply, APP_LLM_REPLY_MAX);
     if (r.status == LLM_OK) {
         s_gen->chain_replied = true;
         s_gen->dead_chains = 0u;
+        verdict = gate_check_checker(s_reply, cur_target(), s_gen->setter, model, s_json, APP_LLM_REPLY_MAX, got,
+                                     sizeof(got), why, sizeof(why));
     }
-    if (r.status != LLM_OK ||
-        !extract_json_object(s_reply, s_json, APP_LLM_REPLY_MAX) ||
-        !parse_checker_answer(s_json, kind, s_gen->wire_n, got, sizeof(got))) {
+    if (verdict == GATE_CHECKER_UNUSABLE || verdict == GATE_CHECKER_SAME_MODEL) {
         if (r.status == LLM_OK) {
-            Serial.printf("[ai] %s attempt %u: %s gave no usable answer\n", tag, (unsigned)s_gen->attempt, model);
+            Serial.printf("[ai] %s attempt %u: %s\n", tag, (unsigned)s_gen->attempt, why);
         }
         s_gen->checker_pos++;
         if (s_gen->checker_pos >= s_gen->order_n) {
@@ -428,16 +472,15 @@ void step_checker(void)
     }
     copy_str(s_gen->last_checker, sizeof(s_gen->last_checker), model);
     copy_str(s_gen->last_said, sizeof(s_gen->last_said), got);
-    if (strcmp(got, s_gen->answer) == 0) {
+    if (verdict == GATE_OK) {
         gen_store_ai(model, r.latency_ms);
-        Serial.printf("[ai] %s verified: %s wrote it, %s solved it (attempt %u)\n", tag, s_gen->setter, model,
-                      (unsigned)s_gen->attempt);
+        Serial.printf("[ai] %s verified (%s): %s wrote it, %s solved it (attempt %u)\n", tag,
+                      pr_level_name(s_gen->level), s_gen->setter, model, (unsigned)s_gen->attempt);
         s_gen->idx++;
         s_gen->phase = PH_NEXT;
         return;
     }
-    Serial.printf("[ai] %s attempt %u: %s answered %s, expected %s: rejected\n", tag, (unsigned)s_gen->attempt, model,
-                  got, s_gen->answer);
+    Serial.printf("[ai] %s attempt %u: %s: rejected\n", tag, (unsigned)s_gen->attempt, why);
     gen_fail_attempt();
 }
 
@@ -477,7 +520,9 @@ bool puzzle_gen_init(void)
     s_snap = mem_big_new<PuzzleSet>(1u, "puzzle snapshot");
     s_reply = mem_big_new<char>(APP_LLM_REPLY_MAX, "puzzle LLM reply");
     s_json = mem_big_new<char>(APP_LLM_REPLY_MAX, "puzzle LLM json");
-    if (s_mutex == NULL || s_set == NULL || s_gen == NULL || s_snap == NULL || s_reply == NULL || s_json == NULL) {
+    s_sys = mem_big_new<char>(SYS_PROMPT_MAX, "puzzle LLM prompt");
+    if (s_mutex == NULL || s_set == NULL || s_gen == NULL || s_snap == NULL || s_reply == NULL || s_json == NULL ||
+        s_sys == NULL) {
         return false;
     }
     memset(s_gen, 0, sizeof(Gen));

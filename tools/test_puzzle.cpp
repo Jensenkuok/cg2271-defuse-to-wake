@@ -130,10 +130,10 @@ static void test_validate_puzzle(void)
     /* length limits */
     CHECK(!validate_puzzle(filler(text, 9), PUZZLE_DIAL, "4271"));
     CHECK(validate_puzzle(filler(text, 10), PUZZLE_DIAL, "4271"));
-    CHECK(validate_puzzle(filler(text, 80), PUZZLE_DIAL, "4271"));
-    CHECK(!validate_puzzle(filler(text, 81), PUZZLE_DIAL, "4271"));
-    CHECK(validate_puzzle(filler(text, 60), PUZZLE_WIRE, "3"));
-    CHECK(!validate_puzzle(filler(text, 61), PUZZLE_WIRE, "3"));
+    CHECK(validate_puzzle(filler(text, 63), PUZZLE_DIAL, "4271"));     /* O3: 3 OLED rows of 21 */
+    CHECK(!validate_puzzle(filler(text, 64), PUZZLE_DIAL, "4271"));
+    CHECK(validate_puzzle(filler(text, 42), PUZZLE_WIRE, "3"));         /* O3: 2 OLED rows */
+    CHECK(!validate_puzzle(filler(text, 43), PUZZLE_WIRE, "3"));
     CHECK(!validate_puzzle("", PUZZLE_WIRE, "3"));
     /* character set */
     CHECK(!validate_puzzle("caf\xC3\xA9 is not ascii at all", PUZZLE_WIRE, "3"));
@@ -143,7 +143,9 @@ static void test_validate_puzzle(void)
     CHECK(validate_puzzle(" !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ ok", PUZZLE_WIRE, "3"));
     /* wire answers may appear in the text (a single digit is not a giveaway) */
     CHECK(validate_puzzle("Cut the third wire of 5 wires", PUZZLE_WIRE, "3"));
-    CHECK(validate_puzzle("wire 3 of 5 is the one!", PUZZLE_WIRE, "3"));
+    CHECK(validate_puzzle("wire 4 of 5 is the one!", PUZZLE_WIRE, "3"));
+    /* O4 (replaces the old "the wire number may appear" rule): a standalone number token equal to the answer is a leak */
+    CHECK(!validate_puzzle("wire 3 of 5 is the one!", PUZZLE_WIRE, "3"));
 }
 
 static void test_parse_checker_answer(void)
@@ -481,7 +483,7 @@ static int solve_wire_text(const char *text, int *wires)
         }
         return -1;
     }
-    if (sscanf(text, "%u wires. Skip %u from the %7s cut the next", &n, &x, dir) == 3) {
+    if (sscanf(text, "%u wires. Skip %u from %7s cut next", &n, &x, dir) == 3) {
         *wires = (int)n;
         if (strncmp(dir, "left,", 5) == 0) {
             return (int)x + 1;
@@ -522,7 +524,7 @@ static void test_wire_templates_all(void)
                 CHECK(w.n == n && (unsigned)w.family == variant % WIRE_FAMILIES);
                 CHECK(solve_wire_struct(w) == k);
                 CHECK(solve_wire_text(text, &wires) == k && wires == n);
-                CHECK(validate_puzzle(text, PUZZLE_WIRE, "1"));
+                CHECK(validate_puzzle(text, PUZZLE_WIRE, "99"));        /* printable, fits; "99": no such wire (the old texts name theirs, see O4) */
                 solved++;
             }
         }
@@ -539,8 +541,8 @@ static void test_wire_template_shapes(void)
     CHECK(strcmp((wire_template(3, 5, 0, text, sizeof(text)), text), "5 wires. Cut the 3rd from the left") == 0);
     CHECK(strcmp((wire_template(3, 5, 1, text, sizeof(text)), text), "5 wires. Cut the 3rd from the right") == 0);
     CHECK(strcmp((wire_template(2, 6, 1, text, sizeof(text)), text), "6 wires. Cut the 5th from the right") == 0);
-    CHECK(strcmp((wire_template(4, 6, 3, text, sizeof(text)), text), "6 wires. Skip 3 from the left, cut the next") == 0);
-    CHECK(strcmp((wire_template(4, 6, 7, text, sizeof(text)), text), "6 wires. Skip 2 from the right, cut the next") == 0);
+    CHECK(strcmp((wire_template(4, 6, 3, text, sizeof(text)), text), "6 wires. Skip 3 from left, cut next") == 0);
+    CHECK(strcmp((wire_template(4, 6, 7, text, sizeof(text)), text), "6 wires. Skip 2 from right, cut next") == 0);
     CHECK(wire_template(3, 5, 0, tiny, sizeof(tiny)) == 0 && tiny[0] == '\0');
     /* out-of-range input is clamped, never produces a wrong or crashing clue */
     w = wire_clue_build(9, 4, 0);
@@ -565,6 +567,7 @@ static void test_bank_puzzles(void)
     puzzle_fill_bank_wire(&p, 5, 4, 2);
     CHECK(p.kind == PUZZLE_WIRE && p.wire_count == 5 && p.wire_k == 4 && p.source == PUZZLE_SRC_BANK);
     CHECK(validate_puzzle(p.text, PUZZLE_WIRE, "4"));
+    CHECK(p.level == 0);                                                /* the old fill functions do not rate */
     CHECK(puzzle_answer_text(p, ans, sizeof(ans)) && strcmp(ans, "4") == 0);
     memset(&p, 0, sizeof(p));
     CHECK(!puzzle_answer_text(p, ans, sizeof(ans)));                    /* unknown kind */
@@ -594,7 +597,7 @@ static void test_bank_set(void)
             dial_code_text(s.dial[i].dial_code, digits);
             CHECK(validate_puzzle(s.dial[i].text, PUZZLE_DIAL, digits));
             CHECK(puzzle_answer_text(s.wire[i], ans, sizeof(ans)));
-            CHECK(validate_puzzle(s.wire[i].text, PUZZLE_WIRE, ans));
+            CHECK(validate_puzzle(s.wire[i].text, PUZZLE_WIRE, "99"));   /* old wire texts name their wire: O4 applies to LLM and procedural texts */
         }
     }
     /* a damaged set is refused */
@@ -856,22 +859,34 @@ static void test_checker_order(void)
     static const char *const chain[] = { "x-test-1", "x-test-2", "qwen3.6:35b", "default" };
     int order[4];
 
-    CHECK(checker_order(chain, 4, "x-test-2", order) == 4);
-    CHECK(order[0] == 0 && order[1] == 2 && order[2] == 3 && order[3] == 1);   /* setter's own model last */
-    CHECK(checker_order(chain, 4, "x-test-1", order) == 4);
-    CHECK(order[0] == 1 && order[1] == 2 && order[2] == 3 && order[3] == 0);
-    CHECK(checker_order(chain, 4, "default", order) == 4);
-    CHECK(order[0] == 0 && order[1] == 1 && order[2] == 2 && order[3] == 3);
-    CHECK(checker_order(chain, 4, "unknown", order) == 4);
+    /* O5: the setter's own model is never a checker (it used to be tried last) */
+    CHECK(checker_order(chain, 4, "x-test-2", order) == 3);
+    CHECK(order[0] == 0 && order[1] == 2 && order[2] == 3);
+    CHECK(checker_order(chain, 4, "x-test-1", order) == 3);
+    CHECK(order[0] == 1 && order[1] == 2 && order[2] == 3);
+    CHECK(checker_order(chain, 4, "default", order) == 3);
+    CHECK(order[0] == 0 && order[1] == 1 && order[2] == 2);
+    CHECK(checker_order(chain, 4, "unknown", order) == 4);              /* not in the chain: all four */
     CHECK(order[0] == 0 && order[3] == 3);
     CHECK(checker_order(chain, 4, NULL, order) == 4);
     CHECK(checker_order(chain, 0, "x-test-2", order) == 0);
-    /* the first entry is never the setter's own model while another model exists */
+    {
+        static const char *const one[] = { "only" };
+
+        CHECK(checker_order(one, 1, "only", order) == 0);                /* no other model: no checker at all */
+        CHECK(checker_order(one, 1, "other", order) == 1 && order[0] == 0);
+    }
     {
         int s;
+        int i;
 
         for (s = 0; s < 4; s++) {
-            CHECK(checker_order(chain, 4, chain[s], order) == 4 && strcmp(chain[order[0]], chain[s]) != 0);
+            const int n = checker_order(chain, 4, chain[s], order);
+
+            CHECK(n == 3);
+            for (i = 0; i < n; i++) {
+                CHECK(strcmp(chain[order[i]], chain[s]) != 0);
+            }
         }
     }
 }

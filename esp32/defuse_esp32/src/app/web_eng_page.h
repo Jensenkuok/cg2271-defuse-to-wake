@@ -176,6 +176,7 @@ function renderAi(s){
   put($("ai"),...a.puzzles.map(p=>{
     const d=el("div","pz"),r=el("div","row");
     r.appendChild(el("b",0,p.id));r.appendChild(chip(p.src,p.src==="AI"?"ok":"warn"));
+    if(p.level)r.appendChild(chip(p.level,""));
     r.appendChild(chip(p.ok?"verified":(p.setter?"rejected":"unchecked"),p.ok?"ok":"bad"));
     if(p.active)r.appendChild(chip("ACTIVE","hot"));
     d.appendChild(r);d.appendChild(el("div","txt",p.text));
