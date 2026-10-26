@@ -69,8 +69,8 @@ foreach ($p in $cxxPrograms) {
 $copies = @(
     @{ From = 'shared'; To = 'esp32\defuse_esp32\src\shared'; Files = @('protocol.h', 'protocol.c', 'proto_link.h', 'proto_link.c') },
     @{ From = 'shared'; To = 'mcxc444\defuse_mcx\source\shared'; Files = @('protocol.h', 'protocol.c', 'proto_link.h', 'proto_link.c') },
-    @{ From = 'game';   To = 'mcxc444\defuse_mcx\source\game'; Files = @('game_config.h', 'game.h', 'game.c') },
-    @{ From = 'game';   To = 'esp32\defuse_esp32\src\game'; Files = @('game_config.h') }
+    @{ From = 'game';   To = 'mcxc444\defuse_mcx\source\game'; Files = @('game_config.h', 'game_dial.h', 'game.h', 'game.c') },
+    @{ From = 'game';   To = 'esp32\defuse_esp32\src\game'; Files = @('game_config.h', 'game_dial.h') }
 )
 foreach ($c in $copies) {
     foreach ($f in $c.Files) {

@@ -258,16 +258,6 @@ static void dial_step(game_t *g, int32_t step)
     push_sound(g, GAME_SOUND_CLICK);
 }
 
-void game_dial_code(const uint8_t base[PROTO_DIAL_DIGITS], uint8_t module_idx,
-                    uint8_t out[PROTO_DIAL_DIGITS])
-{
-    uint8_t i;
-
-    for (i = 0u; i < PROTO_DIAL_DIGITS; i++) {
-        out[i] = (uint8_t)((base[i] + GAME_DIAL_REPEAT_STEP * module_idx) % GAME_DIAL_BASE);
-    }
-}
-
 static void dial_press(game_t *g, uint32_t now_ms)
 {
     uint8_t code[PROTO_DIAL_DIGITS];
