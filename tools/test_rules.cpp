@@ -677,6 +677,242 @@ static void test_random_counting(void)
     CHECK(skipped < RANDOM_SETS / 10);
 }
 
+/* ================= independent tier checker =================
+ * Written separately from puzzle_rules.cpp (O7): the production solver labels the tiers, so the
+ * tests need a second implementation of the DEFINITION of the tiers to compare against.
+ *   EASY   = single-rule filtering to a fixpoint: a rule with exactly one undecided digit removes
+ *            the values of that digit that break it.
+ *   NORMAL = EASY plus (a) pairwise arc consistency: a rule with exactly two undecided digits
+ *            keeps a value of one only while some value of the other satisfies the rule, and
+ *            (b) rule-pair joint filtering: two rules over the same two undecided digits keep an
+ *            (a, b) pair only when BOTH hold.
+ * A set is solved at a tier when every digit domain ends up with one value.
+ * The model is a callback pair (rule holds, rule digit mask) so that it can run on a rule set
+ * built as an expression tree (no parser involved) and on a parsed PrSet (own evaluator). */
+struct TierModel {
+    int nrules;
+    unsigned vars[PR_MAX_RULES];            /* bit i = digit i is used by the rule */
+    bool (*holds)(const void *ctx, int rule, const int d[4]);
+    const void *ctx;
+};
+
+struct IDom {
+    bool in[4][10];
+};
+
+static int ic_size(const IDom &dom, int v)
+{
+    int n = 0;
+    for (int a = 0; a < 10; a++) n += dom.in[v][a] ? 1 : 0;
+    return n;
+}
+
+static int ic_first(const IDom &dom, int v)
+{
+    for (int a = 0; a < 10; a++) if (dom.in[v][a]) return a;
+    return 0;
+}
+
+/* Digits of the rule that are still undecided. */
+static unsigned ic_undecided(const TierModel &m, const IDom &dom, int rule)
+{
+    unsigned u = 0;
+    for (int v = 0; v < 4; v++) {
+        if ((m.vars[rule] & (1u << v)) && ic_size(dom, v) > 1) u |= 1u << v;
+    }
+    return u;
+}
+
+/* Keeps, for each digit in freev[0..nf), only the values that have a support: an assignment of the
+ * free digits (the others stay at their first value) satisfying all `nr` rules. Returns true when
+ * a domain shrank. */
+static bool ic_filter(const TierModel &m, IDom *dom, const int *rules, int nr, const int *freev, int nf)
+{
+    bool keep[2][10];
+    memset(keep, 0, sizeof keep);
+    int d[4];
+    for (int v = 0; v < 4; v++) d[v] = ic_first(*dom, v);
+    for (int a = 0; a < 10; a++) {
+        if (!dom->in[freev[0]][a]) continue;
+        for (int b = 0; b < (nf == 2 ? 10 : 1); b++) {
+            if (nf == 2 && !dom->in[freev[1]][b]) continue;
+            d[freev[0]] = a;
+            if (nf == 2) d[freev[1]] = b;
+            bool ok = true;
+            for (int i = 0; i < nr && ok; i++) ok = m.holds(m.ctx, rules[i], d);
+            if (ok) {
+                keep[0][a] = true;
+                if (nf == 2) keep[1][b] = true;
+            }
+        }
+    }
+    bool changed = false;
+    for (int k = 0; k < nf; k++) {
+        for (int a = 0; a < 10; a++) {
+            if (dom->in[freev[k]][a] && !keep[k][a]) {
+                dom->in[freev[k]][a] = false;
+                changed = true;
+            }
+        }
+    }
+    return changed;
+}
+
+static void ic_digits(unsigned u, int *x)
+{
+    int n = 0;
+    for (int v = 0; v < 4; v++) if (u & (1u << v)) x[n++] = v;
+}
+
+static bool ic_popcount_is(unsigned u, int want)
+{
+    int n = 0;
+    for (int v = 0; v < 4; v++) if (u & (1u << v)) n++;
+    return n == want;
+}
+
+static bool ic_solves(const TierModel &m, bool normal)
+{
+    IDom dom;
+    for (int v = 0; v < 4; v++) for (int a = 0; a < 10; a++) dom.in[v][a] = true;
+    for (;;) {
+        bool changed = false;
+        for (int i = 0; i < m.nrules; i++) {
+            const unsigned u = ic_undecided(m, dom, i);
+            int x[2] = { 0, 0 };
+            if (ic_popcount_is(u, 1)) {
+                ic_digits(u, x);
+                changed = ic_filter(m, &dom, &i, 1, x, 1) || changed;
+            } else if (normal && ic_popcount_is(u, 2)) {
+                ic_digits(u, x);
+                changed = ic_filter(m, &dom, &i, 1, x, 2) || changed;
+            }
+        }
+        if (normal) {
+            for (int i = 0; i < m.nrules; i++) {
+                for (int j = i + 1; j < m.nrules; j++) {
+                    const unsigned u = ic_undecided(m, dom, i);
+                    if (!ic_popcount_is(u, 2) || u != ic_undecided(m, dom, j)) continue;
+                    int x[2] = { 0, 0 };
+                    const int pair[2] = { i, j };
+                    ic_digits(u, x);
+                    changed = ic_filter(m, &dom, pair, 2, x, 2) || changed;
+                }
+            }
+        }
+        for (int v = 0; v < 4; v++) if (ic_size(dom, v) == 0) return false;
+        if (!changed) break;
+    }
+    for (int v = 0; v < 4; v++) if (ic_size(dom, v) != 1) return false;
+    return true;
+}
+
+/* The level the tier definitions give for a set known to have exactly one solution. */
+static int ic_level(const TierModel &m)
+{
+    if (ic_solves(m, false)) return PR_EASY;
+    if (ic_solves(m, true)) return PR_NORMAL;
+    return PR_HARD;
+}
+
+/* ---- adapter 1: the random expression tree (no parser involved) ---- */
+static unsigned t_vars_of(const TSet *ts, int i)
+{
+    const TExpr *e = &ts->e[i];
+    switch (e->op) {
+    case 1: return 1u << e->a;
+    case 2: return 0xFu;
+    case 4: case 5: case 6: return t_vars_of(ts, e->a) | t_vars_of(ts, e->b);
+    default: return 0;
+    }
+}
+
+static bool tm_holds(const void *ctx, int rule, const int d[4])
+{
+    const TSet *ts = (const TSet *)ctx;
+    return t_rule_holds(ts, &ts->r[rule], d, 0);
+}
+
+static void tm_from_tset(const TSet *ts, TierModel *m)
+{
+    m->nrules = ts->nr;
+    m->holds = tm_holds;
+    m->ctx = ts;
+    for (int i = 0; i < ts->nr; i++) {
+        const TRule *r = &ts->r[i];
+        m->vars[i] = (r->kind == 3) ? 0xFu : (t_vars_of(ts, r->l) | (r->kind == 0 ? t_vars_of(ts, r->r) : 0u));
+    }
+}
+
+/* ---- adapter 2: a parsed PrSet, evaluated by this file's own walker over the public nodes ---- */
+static long long pn_eval(const PrSet *s, int i, const int d[4])
+{
+    const PrNode *n = &s->nodes[i];
+    switch (n->op) {
+    case PR_N_CONST: return n->value;
+    case PR_N_DIGIT: return d[n->a];
+    case PR_N_SUM: return d[0] + d[1] + d[2] + d[3];
+    case PR_N_ADD: return pn_eval(s, n->a, d) + pn_eval(s, n->b, d);
+    case PR_N_SUB: return pn_eval(s, n->a, d) - pn_eval(s, n->b, d);
+    case PR_N_MUL: return pn_eval(s, n->a, d) * pn_eval(s, n->b, d);
+    default: return 0;
+    }
+}
+
+static unsigned pn_vars(const PrSet *s, int i)
+{
+    const PrNode *n = &s->nodes[i];
+    switch (n->op) {
+    case PR_N_DIGIT: return 1u << n->a;
+    case PR_N_SUM: return 0xFu;
+    case PR_N_ADD: case PR_N_SUB: case PR_N_MUL: return pn_vars(s, n->a) | pn_vars(s, n->b);
+    default: return 0;
+    }
+}
+
+static bool pm_holds(const void *ctx, int rule, const int d[4])
+{
+    const PrSet *s = (const PrSet *)ctx;
+    const PrRule *r = &s->rules[rule];
+    if (r->kind == PR_R_ALLDIFF) {
+        for (int i = 0; i < 4; i++) for (int j = i + 1; j < 4; j++) if (d[i] == d[j]) return false;
+        return true;
+    }
+    const long long a = pn_eval(s, r->lhs, d);
+    if (r->kind == PR_R_ODD) return (a % 2 + 2) % 2 == 1;
+    if (r->kind == PR_R_EVEN) return (a % 2 + 2) % 2 == 0;
+    const long long b = pn_eval(s, r->rhs, d);
+    switch (r->rel) {
+    case PR_REL_EQ: return a == b;
+    case PR_REL_NE: return a != b;
+    case PR_REL_LT: return a < b;
+    case PR_REL_GT: return a > b;
+    case PR_REL_LE: return a <= b;
+    default: return a >= b;
+    }
+}
+
+static void pm_from_prset(const PrSet *s, TierModel *m)
+{
+    m->nrules = s->rule_count;
+    m->holds = pm_holds;
+    m->ctx = s;
+    for (int i = 0; i < s->rule_count; i++) {
+        const PrRule *r = &s->rules[i];
+        m->vars[i] = (r->kind == PR_R_ALLDIFF) ? 0xFu : (pn_vars(s, r->lhs) | (r->kind == PR_R_REL ? pn_vars(s, r->rhs) : 0u));
+    }
+}
+
+/* Level the independent checker gives a unique parsed dial text, -1 if it does not parse. */
+static int ic_level_of_text(const char *text)
+{
+    PrSet s;
+    TierModel m;
+    if (parse_dial(text, &s) != PR_OK) return -1;
+    pm_from_prset(&s, &m);
+    return ic_level(m);
+}
+
 /* ================= rater ================= */
 static void check_dial_set(const char *text, int solution, int level)
 {
@@ -685,6 +921,7 @@ static void check_dial_set(const char *text, int solution, int level)
     CHECK_TEXT(parse_dial(text, &s) == PR_OK, text);
     CHECK_TEXT(pr_count_solutions(&s, &first, 0) == 1 && first == solution, text);
     CHECK_TEXT(pr_rate(&s) == level, text);
+    CHECK_TEXT(ic_level_of_text(text) == level, text);               /* independent tier checker agrees */
     int code = -1;
     const int easy = pr_propagate_dial(&s, PR_TIER_EASY, &code);
     CHECK_TEXT(easy == (level == PR_EASY ? 1 : 0), text);
@@ -868,12 +1105,65 @@ static void test_random_unique_rater(void)
         CHECK_TEXT(!easy || normal, text.c_str());
         const int level = pr_rate(&s);
         CHECK_TEXT(level == (easy ? PR_EASY : (normal ? PR_NORMAL : PR_HARD)), text.c_str());
+        CHECK_TEXT(ic_level_of_text(text.c_str()) == level, text.c_str());
         levels[level]++;
         sets++;
     }
     printf("  random unique rater: %d unique sets, easy %d, normal %d, hard %d\n",
            sets, levels[PR_EASY], levels[PR_NORMAL], levels[PR_HARD]);
     CHECK(levels[PR_EASY] >= 5 && levels[PR_NORMAL] >= 5 && levels[PR_HARD] >= 5);
+}
+
+/* Planted random expression trees that are unique (several hundred): the tree is the ground truth
+ * (no parser in the loop for the count or the tiers), the parsed text goes through pr_rate. */
+static void test_independent_tiers(void)
+{
+    int levels[6] = { 0, 0, 0, 0, 0, 0 };
+    int sets = 0;
+    int disagreements = 0;
+    for (int it = 0; it < 6000 && sets < 400; it++) {
+        TSet ts;
+        int tc = 0;
+        int tw = 0;
+        t_make_set(&ts, false, true, &tc, &tw);
+        if (ts.nr == 0) continue;
+        int first = -1;
+        if (t_count(&ts, &first) != 1) continue;
+        const std::string text = t_text(&ts);
+        PrSet s;
+        if (parse_dial(text.c_str(), &s) != PR_OK) continue;
+        TierModel m;
+        tm_from_tset(&ts, &m);
+        const int expected = ic_level(m);
+        const int got = pr_rate(&s);
+        if (got != expected) disagreements++;
+        CHECK_TEXT(got == expected, text.c_str());
+        CHECK_TEXT(ic_level_of_text(text.c_str()) == expected, text.c_str());
+        levels[got]++;
+        sets++;
+    }
+    printf("  independent tiers: %d unique random trees, easy %d, normal %d, hard %d, disagreements %d\n",
+           sets, levels[PR_EASY], levels[PR_NORMAL], levels[PR_HARD], disagreements);
+    /* unique trees are almost all pinned by "dN = value" rules, hence EASY; the NORMAL and HARD
+     * coverage of the independent checker comes from test_random_unique_rater (400 text sets) */
+    CHECK(sets >= 300);
+    CHECK(levels[PR_EASY] >= 5);
+}
+
+/* A lone relation character at the end of the text must give a syntax error without reading
+ * text[pos + 1] past the terminator (O7a). The buffers are exact-size heap blocks so that a run
+ * under address sanitizer would flag an over-read. */
+static void test_parse_rel_no_overread(void)
+{
+    static const char *const cases[] = { "d1!", "d1<", "d1>", "d1=", "d1", "d1 !", "d1 <", "d1 >" };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        const size_t len = strlen(cases[i]);
+        char *buf = (char *)malloc(len + 1);
+        memcpy(buf, cases[i], len + 1);
+        PrSet s;
+        CHECK_TEXT(parse_dial(buf, &s) != PR_OK, cases[i]);
+        free(buf);
+    }
 }
 
 /* ================= pr_check ================= */
@@ -989,6 +1279,8 @@ int main(void)
     test_rater_wire();
     test_random_rater();
     test_random_unique_rater();
+    test_independent_tiers();
+    test_parse_rel_no_overread();
     test_check();
     printf("test_rules: timing\n");
     test_timing();

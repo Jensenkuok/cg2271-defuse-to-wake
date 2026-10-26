@@ -313,7 +313,9 @@ Val parse_expr(Parser *p)
 bool parse_rel(Parser *p, uint8_t *rel)
 {
     const char c = peek(p);
-    const char next = p->text[p->pos + 1];
+    /* Reading text[pos + 1] is only legal when c is not the terminator, so it is done after the
+     * end check and only for the characters that can start a two-character relation. */
+    const char next = (c == '!' || c == '<' || c == '>') ? p->text[p->pos + 1] : 'x';  /* 'x': never a relation character */
     if (c == '=') {
         *rel = PR_REL_EQ;
         p->pos += 1;
