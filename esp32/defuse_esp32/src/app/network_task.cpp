@@ -13,6 +13,7 @@
 #include "briefing.h"
 #include "config.h"
 #include "fault.h"
+#include "gyro_task.h"
 #include "flash_store.h"
 #include "history.h"
 #include "i2c_bus.h"
@@ -496,12 +497,14 @@ static void run_command(NetCtx &c, const char *cmd, size_t len, uint32_t unix_no
         bomb_config_print_difficulty();
     } else if (strcmp(cmd, "i2c") == 0) {
         i2c_bus_report(false);
+    } else if (strcmp(cmd, "mpu") == 0) {
+        gyro_task_dump_regs();
     } else if (strcmp(cmd, "brief") == 0) {
         briefing_request();
         Serial.println("[cmd] briefing run requested");
     } else {
         print_unknown_command(cmd, len);
-        Serial.println("[cmd] commands: lead <15..180> | link <url> | refresh | resched | hist | puzzles | ai | diff | brief | i2c");
+        Serial.println("[cmd] commands: lead <15..180> | link <url> | refresh | resched | hist | puzzles | ai | diff | brief | i2c | mpu");
     }
 }
 

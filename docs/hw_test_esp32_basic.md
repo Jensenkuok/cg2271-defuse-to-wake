@@ -129,8 +129,19 @@ Gyro boot line and what it means:
 - `WHO_AM_I` of 0x00 or 0xFF, or a failed read, counts as a failed init (floating or dead bus).
 - `read_err=N` in the 5 s line counts samples whose I2C read failed (skipped, not used). A few on
   a marginal 100 kHz bus are tolerable; a number that grows by about 250 per line means the bus is down.
-- If init fails the gyro retries every 5 s (`[gyro] MPU init failed ... retrying every 5 s`, logged
-  once, then at most once a minute). A loose wire or late power-up recovers without a reset.
+- If init fails the gyro retries every 5 s and logs the reason, e.g.
+  `[gyro] MPU init failed at 0x68: WHO_AM_I read requestFrom got 0/1 (endTx=0); retrying every 5 s`.
+  The first failure and any changed reason are always printed; an unchanged reason repeats at most once a minute.
+  A loose wire or late power-up recovers without a reset. What the reason means:
+  - `probe: no ACK`, or `endTx=2` (address NACK): wrong address or wiring (power, SDA/SCL, AD0).
+  - `endTx=3` (data NACK), `endTx=5` (timeout), or `reset/wake/CONFIG/ACCEL_CONFIG write endTx=N`: flaky SDA/SCL joint or a solder bridge.
+  - `WHO_AM_I=0x00` (stuck low) or `0xFF` (floating): SDA stuck low or not connected to the chip.
+  - `requestFrom got N/1` with `endTx=0`: the read is cut off, usually a bad joint.
+  - `bus busy (lock timeout)`: another task (OLED) held the I2C bus for over 30 ms.
+- Serial command `mpu`: read-only dump (no writes, safe while the gyro runs) for 0x68 and 0x69 of WHO_AM_I (0x75),
+  PWR_MGMT_1 (0x6B), ACCEL_CONFIG (0x1C) and one raw accel sample (0x3B, three signed values), each with
+  `[endTx=<code> got <n>/<want>]`. `--` means that read failed; read the codes as above. After a good init expect
+  PWR_MGMT_1=0x01 and ACCEL_CONFIG=0x18; the accel Z value is about +-2048 when the board lies flat.
 
 ### 3.4 Wi-Fi and NTP time sync
 With real hotspot details in `secrets.h` and the hotspot on:

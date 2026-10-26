@@ -102,6 +102,8 @@
 #define APP_MPU_ACCEL_RANGE_16G     0x18    /* shakes exceed 8 g */
 #define APP_MPU_LSB_PER_G           2048.0f /* at +-16 g */
 #define APP_MPU_ACCEL_BYTES         6u
+#define APP_MPU_REG_BYTES           1u      /* single-register reads */
+#define APP_GYRO_REASON_LEN         80u     /* init failure reason text buffer */
 
 /* ---- Network ---- */
 #define APP_WIFI_POLL_CONNECTED_MS  2000u   /* WiFiMulti.run() cadence when connected */
