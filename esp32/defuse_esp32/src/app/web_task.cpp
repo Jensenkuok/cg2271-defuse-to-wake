@@ -23,6 +23,7 @@
 #include "timetable.h"
 #include "web_logic.h"
 #include "web_page.h"
+#include "web_eng_page.h"
 
 #define TIME_TEXT_LEN       48
 #define LEAD_TEXT_MAX       15u
@@ -498,6 +499,12 @@ static void handle_root(void)
     s_server.send_P(200, "text/html; charset=utf-8", WEB_PAGE, sizeof(WEB_PAGE) - 1u);
 }
 
+static void handle_eng(void)
+{
+    s_server.sendHeader("Cache-Control", "no-store");
+    s_server.send_P(200, "text/html; charset=utf-8", WEB_ENG_PAGE, sizeof(WEB_ENG_PAGE) - 1u);
+}
+
 static void handle_status(void)
 {
     JsonBuf j;
@@ -716,6 +723,7 @@ bool web_task_start(void)
     }
     s_server.collectHeaders(k_headers, 1u);
     s_server.on("/", HTTP_GET, handle_root);
+    s_server.on("/eng", HTTP_GET, handle_eng);
     s_server.on("/favicon.ico", HTTP_GET, handle_favicon);
     s_server.on("/api/status", HTTP_GET, handle_status);
     s_server.on("/api/settings", HTTP_GET, send_settings);

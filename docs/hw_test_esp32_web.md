@@ -1,8 +1,8 @@
-# Hardware test: ESP32 local web page (My mornings + Engineering)
+# Hardware test: ESP32 local web page (settings page + engineering panel at /eng)
 
 Goal: check on the bench that the device serves its own web page on the hotspot, that the page shows
-the real state (alarm, classes, history, live bomb, link frames, AI puzzles), that the settings form
-changes the alarm and rejects bad input, and that the two fault buttons demonstrate the link
+the real state (next alarm on the main page; classes, history, live bomb, link frames, AI puzzles on the
+/eng panel), that the settings form changes the alarm and rejects bad input, and that the two fault buttons demonstrate the link
 protocol's recovery and the offline fallbacks without touching the game. Rubric lines: ESP32 use,
 Comms protocol (frame log, NACK + retransmit), Online (fallbacks), Task design (own lowest-priority
 task), Sync (copies under locks).
@@ -60,18 +60,21 @@ Two behaviours to know before you test:
 
 ## 2. Tests
 
-### 2.1 The page loads, mornings tab
-Open the page. PASS: it loads in about a second; the header shows the clock and the IP;
-**My mornings** shows the next alarm (big time, date, class, venue, "rings in ..."), today's classes
-(or "no classes"), tonight's bomb difficulty with its explanation, the briefing and coach text, the
-streak chip and the table of up to 14 mornings (newest first), and the settings form filled with the
-stored link and lead. Compare the alarm with the OLED IDLE bottom line and the Serial `[sched] next
-alarm ...` line: same time.
+### 2.1 The pages load
+Open `http://defuse.local/`. PASS: it loads in about a second; the main page (settings) shows
+"Next alarm", the alarm time big, a muted line such as `Fri · QF2104 LEC at 12:00` (or "No alarm
+set"), the NUSMods link field and the lead slider (15-180, step 5, live "60 min" readout) filled
+with the stored values, **Save** and **Ring now**. It has no link to the panel. Compare the alarm
+with the OLED IDLE bottom line and the Serial `[sched] next alarm ...` line: same time.
+Then open `http://defuse.local/eng`: its header has the clock and the IP and a **Settings** link
+back to `/`; it shows today's classes (or "no classes"), tonight's bomb difficulty with its
+explanation, the briefing and coach text, the streak chip and the table of up to 14 mornings (newest
+first), then the bomb, link, AI, system and fault panels.
 
 ### 2.2 Change `lead_min`, the alarm moves
-In Settings change the lead from 60 to 90 and **Save**. PASS: the form says `Saved: 90 min lead;
+On the main page move the lead slider from 60 to 90 and **Save**. PASS: the form says `Saved: 90 min lead;
 timetable refresh started`; the Serial shows `[web] settings saved: lead 90 min`, `[cfg] settings
-changed: timetable refresh + reschedule` and `[sched] next alarm ... lead 90 min`; the alarm card
+changed: timetable refresh + reschedule` and `[sched] next alarm ... lead 90 min`; the alarm time
 moves 30 minutes earlier within a few seconds (the OLED too); with the MCX not in a bomb session a
 `SET_ALARM` is sent. Change it back to 60.
 
@@ -98,8 +101,8 @@ ARMED `RING IN 00:03`; the bomb starts 3 s later (the same path and delay as the
 a bomb is running **Ring now** answers `a bomb is already running` and does nothing; with the MCX
 unplugged it answers `the MCX link is down`.
 
-### 2.5 The Engineering tab follows the bomb
-Open **Engineering** and run a bomb. PASS: the big timer, the strike dots, the module name with
+### 2.5 The engineering panel follows the bomb
+Open `/eng` and run a bomb. PASS: the big timer, the strike dots, the module name with
 `module n of N`, the puzzle text and (after one strike) the hint match the OLED, and a change on the
 bomb (dial digit, cursor, cut wire, tripwire distance and hold) shows on the page within about
 0.5 s (film the OLED and the phone together if you want a number). The link panel shows `UP`, the
@@ -114,7 +117,7 @@ hold ends and the MCX is IDLE again (no alarm armed) all answers are shown (engi
 PASS: you never see a dial code or wire of the bomb you are playing on the page.
 
 ### 2.7 Corrupt next packet: NACK, retransmit, bomb unaffected
-1. On Engineering press **Corrupt next packet** and confirm. The button text says `(armed...)`.
+1. On `/eng` press **Corrupt next packet** and confirm. The button text says `(armed...)`.
 2. Press **Ring now** (any reliable frame will do).
 3. PASS: the frame log shows, newest first, something like:
 
@@ -151,7 +154,7 @@ PASS: you never see a dial code or wire of the bomb you are playing on the page.
    at once.
 
 ### 2.9 The page never shows secrets
-Open `http://<IP>/` and `http://<IP>/api/status`, `/api/settings` and look at the Serial log during
+Open `http://<IP>/`, `http://<IP>/eng` and `http://<IP>/api/status`, `/api/settings` and look at the Serial log during
 2.1-2.8. PASS: none contains the Wi-Fi password, the SoCLaaS key, the Firebase URL or auth value (search
 the pages with the browser's find for the first characters of each). The NUSMods link is shown on
 purpose (it is a user setting) but never printed to the Serial.
@@ -164,7 +167,7 @@ answers again; fetches time out after 2 s.
 ### 2.11 Cost to the rest of the system
 Leave the page open on two devices for a few minutes (2 polls per second each) and run a bomb.
 PASS: no `[link] SEND_FAILED`, the MCX stats show no rejected frames, `[stack bytes free]` shows
-`link=` and `web=` well above 1000 and `heap_free` is stable, the OLED stays smooth. The Engineering
+`link=` and `web=` well above 1000 and `heap_free` is stable, the OLED stays smooth. The `/eng`
 system line shows the same stack numbers.
 
 ### 2.12 IP on the OLED and mDNS
@@ -176,11 +179,11 @@ PASS: the shown IP opens the page.
 
 | Test | Result (PASS/FAIL) | Notes |
 |---|---|---|
-| 2.1 page loads, mornings tab matches OLED/Serial | | |
+| 2.1 main page + /eng load, alarm matches OLED/Serial | | |
 | 2.2 lead 60 -> 90 moves the alarm | | |
 | 2.3 bad link / bad lead rejected (400) | | |
 | 2.4 Ring now: ARMED within 1 s, bomb after 3 s; refused while running | | |
-| 2.5 Engineering follows the bomb within ~0.5 s | | |
+| 2.5 /eng follows the bomb within ~0.5 s | | |
 | 2.6 answers hidden while armed/active, shown in IDLE | | |
 | 2.7 corrupt next packet: CRC row, NACK, RETX, ACK; bomb unaffected | | |
 | 2.8 outage: fail fast, bank fallback, Firebase pending grows then drains | | |
@@ -209,6 +212,6 @@ PASS: the shown IP opens the page.
 |---|---|
 | Sketch (flash) | 1,275,476 bytes (40 % of 3,145,728) |
 | Global variables (RAM) | 91,620 bytes (27 % of 327,680); before the web page: 73,652 |
-| Page (`WEB_PAGE`) | 16125 bytes (budget 20,480) |
+| Pages (`WEB_PAGE` at `/`, `WEB_ENG_PAGE` at `/eng`) | 5,892 and 14,141 bytes incl. header (each budget 20,480) |
 | Web task stack | 8192 bytes (`APP_STACK_WEB`) |
 | Your run of the same command | |

@@ -50,7 +50,7 @@ $cxxPrograms = @(
     @{ Name = 'test_web';      Sources = @('esp32\defuse_esp32\src\app\web_logic.cpp', 'esp32\defuse_esp32\src\app\schedule.cpp') },
     # test_framelog: link frame log ring, names, filter and the corrupt-CRC fault helper.
     @{ Name = 'test_framelog'; Sources = @('esp32\defuse_esp32\src\app\frame_log.cpp', 'shared\protocol.c') },
-    # test_page: the embedded web page (web_page.h): 20 KB budget, no external assets, no innerHTML, endpoints.
+    # test_page: the two embedded web pages (web_page.h, web_eng_page.h), each: 20 KB budget, no external assets, no innerHTML, endpoints.
     @{ Name = 'test_page';     Sources = @() }
 )
 foreach ($p in $cxxPrograms) {
