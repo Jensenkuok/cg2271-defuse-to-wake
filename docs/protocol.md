@@ -72,7 +72,7 @@ Maximum frame size: 4 + 32 + 1 = **37 bytes**.
 | Offset | Size | Field | Notes |
 |--------|------|-------|-------|
 | 0 | 1 | `module_count` | 1..4 |
-| 1 | 4 | `module_order[4]` | 1 = DIAL, 2 = WIRES, 3 = TRIPWIRE |
+| 1 | 4 | `module_order[4]` | 1 = DIAL, 2 = WIRES, 3 = TRIPWIRE, 4 = LIGHTS |
 | 5 | 2 | `time_limit_s` | u16 |
 | 7 | 4 | `dial_code[4]` | digits 0-9 |
 | 11 | 1 | `wire_count` | |
@@ -89,11 +89,11 @@ Maximum frame size: 4 + 32 + 1 = **37 bytes**.
 |--------|------|-------|-------|
 | 0 | 1 | `state` | 0 IDLE, 1 ARMED, 2 BOMB_ACTIVE, 3 DEFUSED, 4 EXPLODED |
 | 1 | 1 | `module_idx` | |
-| 2 | 1 | `module_type` | |
+| 2 | 1 | `module_type` | 1 DIAL, 2 WIRES, 3 TRIPWIRE, 4 LIGHTS |
 | 3 | 2 | `time_left_s` | u16 |
 | 5 | 1 | `strikes` | |
-| 6 | 1 | `progress_pct` | |
-| 7 | 2 | `module_value` | i16 |
+| 6 | 1 | `progress_pct` | cleared modules %; while LIGHTS is current, its hold progress 0..100 |
+| 7 | 2 | `module_value` | i16 on the wire; read as u16 for LIGHTS: `level \| (target << 8)` (0 before the baseline) |
 
 **RESULT (5)**: 0: `outcome` u8 (1 = DEFUSED, 2 = EXPLODED); 1: `duration_s` u16; 3: `strikes` u8; 4: `snoozes` u8
 
