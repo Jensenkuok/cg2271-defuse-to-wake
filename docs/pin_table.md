@@ -34,6 +34,7 @@ Rows marked **proven** come from the team's Lab 2/3 code (CLAUDE.md) and are not
 | HC-SR04 TRIG | PTB3 | ALT1 GPIO out (RM p.120/121) | J4[8] (UM Table 19) | Out, 3.3 V logic into a 5 V module | Plain output; no interrupt needed, so Port B is fine. UM Table 19 lists no conflict. |
 | HC-SR04 ECHO | PTA13 | ALT3 TPM1_CH1 input capture (RM p.119) | J2[2] (UM Table 17, "D8 / InputCapture") | In, **5 V echo through a divider to ≤ 3.3 V** | Needs a TPM capture channel not on TPM0 (LED). TPM1 is free and runs as a free-running timer for capture. UM Table 17 lists no conflict. |
 | Passive buzzer | PTB2 | ALT3 TPM2_CH0 PWM (RM p.120/121) | J4[6] (UM Table 19) | Out, 3.3 V | Needs PWM not on TPM0 (LED) and not on TPM1. TPM1 must free-run for ECHO capture, while the buzzer changes MOD to set the tone. UM Table 19 lists no conflict. |
+| Light sensor (LDR module AO) | PTB0 | ALT0 ADC0_SE8 (analog is the default function; pin 35 row of RM §10.3.1, pp.119-121; the SDK `board/pin_mux.c` labels it `PTB0/J4[2]/J6[1]`) | J4[2] "A0 / Int" (UM Table 19, p.21); same net as mikroBUS J6[1] "AN" (UM p.23) | Analog in, 0–3.3 V | Plain channel, so CFG2 MUXSEL = 0 still works; sampled by the joystick task (single ADC0 owner). Conflicts checked: UM Table 19 lists the MCU-Link USBSIO I2C0 bridge (PTB0 = I2C0_SCL-MCULINK) and mikroBUS J6 pin 1. The bridge is disabled by default (R78/R79 are not populated, UM §3.8 p.28 and Table 11 p.15) and only works with the host libusbsio, so it does not load the pin; J6 is an empty socket. No source file uses PTB0 (`pin_mux.c` only lists it as a header label). PTB1 (SE9, J4[4]) has the identical conflict, so PTB0 was kept. SLCD (LCD_P0) stays disabled. |
 | Debug console (not ours) | PTA1 / PTA2 | ALT2 LPUART0 RX/TX | MCU-Link VCOM (UM Table 9) | – | Reserved for PRINTF; nothing above uses PTA1/PTA2. |
 
 ## Timer allocation
@@ -49,6 +50,9 @@ Rows marked **proven** come from the team's Lab 2/3 code (CLAUDE.md) and are not
   UNVERIFIED; test on the bench.
 - **Joystick and encoder** run from **3.3 V** (P3V3 on J3[8], UM Table 18), so their outputs never
   exceed the MCU's 3.3 V I/O. GND is on J3[4]/J3[12]/J3[14] or J2[14].
+- **LDR module wiring:** VCC to **3.3 V** (J3[8]; never 5 V, that would put more than 3.3 V on the MCX
+  pin through AO), GND to GND (J3[4]), AO to J4[2] (PTB0). Leave DO unconnected (the comparator output is
+  not used).
 - Both boards are on their own USB; tie the grounds together (CLAUDE.md wiring rules).
 - Button and encoder inputs use the internal pull-up (PCR PE = 1, PS = 1), so switches connect to GND.
 

@@ -79,6 +79,7 @@ static const char *event_name(game_event_type_t t)
     case GAME_EVT_JOY_PRESS:      return "JOY_PRESS";
     case GAME_EVT_DISTANCE:       return "DISTANCE";
     case GAME_EVT_TAMPER:         return "TAMPER";
+    case GAME_EVT_LIGHT:          return "LIGHT";
     case GAME_EVT_CMD_RING_NOW:   return "CMD_RING_NOW";
     case GAME_EVT_CMD_SNOOZE:     return "CMD_SNOOZE";
     case GAME_EVT_CMD_CANCEL:     return "CMD_CANCEL";
@@ -127,6 +128,8 @@ static void debug_task(void *arg)
     game_event_t ev;
     uint16_t x;
     uint16_t y;
+    uint16_t ldr_raw;
+    uint8_t ldr_level;
     int32_t last_dist = APP_US_INVALID_CM;
 
     (void)arg;
@@ -136,6 +139,9 @@ static void debug_task(void *arg)
         now = xTaskGetTickCount();
         wait = ((int32_t)(next - now) > 0) ? (TickType_t)(next - now) : 0u;
         if (xQueueReceive(input_queue_handle(), &ev, wait) == pdTRUE) {
+            if (ev.type == GAME_EVT_LIGHT) {
+                continue; /* 10 Hz stream: the periodic [io] line shows ldr_raw/ldr_level instead */
+            }
             if (ev.type == GAME_EVT_DISTANCE) {
                 /* The sampler emits ~16 DISTANCE events/s: print only real changes. */
                 bool edge = (ev.value == APP_US_INVALID_CM) != (last_dist == APP_US_INVALID_CM);
@@ -153,17 +159,20 @@ static void debug_task(void *arg)
         }
         next += pdMS_TO_TICKS(APP_DEBUG_TEST_STATS_MS);
         joystick_get_raw(&x, &y);
-        PRINTF("[io] joy_x=%u joy_y=%u dist_cm=%d enc=%d drops=%u adc_err=%u us_timeouts=%u fb_drops=%u\r\n",
+        joystick_get_light(&ldr_raw, &ldr_level);
+        PRINTF("[io] joy_x=%u joy_y=%u dist_cm=%d enc=%d drops=%u adc_err=%u us_timeouts=%u fb_drops=%u "
+               "ldr_raw=%u ldr_level=%u ldr_drops=%u\r\n",
                (unsigned)x, (unsigned)y, (int)ultrasonic_last_cm(), (int)encoder_count(),
                (unsigned)input_queue_drops(), (unsigned)joystick_errors(),
-               (unsigned)ultrasonic_timeouts(), (unsigned)feedback_drops());
+               (unsigned)ultrasonic_timeouts(), (unsigned)feedback_drops(),
+               (unsigned)ldr_raw, (unsigned)ldr_level, (unsigned)joystick_light_drops());
         print_stats();
     }
 }
 #else
 #if APP_GAME_DEBUG
 static const char *const k_state_names[] = { "IDLE", "ARMED", "BOMB_ACTIVE", "DEFUSED", "EXPLODED" };
-static const char *const k_module_names[] = { "-", "DIAL", "WIRES", "TRIPWIRE" };
+static const char *const k_module_names[] = { "-", "DIAL", "WIRES", "TRIPWIRE", "LIGHTS" };
 #define NAME_OR(arr, i) (((i) < (sizeof(arr) / sizeof((arr)[0]))) ? (arr)[i] : "?")
 
 /* Decode module_value (docs/game.md) into the part a human wants to see. */
@@ -185,6 +194,9 @@ static void print_module_value(uint8_t module_type, int16_t v)
         break;
     case PROTO_MODULE_TRIPWIRE:
         PRINTF(" trip dist=%ucm hold=%u%%", (unsigned)lo, (unsigned)hi);
+        break;
+    case PROTO_MODULE_LIGHTS:
+        PRINTF(" light level=%u target=%u", (unsigned)lo, (unsigned)hi);
         break;
     default:
         break;

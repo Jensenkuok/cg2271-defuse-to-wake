@@ -51,14 +51,15 @@ bool joystick_init(void)
 
     NVIC_DisableIRQ(ADC0_IRQn);
     SIM->SCGC6 |= SIM_SCGC6_ADC0_MASK;
-    SIM->SCGC5 |= SIM_SCGC5_PORTE_MASK;
+    SIM->SCGC5 |= SIM_SCGC5_PORTE_MASK | SIM_SCGC5_PORTB_MASK; /* PORTB for the LDR pin */
     PORTE->PCR[APP_JOY_X_PIN] = PORT_PCR_MUX(APP_ANALOG_MUX);
     PORTE->PCR[APP_JOY_Y_PIN] = PORT_PCR_MUX(APP_ANALOG_MUX);
+    PORTB->PCR[APP_LDR_PIN] = PORT_PCR_MUX(APP_ANALOG_MUX);
 
     /* Long sample time: the joystick pots are high-impedance sources. */
     ADC0->CFG1 = ADC_CFG1_ADIV(ADC_DIV_8) | ADC_CFG1_ADLSMP_MASK |
                  ADC_CFG1_MODE(ADC_MODE_12BIT) | ADC_CFG1_ADICLK(ADC_CLK_BUS);
-    ADC0->CFG2 = 0u;                              /* MUXSEL = 0: 'a' channels (SE4a) */
+    ADC0->CFG2 = 0u;                              /* MUXSEL = 0: 'a' channels (SE4a; LDR on SE8 is a plain channel) */
     ADC0->SC2 = ADC_SC2_REFSEL(ADC_REF_VALT);     /* ADTRG = 0: software trigger */
     ok = adc_calibrate();
     if (!ok) {
@@ -120,24 +121,84 @@ static void x_to_events(uint16_t x, joy_arm_t *arm)
     }
 }
 
+/* LDR: running average over the last APP_LDR_AVG_N samples (fixed array, no allocation). */
+static uint16_t s_ldr_hist[APP_LDR_AVG_N];
+static uint32_t s_ldr_count;                /* samples taken, saturates at APP_LDR_AVG_N */
+static uint32_t s_ldr_next;                 /* ring index of the slot to overwrite */
+static volatile uint16_t s_ldr_raw;         /* latest averaged 12-bit value */
+static volatile uint8_t s_ldr_level;        /* latest level 0..255 (after APP_LDR_INVERT) */
+static volatile uint32_t s_ldr_drops;       /* GAME_EVT_LIGHT posts lost to a full queue (L11) */
+
+/* Only joystick_task calls this, so the history needs no lock. Returns the average raw value. */
+static uint16_t ldr_filter(uint16_t sample)
+{
+    uint32_t sum = 0u;
+    uint32_t i;
+
+    s_ldr_hist[s_ldr_next] = sample;
+    s_ldr_next = (s_ldr_next + 1u) % APP_LDR_AVG_N;
+    if (s_ldr_count < APP_LDR_AVG_N) {
+        s_ldr_count++;
+    }
+    for (i = 0; i < s_ldr_count; i++) {
+        sum += s_ldr_hist[i]; /* before the ring fills, slots 0..count-1 are exactly the samples taken */
+    }
+    return (uint16_t)(sum / s_ldr_count);
+}
+
+/* One LDR sample: ADC0 stays single-owner because this runs inside joystick_task. */
+static void ldr_sample(void)
+{
+    uint16_t sample;
+    uint16_t avg;
+    uint8_t level;
+    uint32_t drops_before;
+
+    if (!adc_read(APP_LDR_ADC_CH, &sample)) {
+        return; /* skip only the LDR sample (counted in s_errors); the joystick sample is unaffected */
+    }
+    avg = ldr_filter(sample);
+    level = (uint8_t)(avg >> APP_LDR_SHIFT);
+    if (APP_LDR_INVERT) {
+        level = (uint8_t)(APP_LDR_LEVEL_MAX - level);
+    }
+    taskENTER_CRITICAL(); /* keep the raw/level pair consistent for readers */
+    s_ldr_raw = avg;
+    s_ldr_level = level;
+    taskEXIT_CRITICAL();
+
+    /* Non-blocking post (input_post never waits). A full queue drops the sample: the next one
+     * arrives in 100 ms and the game ignores LIGHT outside the LIGHTS module anyway. */
+    drops_before = input_queue_drops();
+    input_post(GAME_EVT_LIGHT, level);
+    if (input_queue_drops() != drops_before) {
+        s_ldr_drops++;
+    }
+}
+
 static void joystick_task(void *arg)
 {
     TickType_t wake = xTaskGetTickCount();
     joy_arm_t arm = JOY_ARMED;
+    uint32_t loops = 0u;
     uint16_t x;
     uint16_t y;
 
     (void)arg;
     for (;;) {
         vTaskDelayUntil(&wake, pdMS_TO_TICKS(APP_JOY_PERIOD_MS));
-        if (!adc_read(APP_JOY_X_ADC_CH, &x) || !adc_read(APP_JOY_Y_ADC_CH, &y)) {
-            continue; /* skip this sample; counted in s_errors */
+        if (adc_read(APP_JOY_X_ADC_CH, &x) && adc_read(APP_JOY_Y_ADC_CH, &y)) {
+            taskENTER_CRITICAL(); /* keep the X/Y pair consistent for readers */
+            s_raw_x = x;
+            s_raw_y = y;
+            taskEXIT_CRITICAL();
+            x_to_events(x, &arm);
+        } /* else: skip this joystick sample; counted in s_errors */
+        loops++;
+        if (loops >= APP_LDR_EVERY_N) {
+            loops = 0u;
+            ldr_sample(); /* after X/Y, so the 50 Hz stick timing never waits behind the LDR */
         }
-        taskENTER_CRITICAL(); /* keep the X/Y pair consistent for readers */
-        s_raw_x = x;
-        s_raw_y = y;
-        taskEXIT_CRITICAL();
-        x_to_events(x, &arm);
     }
 }
 
@@ -162,4 +223,17 @@ uint32_t joystick_errors(void)
 TaskHandle_t joystick_task_handle(void)
 {
     return s_task;
+}
+
+void joystick_get_light(uint16_t *raw, uint8_t *level)
+{
+    taskENTER_CRITICAL();
+    *raw = s_ldr_raw;
+    *level = s_ldr_level;
+    taskEXIT_CRITICAL();
+}
+
+uint32_t joystick_light_drops(void)
+{
+    return s_ldr_drops;
 }
