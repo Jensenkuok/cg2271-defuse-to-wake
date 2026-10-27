@@ -79,17 +79,6 @@ static uint16_t hold_pct(const game_t *g, uint32_t now_ms)
     return (uint16_t)(elapsed * GAME_PERCENT / GAME_TRIP_HOLD_MS);
 }
 
-static uint16_t light_hold_pct(const game_t *g, uint32_t now_ms)
-{
-    uint32_t elapsed;
-
-    if (!g->light_holding) {
-        return 0u;
-    }
-    elapsed = clamp_u32((uint32_t)(now_ms - g->light_hold_start_ms), 0u, GAME_LIGHT_HOLD_MS);
-    return (uint16_t)(elapsed * GAME_PERCENT / GAME_LIGHT_HOLD_MS);
-}
-
 static int16_t module_value(const game_t *g, uint32_t now_ms)
 {
     uint32_t lo;
@@ -137,10 +126,6 @@ static void compute_view(const game_t *g, uint32_t now_ms, proto_game_state_t *v
     if (g->state == PROTO_STATE_BOMB_ACTIVE) {
         v->time_left_s = (uint16_t)((ms_until(g->bomb_end_ms, now_ms) + GAME_MS_PER_S - 1u) / GAME_MS_PER_S);
         v->module_value = module_value(g, now_ms);
-        if (g->modules[idx] == PROTO_MODULE_LIGHTS) {
-            /* Lights reports its hold progress here: module_value is full (level | target << 8). */
-            v->progress_pct = (uint8_t)light_hold_pct(g, now_ms);
-        }
     }
 }
 

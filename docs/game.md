@@ -111,7 +111,7 @@ and one more extra module; otherwise DENIED and nothing changes.
 ### View fields
 
 `state`, `module_idx`, `module_type`, `strikes` (current bomb), `progress_pct` = cleared modules * 100 /
-module count (while LIGHTS is the current module in BOMB_ACTIVE it is the LIGHTS hold progress 0..100 instead, because `module_value` is full), `time_left_s` (BOMB_ACTIVE only, rounded up, 0 elsewhere). Outside
+module count (for every module, LIGHTS included; the LIGHTS hold progress is not reported, the ESP32 estimates its hold bar locally), `time_left_s` (BOMB_ACTIVE only, rounded up, 0 elsewhere). Outside
 BOMB_ACTIVE/DEFUSED/EXPLODED the module fields and progress are 0.
 
 ### `module_value` encoding

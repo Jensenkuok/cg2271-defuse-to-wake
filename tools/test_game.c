@@ -1118,9 +1118,9 @@ static void test_lights_hold_clears(void)
     ev(GAME_EVT_LIGHT, 140);            /* exactly the target counts */
     advance(1000);
     v = view();
-    CHECK(v.state == PROTO_STATE_BOMB_ACTIVE && v.progress_pct == 50);
+    CHECK(v.state == PROTO_STATE_BOMB_ACTIVE && v.progress_pct == 0); /* overall progress, not the hold */
     advance(GAME_LIGHT_HOLD_MS - 1000u - TICK_MS);
-    CHECK(view().state == PROTO_STATE_BOMB_ACTIVE && view().progress_pct == 97);
+    CHECK(view().state == PROTO_STATE_BOMB_ACTIVE && view().progress_pct == 0);
     advance(TICK_MS);                   /* exactly 2000 ms held */
     CHECK(view().state == PROTO_STATE_DEFUSED && view().strikes == 0);
 
@@ -1142,7 +1142,7 @@ static void test_lights_grace(void)
     ev(GAME_EVT_LIGHT, 50);
     advance(250);
     ev(GAME_EVT_LIGHT, 200);
-    CHECK(view().progress_pct == 62);   /* 1250 ms of 2000 */
+    CHECK(view().progress_pct == 0);    /* hold is not in progress_pct */
     advance(700);
     CHECK(view().state == PROTO_STATE_BOMB_ACTIVE);
     advance(TICK_MS);
@@ -1225,7 +1225,7 @@ static void test_lights_full_bomb_and_cycle(void)
     solve_wires();
     solve_trip();
     v = view();
-    CHECK(v.module_idx == 3 && v.module_type == PROTO_MODULE_LIGHTS && v.progress_pct == 0);
+    CHECK(v.module_idx == 3 && v.module_type == PROTO_MODULE_LIGHTS && v.progress_pct == 75);
     solve_lights();
     v = view();
     CHECK(v.state == PROTO_STATE_DEFUSED && v.progress_pct == 100 && v.strikes == 0);
