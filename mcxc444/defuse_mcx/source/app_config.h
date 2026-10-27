@@ -137,8 +137,8 @@
 #define APP_LDR_AVG_N               4u      /* running average of the last 4 samples (400 ms) */
 #define APP_LDR_SHIFT               4u      /* 12-bit raw >> 4 = level 0..255 */
 #define APP_LDR_LEVEL_MAX           255u    /* top of the level scale (used to invert) */
-/* Kit LDR modules differ: some read HIGH in the dark. Set to 1 if covering the sensor RAISES the level. */
-#define APP_LDR_INVERT              0
+/* Kit LDR modules differ. The KY-018 module used on the bench reads high in the dark (bench-confirmed 27 Oct 2026), so it is set to 1. */
+#define APP_LDR_INVERT              1
 #define APP_ADC_CAL_MAX_POLLS       200000u /* bound for the one-time calibration wait */
 #define APP_ADC_GAIN_MSB            0x8000u /* RM ADC "Calibration function" (p.392): set the MSB */
 
