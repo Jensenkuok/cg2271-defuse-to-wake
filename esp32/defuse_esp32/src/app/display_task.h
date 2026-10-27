@@ -52,8 +52,13 @@ struct ScreenModel {
     uint8_t trip_hold_pct;
     uint8_t trip_min_cm;
     uint8_t trip_max_cm;
+    /* LIGHTS */
+    uint8_t light_level;      /* 0..255 */
+    uint8_t light_target;     /* 0 = the MCX has no baseline yet ("Calibrating...") */
+    uint8_t light_hold_pct;   /* local estimate (light_hold.h), set by the display task; build_model leaves 0 */
+    bool light_holding;       /* the hold is running (grace included): same source as light_hold_pct */
     char taken_text[8];       /* DEFUSED "MM:SS" */
-    char clue[APP_CLUE_MAX_CHARS + 1]; /* TRIPWIRE bottom line: "Hold hand 15-25cm 3s" */
+    char clue[APP_CLUE_MAX_CHARS + 1]; /* TRIPWIRE / LIGHTS bottom line: "Hold hand 15-25cm 3s", "Turn on a light" */
     /* ACTIVE DIAL / WIRES: the riddle of the ACTIVE pair (the config the MCX ACKed) and the hint */
     char puzzle_text[PUZZLE_TEXT_BUF];
     char hint[HINT_BUF];      /* "" until the current bomb has a strike */

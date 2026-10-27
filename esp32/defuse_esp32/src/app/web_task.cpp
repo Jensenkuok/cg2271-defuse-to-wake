@@ -64,7 +64,9 @@ static uint32_t s_ip_raw;
 static uint32_t s_next_wifi_check_ms;
 
 static const char *const k_state_names[STATE_COUNT] = { "IDLE", "ARMED", "BOMB_ACTIVE", "DEFUSED", "EXPLODED" };
-static const char *const k_module_names[4] = { "-", "DIAL", "WIRES", "TRIPWIRE" };
+static const char *const k_module_names[] = { "-", "DIAL", "WIRES", "TRIPWIRE", "LIGHTS" };
+#define MODULE_NAME_COUNT  (sizeof(k_module_names) / sizeof(k_module_names[0]))
+static_assert(MODULE_NAME_COUNT == PROTO_MODULE_LIGHTS + 1u, "one name per PROTO_MODULE_* value, index 0 is 'none'");
 static const char *const k_weekday[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
 
 /* ================= small helpers ================= */
@@ -155,6 +157,9 @@ static void put_module_value(JsonBuf *j, uint8_t module_type)
         jb_kv_uint(j, "hold_pct", s_model.trip_hold_pct);
         jb_kv_uint(j, "min", s_model.trip_min_cm);
         jb_kv_uint(j, "max", s_model.trip_max_cm);
+    } else if (module_type == PROTO_MODULE_LIGHTS) {
+        jb_kv_uint(j, "level", s_model.light_level);         /* 0..255 */
+        jb_kv_uint(j, "target", s_model.light_target);       /* 0 = no baseline yet */
     }
     jb_end(j);
 }
@@ -164,7 +169,7 @@ static void put_game(JsonBuf *j)
     const proto_game_state_t &g = s_st->game;
     const uint8_t state = (s_st->game_valid && g.state < STATE_COUNT) ? g.state : 0u;
     const bool active = s_st->game_valid && state == PROTO_STATE_BOMB_ACTIVE;
-    const uint8_t type = (s_st->game_valid && g.module_type < 4u) ? g.module_type : 0u;
+    const uint8_t type = (s_st->game_valid && g.module_type < MODULE_NAME_COUNT) ? g.module_type : 0u;
 
     jb_key(j, "game");
     jb_obj(j);

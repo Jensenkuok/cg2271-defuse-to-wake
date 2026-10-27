@@ -1,8 +1,14 @@
-# Hardware test: ESP32-S2 link, display, gyro and time sync
+# Hardware test: ESP32-S2 link, display, lights module and time sync
 
 Goal: check the ESP32 side of the system on the bench with the MCXC444 running its default
-firmware: the link, the OLED screens, tamper detection and Wi-Fi/NTP time sync.
+firmware: the link, the OLED screens (including the lights module) and Wi-Fi/NTP time sync.
 Rubric lines: ESP32 use, Comms protocol, Online (NTP), Task design, Sync.
+
+**The gyro is disabled.** On 27 Oct the GY-521 board shorted the shared I2C bus and stopped the
+OLED, so it is removed and `APP_USE_GYRO` is `0` in `config.h`: no gyro task is created, nothing
+talks to address 0x68, and tamper detection is gone. The gyro code stays in the tree; section 3.3
+(shake = strike) and the gyro lines in 3.7 apply only if a working gyro is fitted and `APP_USE_GYRO`
+is set to `1`. The fourth sensor module is now the light sensor (section 3.2b).
 
 ## 0. Status of the code
 
@@ -23,12 +29,12 @@ used yet.
 | GPIO1 (Serial1 TX) | MCX **PTE23** (J4 pin 7, UART2 RX) | |
 | GPIO2 (Serial1 RX) | MCX **PTE22** (J4 pin 5, UART2 TX) | |
 | GND | MCX GND (J3 pin 4/12/14) | grounds **must** be tied |
-| GPIO8 (SDA) | OLED SDA and MPU-6050 SDA | same I2C bus |
-| GPIO9 (SCL) | OLED SCL and MPU-6050 SCL | |
-| 3V3 | OLED VCC and MPU-6050 VCC | **3.3 V** |
-| GND | OLED GND and MPU-6050 GND | |
+| GPIO8 (SDA) | OLED SDA | the OLED is the only I2C device (no MPU-6050) |
+| GPIO9 (SCL) | OLED SCL | |
+| 3V3 | OLED VCC | **3.3 V** |
+| GND | OLED GND | |
 
-Addresses: OLED SSD1306 128x64 at **0x3C**, MPU-6050 (GY-521) at **0x68** (AD0 pin low).
+Address: OLED SSD1306 128x64 at **0x3C**. Do not connect a GY-521 to this bus.
 Each board has its own USB cable. The MCX still has its own encoder, joystick and HC-SR04
 wired as in `docs/hw_test_mcx_drivers.md`.
 
@@ -80,7 +86,6 @@ Expect on the ESP32 Serial within a few seconds:
 ```
 [boot] Defuse to Wake ESP32-S2
 [display] OLED ready          (or: OLED not found: headless mode ...)
-[gyro] chip at 0x68 WHO_AM_I=0x68 (MPU-6050) ready
 [link] UP
 ```
 
@@ -88,7 +93,7 @@ On the MCX console: the blue link-down blink stops once it hears the ESP32 heart
 The 10 s `[status]` block shows `link=UP` and `retx`, `fail`, `crc`, `len` all 0.
 OLED: the IDLE screen with a big clock (`--:--` until the time is valid) and two icons in the
 corner (Wi-Fi bars, linked rings; the rings are crossed out when the link is down).
-- PASS: `[link] UP`, no errors in `[link]`, the IDLE screen is shown.
+- PASS: `[link] UP`, no errors in `[link]`, the IDLE screen is shown, and there is no `[gyro]` line at all.
 
 ### 3.2 GAME_STATE screens while playing
 Start a bomb with **BOOT** (the ESP32's GPIO0 button; Serial prints `[btn] BOOT pressed:
@@ -104,6 +109,7 @@ RING_NOW`) or with **SW3** on the MCX. Both ring in 3 s. Then check each screen:
 | wires | 4 vertical wires, a cursor arrow under one; a cut wire is drawn broken |
 | tripwire | horizontal 0-50 cm gauge with the band marked, a marker at the current distance, and a hold bar that fills over 3 s; the bottom line reads `Hold hand A-Bcm 3s` (the band of the BOMB_CONFIG, B = A + 10, A between 10 and 30; 15-25 only for the built-in default bomb before any config) |
 | 2nd dial in one bomb (cannot happen in normal play now: every bomb already has the 4-module cap; the logic stays for a longer module list) | a different clue from the first dial: a built-in bank clue whose answer is the first code with each digit +3 (mod 10); entering that code clears the module, and a strike hint is built from it |
+| lights | see section 3.2b |
 | defused | `DEFUSED` and `TIME mm:ss` |
 | exploded | `BOOM`, the screen flashes inverted about twice a second, then a new bomb starts |
 
@@ -111,7 +117,41 @@ Unplug the link wire for 5 s: a crossed-out link icon appears in the corner; rep
 away. The MCX keeps running the game the whole time.
 - PASS: every row matches, no stuck or garbled screen, the display follows inputs within about 0.2 s.
 
-### 3.3 Shake = strike
+### 3.2b Lights module (the fourth module, replaces the gyro)
+Every bomb is dial, wires, tripwire, lights. Wiring of the light sensor module (AO to PTB0 / J4[2], VCC to
+3.3 V) is in `docs/pin_table.md` and `docs/hw_test_mcx_drivers.md` section 3.3b; do that calibration first.
+
+**Flash both boards together.** The lights module is a new module type 4 in the protocol. An MCX with
+the old firmware rejects a BOMB_CONFIG that contains it (the bomb never starts as configured), and an
+ESP32 with the old firmware draws a `?` instead of the lights screen. After flashing, power-cycle both.
+
+Start a bomb (BOOT button) and clear the dial, wires and tripwire. Expected on the lights screen:
+
+| When | Expected OLED |
+|---|---|
+| module starts, MCX reading the room | top bar with the timer and strike boxes; title `LIGHTS ON`; an empty level bar; the bottom line `Calibrating...` (about 0.1-0.5 s, then it changes) |
+| baseline taken | the level bar fills to the current room level; a thick tick marks the target on the bar; a line `lvl L  target T` under it; the bottom line `Turn on a light` |
+| level reaches the target | the bottom line changes to `Hold it...` and the thin bar at the bottom starts filling |
+| level stays at or above the target | the bottom bar is full after 2 s and the module clears (next screen is DEFUSED, since lights is the last module) |
+| level dips below the target for under 0.3 s | the bottom bar keeps filling (forgiven) |
+| level stays below the target for 0.3 s or more | the bottom bar empties, the line goes back to `Turn on a light` |
+
+The bottom bar is estimated on the ESP32 from the received states (the MCX does not send it), so it can
+lag the real hold by a state update; it never fills before the MCX would clear the module. Lights never
+causes a strike.
+
+Test with the room light: with the room lights on, cover the sensor with a finger when the module starts
+(baseline low), then uncover it. PASS: the level rises above the tick, `Hold it...` appears and the module
+clears after about 2 s.
+Test with a phone torch: start the module in a bright room (or with the sensor uncovered), then hold a phone torch
+about 5 cm from the sensor. PASS: the level jumps near 255, which is above the target (the target is never above 240),
+the module clears after about 2 s. Moving the torch away before 2 s empties the hold bar after 0.3 s.
+
+Serial check without an OLED (headless): the line reads `... LIGHTS level=87 target=130 hold=0% clue=[Turn on a light]`
+(`calibrating` instead of the numbers before the baseline). The /eng page bomb panel shows `LIGHTS - module 4 of 4`
+and `light level L, target T - needs more light` or `reached, hold it`.
+
+### 3.3 Shake = strike (only with APP_USE_GYRO 1 and a working gyro; skip otherwise)
 During a running bomb, shake the MPU-6050 board hard.
 - ESP32 Serial: `[gyro] TAMPER sent <N> mg` (at most every 0.5 s).
 - Every 5 s: `[gyro] peak deviation <N> mg in last 5 s (send >= 600, MCX strikes >= 1500) read_err=<E>`. Use
@@ -122,7 +162,7 @@ During a running bomb, shake the MPU-6050 board hard.
   sends nothing.
 - PASS: a hard shake adds exactly one strike per 2 s on the MCX console.
 
-Gyro boot line and what it means:
+Gyro boot line and what it means (APP_USE_GYRO 1 only):
 - `[gyro] chip at 0x68 WHO_AM_I=0x68 (MPU-6050) ready`: genuine MPU-6050.
 - `WHO_AM_I=0x70` (or 0x71, 0x72, 0x98 ...) `(compatible clone) ready`, preceded by a WARNING line: a
   GY-521 clone (0x70 = MPU-6500). It works with the same registers; this is not an error.
@@ -138,7 +178,7 @@ Gyro boot line and what it means:
   - `WHO_AM_I=0x00` (stuck low) or `0xFF` (floating): SDA stuck low or not connected to the chip.
   - `requestFrom got N/1` with `endTx=0`: the read is cut off, usually a bad joint.
   - `bus busy (lock timeout)`: another task (OLED) held the I2C bus for over 30 ms.
-- Serial command `mpu`: read-only dump (no writes, safe while the gyro runs) for 0x68 and 0x69 of WHO_AM_I (0x75),
+- Serial command `mpu`: with `APP_USE_GYRO 0` it prints `[cmd] gyro disabled (APP_USE_GYRO 0)` and touches nothing. Enabled: read-only dump (no writes, safe while the gyro runs) for 0x68 and 0x69 of WHO_AM_I (0x75),
   PWR_MGMT_1 (0x6B), ACCEL_CONFIG (0x1C) and one raw accel sample (0x3B, three signed values), each with
   `[endTx=<code> got <n>/<want>]`. `--` means that read failed; read the codes as above. After a good init expect
   PWR_MGMT_1=0x01 and ACCEL_CONFIG=0x18; the accel Z value is about +-2048 when the board lies flat.
@@ -169,22 +209,22 @@ Power off, unplug the OLED, power on.
 
 During a bomb the line shows the timer, strikes and the decoded module, for example
 `[oled-off] BOMB_ACTIVE link=up wifi=up t=02:41 strikes=1/3 DIAL digit=2 val=7`.
-- PASS: no crash or reboot, one summary line per second at most, link and gyro still work.
+- PASS: no crash or reboot, one summary line per second at most, link still works.
 
 ### 3.6 Health
 In the 10 s `[status]` block:
-- `[stack bytes free]`: every task above 512 bytes (this is bytes on the ESP32).
+- `[stack bytes free]`: every task above 512 bytes (this is bytes on the ESP32). With the gyro disabled there is no `gyro=` entry, and the /eng page system line says `gyro: disabled`.
 - `heap_free` stays steady over 10 minutes (no steady decline).
 - `[link] backpressure` and `lock_to` stay 0 or very small.
 
 ### 3.7 I2C scan (`i2c` command)
 Type `i2c` in the serial monitor (also printed once at boot). It scans 0x08-0x77 on the shared bus and prints one line:
 `[i2c] SDA=8 SCL=9 400000 Hz found: 0x3C 0x68`
-- `0x3C` = OLED. `0x68` or `0x69` = MPU-6050 gyro (0x69 when AD0 is high; the code tries both).
+- `0x3C` = OLED. The scan is read-only address probing of the whole bus; the gyro task never runs with `APP_USE_GYRO 0`, so nothing else talks to 0x68. If `0x68`/`0x69` shows up, a GY-521 is still connected: remove it.
 - If nothing answers at 400 kHz, boot retries at 100 kHz and, if devices appear, keeps 100 kHz and says so in the line (long jumper wires).
 - `found: none` = check the module power LED, solder joints, SDA/SCL swapped (GPIO8 = SDA, GPIO9 = SCL), then press RESET.
-- Only the OLED listed: the gyro wiring, power or solder is the problem. `[gyro] MPU init failed ... (run "i2c" to scan); retrying every 5 s` in the boot log means the same.
-- PASS: both 0x3C and 0x68/0x69 are listed and `[gyro] chip at 0x.. WHO_AM_I=0x.. (...) ready` appears.
+- PASS: only `0x3C` is listed.
+- (APP_USE_GYRO 1 only) Only the OLED listed means the gyro wiring, power or solder is the problem; `[gyro] MPU init failed ... retrying every 5 s` in the boot log means the same, and a good gyro lists 0x3C and 0x68/0x69 with `[gyro] chip at 0x.. ready`.
 
 ## 4. Results (fill in)
 
@@ -200,9 +240,10 @@ Type `i2c` in the serial monitor (also printed once at boot). It scans 0x08-0x77
 | DEFUSED screen with time | yes | | |
 | BOOM + inverted flash | yes | | |
 | Link-down icon | yes | | |
-| Shake sends TAMPER (log) | yes | | |
-| Peak deviation numbers (record) | (record) | | |
-| Strike only when over 1500 mg | yes | | |
+| Lights screen: Calibrating..., level bar + target tick, Turn on a light | yes | | |
+| Room light clears lights after about 2 s (Hold it... + hold bar) | yes | | |
+| Phone torch clears lights; dip under 0.3 s forgiven, longer resets | yes | | |
+| No `[gyro]` line, `mpu` prints "gyro disabled", I2C scan lists only 0x3C | yes | | |
 | Wi-Fi connects | yes | | |
 | NTP time correct on IDLE screen | yes | | |
 | MCX accepts TIME_SYNC | `time_sync=1/0` | | |

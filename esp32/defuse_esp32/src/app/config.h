@@ -241,4 +241,13 @@
 /* ---- Tripwire gauge range on the OLED ---- */
 #define APP_GAUGE_MAX_CM            50
 
+/* ---- LIGHTS screen (module_value = level | target << 8, both 0..255; target 0 = no baseline yet) ---- */
+#define APP_LIGHTS_TITLE            "LIGHTS ON"
+#define APP_LIGHTS_CLUE_LOW         "Turn on a light"    /* level below the target, hold not running */
+#define APP_LIGHTS_CLUE_HOLD        "Hold it..."         /* level at the target (or in the grace) */
+#define APP_LIGHTS_CLUE_CALIBRATE   "Calibrating..."     /* no baseline yet: the MCX is still reading the room */
+#define APP_LIGHTS_NUMBERS_FMT      "lvl %u  target %u"  /* small line under the level bar */
+#define APP_LIGHTS_NUMBERS_BUF      32
+#define APP_LIGHTS_LEVEL_MAX        GAME_LIGHT_LEVEL_MAX /* the bar's full scale */
+
 #endif /* APP_CONFIG_H */

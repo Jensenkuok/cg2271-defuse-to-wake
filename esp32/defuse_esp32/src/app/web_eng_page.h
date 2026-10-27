@@ -154,6 +154,7 @@ function renderBomb(s){
   else if(g.module==="DIAL")d="digit "+(v.digit+1)+" of 4, dial shows "+v.value;
   else if(g.module==="WIRES"){const cut=[];for(let i=0;i<8;i++)if(v.cut_mask>>i&1)cut.push(i+1);d="cursor on wire "+(v.cursor+1)+" of "+v.wires+", cut: "+(cut.join(",")||"none")}
   else if(g.module==="TRIPWIRE")d=v.cm+" cm (band "+v.min+"-"+v.max+"), hold "+v.hold_pct+"%";
+  else if(g.module==="LIGHTS")d=v.target?("light level "+v.level+", target "+v.target+(v.level>=v.target?" - reached, hold it":" - needs more light")):"calibrating the room light...";
   $("val").textContent=d;
 }
 

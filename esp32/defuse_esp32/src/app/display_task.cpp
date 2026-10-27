@@ -11,6 +11,7 @@
 #include "config.h"
 #include "../game/game_dial.h"   /* game_dial_code(): the MCX validates dials with the same function */
 #include "i2c_bus.h"
+#include "light_hold.h"
 #include "mem_big.h"
 
 #define SEC_PER_MIN        60u
@@ -51,13 +52,24 @@
 #define GAUGE_H            10
 #define HOLD_Y             44
 #define HOLD_H             8
+/* LIGHTS layout, y in pixels, under the top bar (timer + strikes, y 0..15). The bar and the hold bar use
+ * the tripwire gauge's x range (GAUGE_X0, GAUGE_W) so the module screens line up. */
+#define LIGHTS_TITLE_Y     17
+#define LIGHTS_BAR_Y       27     /* level bar y 27..36 */
+#define LIGHTS_BAR_H       10
+#define LIGHTS_TICK_PAD    3      /* the target tick sticks out this far above and below the bar */
+#define LIGHTS_NUM_Y       41     /* "lvl 123  target 150" */
+#define LIGHTS_HOLD_Y      50     /* hold bar y 50..55, instruction on the last row (CLUE_Y 56) */
+#define LIGHTS_HOLD_H      6
 
 static TaskHandle_t s_task;
 static Adafruit_SSD1306 s_display(APP_OLED_WIDTH, APP_OLED_HEIGHT, &Wire, -1);
 static AppState *s_ui_state;     /* the display task's copy of the app state (PSRAM, allocated in display_task_start) */
 
 static const char *const k_screen_names[] = { "IDLE", "ARMED", "BOMB_ACTIVE", "DEFUSED", "EXPLODED" };
-static const char *const k_module_names[] = { "-", "DIAL", "WIRES", "TRIPWIRE" };
+static const char *const k_module_names[] = { "-", "DIAL", "WIRES", "TRIPWIRE", "LIGHTS" };
+#define MODULE_NAME_COUNT  (sizeof(k_module_names) / sizeof(k_module_names[0]))
+static_assert(MODULE_NAME_COUNT == PROTO_MODULE_LIGHTS + 1u, "one name per PROTO_MODULE_* value, index 0 is 'none'");
 
 /* ================= model (pure) ================= */
 static void fmt_mmss(char *dst, size_t n, uint32_t seconds)
@@ -181,6 +193,33 @@ static void fill_defused(const AppState &st, uint32_t unix_now, uint32_t defused
     snprintf(out->coach_text, sizeof(out->coach_text), "%s", bt != NULL ? bt->coach : APP_COACH_GENERIC);
 }
 
+/* LIGHTS instruction line: calibrating until the MCX has a baseline (target 0), "Hold it..." while the
+ * level is at the target or the hold is running (a dip inside the grace), else ask for more light. */
+static void light_set_clue(ScreenModel *m)
+{
+    const char *text = APP_LIGHTS_CLUE_LOW;
+
+    if (m->light_target == 0u) {
+        text = APP_LIGHTS_CLUE_CALIBRATE;
+    } else if (m->light_holding || m->light_level >= m->light_target) {
+        text = APP_LIGHTS_CLUE_HOLD;
+    }
+    snprintf(m->clue, sizeof(m->clue), "%.*s", APP_CLUE_MAX_CHARS, text);
+}
+
+/* Display task, every frame after build_model: the hold bar is estimated here because the MCX does not
+ * send it (light_hold.h). Resets itself whenever the LIGHTS screen is not showing. */
+static void light_track_hold(ScreenModel *m, LightHold *hold, uint32_t now_ms)
+{
+    const bool known = (m->screen == SCR_ACTIVE) && (m->module_type == PROTO_MODULE_LIGHTS) && (m->light_target != 0u);
+
+    m->light_hold_pct = light_hold_update(hold, known, m->light_level, m->light_target, now_ms);
+    m->light_holding = known && hold->holding;
+    if (m->module_type == PROTO_MODULE_LIGHTS) {
+        light_set_clue(m);
+    }
+}
+
 void build_model(const AppState &st, uint32_t now_ms, uint32_t unix_now, uint32_t defused_ms, ScreenModel *out)
 {
     uint32_t lo;
@@ -243,7 +282,7 @@ void build_model(const AppState &st, uint32_t now_ms, uint32_t unix_now, uint32_
 
     /* module_value, exactly as documented in docs/game.md:
      * DIAL = value | digit_index << 8; WIRES = cursor | cut_mask << 8;
-     * TRIPWIRE = min(distance_cm, 255) | hold_pct << 8. */
+     * TRIPWIRE = min(distance_cm, 255) | hold_pct << 8; LIGHTS = level | target << 8. */
     lo = (uint32_t)st.game.module_value & 0xFFu;
     hi = ((uint32_t)st.game.module_value >> 8) & 0xFFu;
     out->dial_value = (uint8_t)lo;
@@ -255,6 +294,8 @@ void build_model(const AppState &st, uint32_t now_ms, uint32_t unix_now, uint32_
     out->trip_hold_pct = (uint8_t)hi;
     out->trip_min_cm = st.trip_min_cm;
     out->trip_max_cm = st.trip_max_cm;
+    out->light_level = (uint8_t)lo;
+    out->light_target = (uint8_t)hi;
 
     if (st.result_valid && st.last_result.outcome == PROTO_OUTCOME_DEFUSED) {
         fmt_mmss(out->taken_text, sizeof(out->taken_text), st.last_result.duration_s);
@@ -268,6 +309,8 @@ void build_model(const AppState &st, uint32_t now_ms, uint32_t unix_now, uint32_
         snprintf(trip, sizeof(trip), APP_TRIP_CLUE_FMT, (unsigned)out->trip_min_cm, (unsigned)out->trip_max_cm,
                  (unsigned)(GAME_TRIP_HOLD_MS / MS_PER_SEC));
         snprintf(out->clue, sizeof(out->clue), "%.*s", APP_CLUE_MAX_CHARS, trip);
+    } else if (out->module_type == PROTO_MODULE_LIGHTS) {
+        light_set_clue(out);
     }
 
     if (out->screen == SCR_ACTIVE) {
@@ -364,7 +407,7 @@ static void print_summary(const ScreenModel &m, const TextBlock &tb, Print &out)
         break;
     case SCR_ACTIVE:
         out.printf(" t=%s strikes=%u/%u %s", m.timer_text, m.strikes, m.max_strikes,
-                   m.module_type < 4 ? k_module_names[m.module_type] : "?");
+                   m.module_type < MODULE_NAME_COUNT ? k_module_names[m.module_type] : "?");
         if (m.module_type == PROTO_MODULE_DIAL) {
             out.printf(" digit=%u val=%u", m.dial_digit, m.dial_value);
         } else if (m.module_type == PROTO_MODULE_WIRES) {
@@ -372,6 +415,13 @@ static void print_summary(const ScreenModel &m, const TextBlock &tb, Print &out)
         } else if (m.module_type == PROTO_MODULE_TRIPWIRE) {
             out.printf(" dist=%ucm band=%u..%u hold=%u%%", m.trip_cm, m.trip_min_cm, m.trip_max_cm,
                        m.trip_hold_pct);
+        } else if (m.module_type == PROTO_MODULE_LIGHTS) {
+            if (m.light_target == 0u) {
+                out.print(" calibrating");
+            } else {
+                out.printf(" level=%u target=%u hold=%u%%", m.light_level, m.light_target, m.light_hold_pct);
+            }
+            out.printf(" clue=[%s]", m.clue);
         }
         break;
     case SCR_DEFUSED:
@@ -533,6 +583,30 @@ static void draw_tripwire(const ScreenModel &m)
     s_display.fillRect(GAUGE_X0 + 1, HOLD_Y + 5, fill, HOLD_H - 2, SSD1306_WHITE);
 }
 
+static void draw_lights(const ScreenModel &m)
+{
+    char buf[APP_LIGHTS_NUMBERS_BUF];
+    const int inner_w = GAUGE_W - 1;                                   /* pixels inside the frame */
+    const int fill = (inner_w * m.light_level) / APP_LIGHTS_LEVEL_MAX;
+    const int hold_fill = ((GAUGE_W - 2) * m.light_hold_pct) / 100;
+    int tick;
+
+    text_centered(APP_LIGHTS_TITLE, LIGHTS_TITLE_Y, 1);
+    s_display.drawRect(GAUGE_X0, LIGHTS_BAR_Y, GAUGE_W + 1, LIGHTS_BAR_H, SSD1306_WHITE);   /* level 0..255 */
+    s_display.fillRect(GAUGE_X0 + 1, LIGHTS_BAR_Y + 1, fill, LIGHTS_BAR_H - 2, SSD1306_WHITE);
+    if (m.light_target != 0u) {
+        tick = GAUGE_X0 + (GAUGE_W * m.light_target) / APP_LIGHTS_LEVEL_MAX;
+        s_display.drawFastVLine(tick, LIGHTS_BAR_Y - LIGHTS_TICK_PAD, LIGHTS_BAR_H + 2 * LIGHTS_TICK_PAD, SSD1306_WHITE);
+        s_display.drawFastVLine(tick + 1, LIGHTS_BAR_Y - LIGHTS_TICK_PAD, LIGHTS_BAR_H + 2 * LIGHTS_TICK_PAD, SSD1306_WHITE);
+        snprintf(buf, sizeof(buf), APP_LIGHTS_NUMBERS_FMT, (unsigned)m.light_level, (unsigned)m.light_target);
+        s_display.setTextSize(1);
+        s_display.setCursor((APP_OLED_WIDTH - (int)strlen(buf) * CHAR_W) / 2, LIGHTS_NUM_Y);
+        s_display.print(buf);
+    }
+    s_display.drawRect(GAUGE_X0, LIGHTS_HOLD_Y, GAUGE_W + 1, LIGHTS_HOLD_H, SSD1306_WHITE);   /* hold progress */
+    s_display.fillRect(GAUGE_X0 + 1, LIGHTS_HOLD_Y + 1, hold_fill, LIGHTS_HOLD_H - 2, SSD1306_WHITE);
+}
+
 static void draw_text_block(const TextBlock &tb)
 {
     int i;
@@ -567,10 +641,11 @@ static void draw_active(const ScreenModel &m, const TextBlock &tb)
     case PROTO_MODULE_DIAL:     draw_dial(m); break;
     case PROTO_MODULE_WIRES:    draw_wires(m); break;
     case PROTO_MODULE_TRIPWIRE: draw_tripwire(m); break;
+    case PROTO_MODULE_LIGHTS:   draw_lights(m); break;
     default: break;
     }
-    if (m.module_type == PROTO_MODULE_TRIPWIRE) {
-        s_display.setTextSize(1);                /* instruction: band and hold time */
+    if (m.module_type == PROTO_MODULE_TRIPWIRE || m.module_type == PROTO_MODULE_LIGHTS) {
+        s_display.setTextSize(1);                /* instruction: band and hold time / what to do with the light */
         s_display.setCursor(0, CLUE_Y);
         s_display.print(m.clue);
     } else {
@@ -653,11 +728,13 @@ static void display_task(void *arg)
     AppState *const st = s_ui_state;  /* PSRAM, not the 6 KB stack (mem_big.h); the model and text block below stay static */
     static ScreenModel m;
     static TextBlock tb;
+    static LightHold light_hold;     /* LIGHTS hold-bar estimate; static like the model (the 6 KB stack stays small) */
     uint32_t now;
     bool defused;
     time_t t;
 
     (void)arg;
+    light_hold_reset(&light_hold);
     if (i2c_bus_probe(APP_OLED_ADDR) && i2c_bus_lock(APP_I2C_MUTEX_WAIT_MS)) {
         /* periphBegin = false: Wire was already started by i2c_bus_init() */
         oled_ok = s_display.begin(SSD1306_SWITCHCAPVCC, APP_OLED_ADDR, true, false);
@@ -682,6 +759,7 @@ static void display_task(void *arg)
         }
         was_defused = defused;
         build_model(*st, now, st->time_valid ? (uint32_t)t : 0u, defused ? (uint32_t)(now - defused_since) : 0u, &m);
+        light_track_hold(&m, &light_hold, now);
         layout_text(m, now, &tb);
 
         if (!oled_ok) {
@@ -705,7 +783,7 @@ static void display_task(void *arg)
                 inverted = m.invert;
                 s_display.invertDisplay(inverted);
             }
-            s_display.display();            /* ~25 ms at 400 kHz; the gyro waits (bounded) */
+            s_display.display();            /* ~25 ms at 400 kHz; other I2C users wait (bounded) */
             i2c_bus_unlock();
         }
     }
