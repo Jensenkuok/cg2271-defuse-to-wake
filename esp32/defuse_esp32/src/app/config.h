@@ -20,7 +20,16 @@
 #define APP_UART_TX_PIN             1       /* GPIO1  -> MCX PTE23 (UART2 RX) */
 #define APP_DEBUG_BAUD              115200u /* Serial (debug) */
 
-/* ---- I2C bus shared by the OLED and the MPU-6050 ---- */
+/* ---- Gyro switch ----
+ * Dropped on 27 Oct: the GY-521 board shorted the shared I2C bus and stopped the OLED, and the team
+ * rule is no new I2C devices. 0 = the gyro task is never created, nothing talks to 0x68 and the
+ * "mpu" Serial command only says so. Set 1 only with a working gyro board. The code stays in the
+ * tree (gyro_task.cpp) and compiles when this is 1. */
+#ifndef APP_USE_GYRO
+#define APP_USE_GYRO                0
+#endif
+
+/* ---- I2C bus: the OLED (and the MPU-6050 when APP_USE_GYRO is 1) ---- */
 #define APP_I2C_SDA_PIN             8
 #define APP_I2C_SCL_PIN             9
 #define APP_I2C_HZ                  400000u

@@ -13,6 +13,10 @@
 #include "link_task.h"
 #include "../shared/protocol.h"
 
+/* Compiled only when the gyro is enabled (config.h); otherwise this file is empty and the rest of the
+ * firmware never references it. */
+#if APP_USE_GYRO
+
 static TaskHandle_t s_task;
 static uint8_t s_addr = APP_MPU_ADDR;
 
@@ -316,3 +320,5 @@ TaskHandle_t gyro_task_handle(void)
 {
     return s_task;
 }
+
+#endif /* APP_USE_GYRO */

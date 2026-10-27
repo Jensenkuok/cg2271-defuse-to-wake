@@ -14,7 +14,9 @@
 #include "display_task.h"
 #include "fault.h"
 #include "frame_log.h"
+#if APP_USE_GYRO
 #include "gyro_task.h"
+#endif
 #include "history.h"
 #include "link_task.h"
 #include "mem_big.h"
@@ -460,7 +462,11 @@ static void put_system(JsonBuf *j, uint32_t now_ms)
     jb_key(j, "stack");                             /* bytes never used so far, per task */
     jb_obj(j);
     put_stack(j, "link", link_task_handle());
+#if APP_USE_GYRO
     put_stack(j, "gyro", gyro_task_handle());
+#else
+    jb_kv_int(j, "gyro", -1);                       /* -1 = task disabled; the /eng page prints "gyro: disabled" */
+#endif
     put_stack(j, "display", display_task_handle());
     put_stack(j, "net", network_task_handle());
     put_stack(j, "web", s_task);

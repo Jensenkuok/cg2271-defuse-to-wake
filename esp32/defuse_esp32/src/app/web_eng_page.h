@@ -186,7 +186,7 @@ function renderAi(s){
 
 function renderSys(s){
   const y=s.sys,k=y.stack;
-  $("sys").textContent="Firebase pending: "+s.fb.pending+" | heap free "+y.heap+" (min "+y.heap_min+") | stack free link "+k.link+", gyro "+k.gyro+", display "+k.display+", net "+k.net+", web "+k.web+" bytes | up "+dur(s.up_s);
+  $("sys").textContent="Firebase pending: "+s.fb.pending+" | heap free "+y.heap+" (min "+y.heap_min+") | stack free link "+k.link+", "+(k.gyro<0?"gyro: disabled":"gyro "+k.gyro)+", display "+k.display+", net "+k.net+", web "+k.web+" bytes | up "+dur(s.up_s);
   const o=s.net.outage_s;
   $("f2s").textContent=o>0?("Outage active: "+o+" s left"):"60 s: LLM, NUSMods and Firebase calls fail fast; Wi-Fi and this page stay up.";
   $("f1").textContent=s.link.corrupt_armed?"Corrupt next packet (armed...)":"Corrupt next packet";

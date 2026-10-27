@@ -1,17 +1,20 @@
 /*
  * Defuse to Wake - ESP32-S2 firmware (renderer + network gateway).
- * The MCXC444 runs the game; this board shows it on the OLED, detects tamper with the
- * MPU-6050, keeps time over Wi-Fi/NTP and talks to the MCX over Serial1 (proto_link).
+ * The MCXC444 runs the game; this board shows it on the OLED, keeps time over Wi-Fi/NTP and
+ * talks to the MCX over Serial1 (proto_link). The MPU-6050 tamper task exists in the tree but
+ * is off (APP_USE_GYRO 0 in config.h, see the note there).
  *
  * Single-core ESP32-S2, Arduino-on-FreeRTOS. Tasks (priority, why): see src/app/config.h
- *   link 4 > gyro 3 > display 2 > network 1 = web 1.
+ *   link 4 > display 2 > network 1 = web 1   (gyro 3 sits between link and display when enabled).
  * setup() only creates the shared objects and the tasks; loop() deletes itself.
  */
 #include "src/app/app_state.h"
 #include "src/app/config.h"
 #include "src/app/display_task.h"
 #include "src/app/fault.h"
+#if APP_USE_GYRO
 #include "src/app/gyro_task.h"
+#endif
 #include "src/app/i2c_bus.h"
 #include "src/app/link_task.h"
 #include "src/app/mem_big.h"
@@ -47,9 +50,12 @@ void setup()
         Serial.println("[boot] FATAL: could not create shared objects");
         return; /* loop() deletes the loop task; nothing else runs */
     }
-    i2c_bus_report(true); /* before the OLED/gyro tasks start: shows what is on the bus */
-    ok = link_task_start() && gyro_task_start() && display_task_start() && network_task_start() &&
-         web_task_start();
+    i2c_bus_report(true); /* before the OLED task starts: shows what is on the bus */
+    ok = link_task_start() &&
+#if APP_USE_GYRO
+         gyro_task_start() &&
+#endif
+         display_task_start() && network_task_start() && web_task_start();
     if (!ok) {
         Serial.println("[boot] FATAL: could not create a task");
     }

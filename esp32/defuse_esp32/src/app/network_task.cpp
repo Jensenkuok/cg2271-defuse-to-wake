@@ -13,7 +13,9 @@
 #include "briefing.h"
 #include "config.h"
 #include "fault.h"
+#if APP_USE_GYRO
 #include "gyro_task.h"
+#endif
 #include "flash_store.h"
 #include "history.h"
 #include "i2c_bus.h"
@@ -513,7 +515,11 @@ static void run_command(NetCtx &c, const char *cmd, size_t len, uint32_t unix_no
     } else if (strcmp(cmd, "i2c") == 0) {
         i2c_bus_report(false);
     } else if (strcmp(cmd, "mpu") == 0) {
+#if APP_USE_GYRO
         gyro_task_dump_regs();
+#else
+        Serial.println("[cmd] gyro disabled (APP_USE_GYRO 0)");
+#endif
     } else if (strcmp(cmd, "brief") == 0) {
         briefing_request();
         Serial.println("[cmd] briefing run requested");
