@@ -15,10 +15,8 @@
 
 #include "puzzle_bank_int.h"
 #include "puzzle_rules.h"
-#include "text_logic.h"
+#include "puzzle_gate.h"
 
-#define BANK_DIAL_ROWS      3           /* OLED rows of the dial clue (display_task.cpp) */
-#define BANK_WIRE_ROWS      2
 #define WIRE_HARD_MIN_WIRES 4           /* three rules that are all needed cannot exist with only 3 wires */
 #define TEMPLATE_VARIANTS   PUZZLE_VARIANTS
 #define SEED_WIRE_XOR       0x9E3779B9u /* the wire of a set pair gets a different seed than its dial */
@@ -164,19 +162,10 @@ bool wire_text_to_rules(const char *text, char *out, size_t size)
 /* Acceptance of one candidate (shared by dial and wire)                                    */
 /* ======================================================================================== */
 
-/* O3 counts characters, but the OLED wraps at spaces: the text must also fit its rows after word
- * wrapping (the display's own wrap_text), so a generated puzzle never needs the scrolling marquee. */
-bool fits_oled_rows(const char *text, int rows)
-{
-    char lines[BANK_DIAL_ROWS][TEXT_COLS + 1];
-    size_t rest = 0u;
-
-    (void)wrap_text(text, TEXT_COLS, rows, lines[0], TEXT_COLS + 1, &rest);
-    return rest == strlen(text);
-}
-
-/* Display text -> validate -> back to rules -> pr_check. True only when everything holds. */
-bool accept_text(const char *text, int kind, int wire_count, int answer, int level, int *measured)
+/* A bank text is only ever returned when ALL of this holds: it passes validate_puzzle (O3 length, no
+ * leaked code or wire number, O4), fits its OLED rows after word wrap (no marquee), and converts back
+ * to rules with exactly one solution equal to the answer. *measured gets the rating of those rules. */
+bool proven_text(const char *text, int kind, int wire_count, int answer, int *measured)
 {
     char answer_text[PROTO_DIAL_DIGITS + 1];
 
@@ -185,14 +174,17 @@ bool accept_text(const char *text, int kind, int wire_count, int answer, int lev
     } else {
         snprintf(answer_text, sizeof(answer_text), "%d", answer);
     }
-    if (!validate_puzzle(text, kind, answer_text) ||
-        !fits_oled_rows(text, kind == PUZZLE_DIAL ? BANK_DIAL_ROWS : BANK_WIRE_ROWS)) {
+    if (!validate_puzzle(text, kind, answer_text) || !puzzle_text_fits_oled(text, kind)) {
+        *measured = PR_LEVEL_NONE;
         return false;
     }
-    if (!bank_recheck(text, kind, wire_count, answer, measured)) {
-        return false;
-    }
-    return *measured == level;
+    return bank_recheck(text, kind, wire_count, answer, measured);
+}
+
+/* proven_text, and rated at exactly the requested level. */
+bool accept_text(const char *text, int kind, int wire_count, int answer, int level, int *measured)
+{
+    return proven_text(text, kind, wire_count, answer, measured) && *measured == level;
 }
 
 void store_result(BankResult *out, const char *text, int level, bool fallback, int tries)
@@ -232,8 +224,8 @@ void dial_fallback(const BankRequest &req, Rng *rng, BankResult *out, int tries)
             int measured = 0;
 
             if (dial_template(req.code, variant, text, sizeof(text)) == 0u ||
-                !bank_recheck(text, PUZZLE_DIAL, 0, answer, &measured)) {
-                continue;
+                !proven_text(text, PUZZLE_DIAL, 0, answer, &measured)) {
+                continue;                           /* the old templates get the same checks as generated texts */
             }
             const int distance = measured > req.level ? measured - req.level : req.level - measured;
 
@@ -244,10 +236,23 @@ void dial_fallback(const BankRequest &req, Rng *rng, BankResult *out, int tries)
             }
         }
     }
-    if (best < 0) {                                 /* cannot happen (host-tested), but never return empty */
-        (void)dial_template(req.code, 0u, text, sizeof(text));
-        store_result(out, text, 0, true, tries);
+    if (best >= 0) {
+        return;
     }
+    /* no old template passed (e.g. its text wraps past 3 rows): a generated EASY chain, which always works */
+    for (int t = 0; t < BANK_TRIES_DIAL; t++) {
+        char rules[BANK_RULES_MAX];
+        int measured = 0;
+
+        if (dial_try_rules(PR_EASY, req.code, rng, rules, sizeof(rules)) &&
+            bank_rules_to_text(rules, PUZZLE_DIAL, text, sizeof(text)) &&
+            accept_text(text, PUZZLE_DIAL, 0, answer, PR_EASY, &measured)) {
+            store_result(out, text, measured, true, tries);
+            return;
+        }
+    }
+    (void)dial_template(req.code, 0u, text, sizeof(text));     /* cannot happen (host-tested): never return empty */
+    store_result(out, text, 0, true, tries);
 }
 
 void generate_dial(const BankRequest &req, Rng *rng, BankResult *out)
@@ -274,27 +279,31 @@ void generate_dial(const BankRequest &req, Rng *rng, BankResult *out)
     dial_fallback(req, rng, out, tries);
 }
 
-/* Old wire templates: the first variant that passes the same text validation, else the first one. */
+/* The procedural search at the requested level failed (or cannot exist: HARD with 3 wires). The
+ * answer is still delivered as a PROVEN text, one level easier: first the EASY recipe (a single rule
+ * that pins the wire, tried with its own budget), then a fixed rule "w+c=k+c" that cannot name the wire
+ * (c and k+c are never k) and is proven and rated like any other. The old wire templates are not
+ * used: they name the wire ("Cut the 3rd from the left") and have no rule form to prove. */
 void wire_fallback(const BankRequest &req, Rng *rng, BankResult *out, int tries)
 {
-    char answer[PUZZLE_ANSWER_LEN];
+    uint16_t pool[BANK_WIRE_POOL_MAX];
+    char rules[BANK_RULES_MAX];
     char text[PUZZLE_TEXT_BUF];
-    const unsigned start = (unsigned)rng_below(rng, (int)TEMPLATE_VARIANTS);
-    bool found = false;
+    const int pool_n = wire_pool(PR_EASY, req.wire_count, req.wire_k, pool);
+    int measured = 0;
 
-    snprintf(answer, sizeof(answer), "%d", req.wire_k);
-    for (unsigned s = 0u; s < TEMPLATE_VARIANTS && !found; s++) {
-        const unsigned variant = (start + s) % TEMPLATE_VARIANTS;
-
-        if (wire_template(req.wire_k, req.wire_count, variant, text, sizeof(text)) > 0u &&
-            validate_puzzle(text, PUZZLE_WIRE, answer)) {
-            found = true;
+    for (int t = 0; t < BANK_TRIES_WIRE; t++) {
+        if (wire_try_rules(PR_EASY, req.wire_count, req.wire_k, pool, pool_n, rng, rules, sizeof(rules)) &&
+            bank_rules_to_text(rules, PUZZLE_WIRE, text, sizeof(text)) &&
+            accept_text(text, PUZZLE_WIRE, req.wire_count, req.wire_k, PR_EASY, &measured)) {
+            store_result(out, text, measured, true, tries);
+            return;
         }
     }
-    if (!found) {                                   /* every old text breaks a limit for this k: keep one anyway */
-        (void)wire_template(req.wire_k, req.wire_count, 0u, text, sizeof(text));
-    }
-    store_result(out, text, PR_EASY, true, tries);  /* each old wire clue is a single rule */
+    snprintf(rules, sizeof(rules), "w+%d=%d", req.wire_k == 1 ? 2 : 1, req.wire_k + (req.wire_k == 1 ? 2 : 1));
+    (void)bank_rules_to_text(rules, PUZZLE_WIRE, text, sizeof(text));
+    (void)proven_text(text, PUZZLE_WIRE, req.wire_count, req.wire_k, &measured);    /* measured level, 0 if it ever failed */
+    store_result(out, text, measured, true, tries);
 }
 
 void generate_wire(const BankRequest &req, Rng *rng, BankResult *out)

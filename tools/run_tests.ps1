@@ -54,8 +54,9 @@ $cxxPrograms = @(
     @{ Name = 'test_rules';    Sources = @('esp32\defuse_esp32\src\app\puzzle_rules.cpp') },
     # test_gate: the LLM acceptance gate (JSON fields, text rules O3/O4, rules proof + level, checker model) fed canned replies.
     @{ Name = 'test_gate';     Sources = @('esp32\defuse_esp32\src\app\puzzle_gate.cpp', 'esp32\defuse_esp32\src\app\puzzle_rules.cpp',
-                                           'esp32\defuse_esp32\src\app\puzzle_logic.cpp', 'esp32\defuse_esp32\src\app\history_ring.cpp',
-                                           'esp32\defuse_esp32\src\app\schedule.cpp', 'shared\protocol.c') },
+                                           'esp32\defuse_esp32\src\app\puzzle_logic.cpp', 'esp32\defuse_esp32\src\app\text_logic.cpp',
+                                           'esp32\defuse_esp32\src\app\history_ring.cpp', 'esp32\defuse_esp32\src\app\schedule.cpp',
+                                           'shared\protocol.c') },
     # test_bank: procedural puzzle bank (every level x many answers, proven by the test's own converter + pr_check); the gate accepts its output.
     @{ Name = 'test_bank';     Sources = @('esp32\defuse_esp32\src\app\puzzle_bank.cpp', 'esp32\defuse_esp32\src\app\puzzle_bank_dial.cpp',
                                            'esp32\defuse_esp32\src\app\puzzle_bank_wire.cpp', 'esp32\defuse_esp32\src\app\puzzle_gate.cpp',

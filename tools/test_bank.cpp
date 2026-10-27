@@ -189,28 +189,22 @@ static bool check_result(const BankRequest &req, const BankResult &res, Stat *st
             st->fallbacks++;
         }
     }
-    if (!dial) {
-        /* old wire templates are not in the rule language: they only have to be non-empty and correct elsewhere */
-        if (res.fallback != 0) {
-            return !text.empty() && res.level == PR_EASY;
-        }
-    }
     if (text.empty() || text.size() >= (size_t)PUZZLE_TEXT_BUF) {
         return false;
     }
     pr_check(rules.c_str(), dial ? PR_KIND_DIAL : PR_KIND_WIRE, dial ? 0 : req.wire_count, answer, &chk);
     ok = ok && chk.error == PR_OK && chk.unique == 1 && chk.matches_answer == 1;        /* proven unique, our answer */
     ok = ok && res.level == chk.level;                                                  /* stored level = measured */
+    /* the same bar for generated texts AND fallbacks: valid, never names the answer, fits its rows */
+    ok = ok && validate_puzzle(text.c_str(), req.kind, answer_text.c_str());            /* O3, O4, no leak */
+    ok = ok && text.size() <= (size_t)(dial ? PUZZLE_DIAL_TEXT_LIMIT : PUZZLE_WIRE_TEXT_LIMIT);
+    ok = ok && bank_recheck(text.c_str(), req.kind, dial ? 0 : req.wire_count, answer, NULL);
+    ok = ok && puzzle_text_fits_oled(text.c_str(), req.kind);
+    if (wrap_rows(text.c_str()) > (dial ? 3 : 2)) {
+        st->wrap_over++;
+    }
     if (res.fallback == 0) {
         ok = ok && chk.level == req.level;                                              /* rated at the level asked */
-        ok = ok && validate_puzzle(text.c_str(), req.kind, answer_text.c_str());        /* O3, O4, no leak */
-        ok = ok && text.size() <= (size_t)(dial ? PUZZLE_DIAL_TEXT_LIMIT : PUZZLE_WIRE_TEXT_LIMIT);
-        ok = ok && bank_recheck(text.c_str(), req.kind, dial ? 0 : req.wire_count, answer, NULL);
-        if (wrap_rows(text.c_str()) > (dial ? 3 : 2)) {
-            st->wrap_over++;
-        }
-    } else {
-        ok = ok && text.size() < (size_t)PUZZLE_TEXT_BUF;
     }
     return ok;
 }
@@ -407,6 +401,8 @@ static void test_fallback(void)
             CHECK(bank_recheck(text.c_str(), PUZZLE_DIAL, 0, code, &measured));
             CHECK(res.level == measured);
             CHECK(validate_puzzle(text.c_str(), PUZZLE_DIAL, dial_answer_text(code).c_str()));
+            CHECK(puzzle_text_fits_oled(text.c_str(), PUZZLE_DIAL));    /* fallbacks wrap into 3 rows too */
+            CHECK(wrap_rows(text.c_str()) <= 3);
             if (res.fallback != 0) {
                 fallbacks++;
                 exact += (res.level == LEVELS[li]) ? 1 : 0;
@@ -416,23 +412,53 @@ static void test_fallback(void)
     }
     printf("  forced fallback (1 try): %d dial fallbacks, %d of them rated exactly at the level\n", fallbacks, exact);
     CHECK(fallbacks > 20);
+    /* wires: k == 1 and k == n (the old templates named the wire there) for every n and level, with the
+     * search disabled (1 try) and with the normal budget; every text is proven, valid and rated */
+    for (int li = 0; li < 3; li++) {
+        for (int n = 3; n <= 6; n++) {
+            for (int pass = 0; pass < 2; pass++) {
+                for (int k = 1; k <= n; k += (n - 1)) {
+                    for (int seed = 0; seed < 40; seed++) {
+                        BankRequest req;
+                        BankResult res;
+                        Stat st;
+                        memset(&req, 0, sizeof req);
+                        memset(&st, 0, sizeof st);
+                        req.kind = PUZZLE_WIRE;
+                        req.wire_count = n;
+                        req.wire_k = k;
+                        req.level = LEVELS[li];
+                        req.max_tries = (pass == 0) ? 1 : 0;
+                        req.seed = (uint32_t)(n * 1000 + k * 100 + seed + li);
+                        bank_generate(req, &res);
+                        const std::string msg = std::string(pr_level_name(LEVELS[li])) + " n=" + std::to_string(n) + " k=" +
+                                                std::to_string(k) + " pass=" + std::to_string(pass) + " \"" + res.text + "\"";
+                        CHECK_MSG(check_result(req, res, &st), msg);
+                        CHECK_MSG(validate_puzzle(res.text, PUZZLE_WIRE, std::to_string(k).c_str()), msg);
+                        CHECK_MSG(bank_recheck(res.text, PUZZLE_WIRE, n, k, NULL), msg);
+                        CHECK_MSG(res.level >= PR_EASY && res.level <= PR_HARD, msg);
+                        CHECK_MSG(!puzzle_text_has_number(res.text, k), msg);
+                        if (pass == 0 && res.fallback != 0) {
+                            CHECK_MSG(res.level == PR_EASY, msg);       /* the fallback is the EASY recipe or its fixed rule */
+                        }
+                    }
+                }
+            }
+        }
+    }
+    /* the fixed last-resort wire rule "w+c=k+c" (c = 1, or 2 for k = 1): valid, never names k, proven EASY */
     for (int n = 3; n <= 6; n++) {
         for (int k = 1; k <= n; k++) {
-            BankRequest req;
-            BankResult res;
-            memset(&req, 0, sizeof req);
-            req.kind = PUZZLE_WIRE;
-            req.wire_count = n;
-            req.wire_k = k;
-            req.level = PR_HARD;
-            req.max_tries = 1;
-            req.seed = (uint32_t)(n * 10 + k);
-            bank_generate(req, &res);
-            CHECK(res.text[0] != '\0' && strlen(res.text) <= (size_t)PUZZLE_WIRE_TEXT_MAX);
-            CHECK(res.fallback != 0 || res.level == PR_HARD);
-            if (res.fallback != 0) {
-                CHECK(res.level == PR_EASY);                    /* each old wire clue is one rule */
-            }
+            const int c = (k == 1) ? 2 : 1;
+            char rules[32];
+            char text[PUZZLE_TEXT_BUF];
+            int lvl = 0;
+
+            snprintf(rules, sizeof rules, "w+%d=%d", c, k + c);
+            CHECK(bank_rules_to_text(rules, PUZZLE_WIRE, text, sizeof text));
+            CHECK(validate_puzzle(text, PUZZLE_WIRE, std::to_string(k).c_str()));
+            CHECK(puzzle_text_fits_oled(text, PUZZLE_WIRE));
+            CHECK(bank_recheck(text, PUZZLE_WIRE, n, k, &lvl) && lvl == PR_EASY);
         }
     }
     /* the old wire templates fit O3 now (family 3 was 44 characters) and the first valid one is chosen */

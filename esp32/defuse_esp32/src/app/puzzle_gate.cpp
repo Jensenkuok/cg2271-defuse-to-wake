@@ -1,5 +1,6 @@
 /* Defuse to Wake - acceptance gate for LLM puzzles. See puzzle_gate.h. */
 #include "puzzle_gate.h"
+#include "text_logic.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -41,6 +42,19 @@ int exact_count(const char *rules, const GateTarget &t)
 }
 
 }  // namespace
+
+bool puzzle_text_fits_oled(const char *text, int kind)
+{
+    char lines[GATE_DIAL_ROWS][TEXT_COLS + 1];
+    size_t rest = 0u;
+
+    if (text == NULL) {
+        return false;
+    }
+    (void)wrap_text(text, TEXT_COLS, kind == PUZZLE_WIRE ? GATE_WIRE_ROWS : GATE_DIAL_ROWS, lines[0], TEXT_COLS + 1,
+                    &rest);
+    return rest == strlen(text);
+}
 
 void gate_answer_text(const GateTarget &target, char *out, size_t size)
 {
@@ -87,6 +101,12 @@ int gate_check_setter(const char *reply, const GateTarget &target, char *json_bu
             } else {
                 snprintf(why, why_size, "text %s", puzzle_text_problem_name(problem));
             }
+        }
+        return GATE_TEXT_REJECTED;
+    }
+    if (!puzzle_text_fits_oled(text, target.kind)) {
+        if (why != NULL) {
+            snprintf(why, why_size, "text wraps past %d OLED rows", target.kind == PUZZLE_WIRE ? GATE_WIRE_ROWS : GATE_DIAL_ROWS);
         }
         return GATE_TEXT_REJECTED;
     }

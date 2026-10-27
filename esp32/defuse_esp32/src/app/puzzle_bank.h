@@ -10,9 +10,11 @@
  *   - pr_check on those converted rules says: exactly one solution, equal to the answer, rated at
  *     the requested level.
  * The generator is random search with a bounded number of tries (BANK_TRIES_*) and a seed, so a
- * host test can reproduce any result. If no rule set is found the old template families of
- * puzzle_logic.h are used (chain = EASY, pairs = NORMAL...), their level is MEASURED the same way,
- * and the result is flagged `fallback` so the caller can log it and the tests can count it.
+ * host test can reproduce any result. If no rule set is found the result is flagged `fallback`
+ * (so the caller can log it and the tests can count it) but is STILL held to the same bar: dial
+ * falls back to the old template families (chain = EASY, pairs = NORMAL...) and then to a generated
+ * EASY chain; wire falls back to the EASY recipe and then to a fixed rule that cannot name the wire.
+ * A fallback text is validated, fits its OLED rows, is proven by pr_check and carries its MEASURED level.
  *
  * Display text:
  *   dial  "1st=3; 2nd=1st+4; 3rd=2nd-5; 4th=1st*3", "Sum 17; 4th-1st=1; All differ"
@@ -48,11 +50,11 @@ struct BankRequest {
 struct BankResult {
     char text[PUZZLE_TEXT_BUF];     /* display text, always set */
     uint8_t level;                  /* measured rating of the text (PrLevel), 0 if even that failed */
-    uint8_t fallback;               /* 1 = no generated rule set: an old template family was used */
+    uint8_t fallback;               /* 1 = no generated rule set: a lower level or an old template family was used */
     uint16_t tries;                 /* random rule sets tried */
 };
 
-/* Builds one puzzle. Never fails: the worst case is the first old template, flagged fallback. */
+/* Builds one puzzle. Never fails: the worst case is a proven EASY text, flagged fallback. */
 void bank_generate(const BankRequest &req, BankResult *out);
 
 /* Display text -> rule language text (see above). False when the text is not in the bank's shape or

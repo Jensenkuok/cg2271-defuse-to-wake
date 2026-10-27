@@ -147,6 +147,14 @@ static void test_gate_setter_dial(void)
     g = run_setter(reply_of("caf\xC3\xA9 is not ascii at all", good_rules), t);
     CHECK(g.status == GATE_TEXT_REJECTED && has(g.why, "not plain ASCII"));
 
+    /* OLED rows: <= 63 characters is not enough when the words wrap past 3 rows of 21 */
+    g = run_setter(reply_of("abcdefghijkl abcdefghijkl abcdefghijkl abcdefghijkl", good_rules), t);   /* 51 chars, 4 rows */
+    CHECK(g.status == GATE_TEXT_REJECTED && has(g.why, "text wraps past 3 OLED rows"));
+    g = run_setter(reply_of("abcdefghijkl abcdefghijkl abcdefghijkl", good_rules), t);                 /* 3 rows */
+    CHECK(g.status == GATE_OK);
+    CHECK(puzzle_text_fits_oled("1st+2nd=9; 1st-2nd=1; 3rd=2*4th; 3rd+4th=12", PUZZLE_DIAL));
+    CHECK(!puzzle_text_fits_oled(NULL, PUZZLE_DIAL));
+
     /* malformed replies */
     g = run_setter("I cannot do that.", t);
     CHECK(g.status == GATE_NO_JSON && has(g.why, "no JSON"));
@@ -218,6 +226,13 @@ static void test_gate_setter_wire(void)
     CHECK(g.status == GATE_TEXT_REJECTED && has(g.why, "text too long (43 > 42)"));
     g = run_setter(reply_of(std::string(42, 'b'), "odd(w);w>3"), t);
     CHECK(g.status == GATE_OK);
+    /* wires get 2 rows: 3 words of 13 characters (41 total) wrap to 3 rows */
+    g = run_setter(reply_of("abcdefghijklm abcdefghijklm abcdefghijklm", "odd(w);w>3"), t);
+    CHECK(g.status == GATE_TEXT_REJECTED && has(g.why, "text wraps past 2 OLED rows"));
+    g = run_setter(reply_of("abcdefghijklm abcdefghijklm", "odd(w);w>3"), t);
+    CHECK(g.status == GATE_OK);
+    CHECK(puzzle_text_fits_oled("Cut wire w of n: odd(w); w>3", PUZZLE_WIRE));
+    CHECK(!puzzle_text_fits_oled("abcdefghijklm abcdefghijklm abcdefghijklm", PUZZLE_WIRE));
     /* wire terms only */
     g = run_setter(reply_of(good_text, "d1=5"), t);
     CHECK(g.status == GATE_RULES_SYNTAX && has(g.why, "PR_ERR_TERM_KIND"));
