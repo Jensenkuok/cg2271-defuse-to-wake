@@ -926,7 +926,7 @@ void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &
     out->module_order[0] = PROTO_MODULE_DIAL;
     out->module_order[1] = PROTO_MODULE_WIRES;
     out->module_order[2] = PROTO_MODULE_TRIPWIRE;
-    out->module_order[3] = PROTO_MODULE_DIAL;
+    out->module_order[3] = PROTO_MODULE_LIGHTS;   /* the wake-up module: every bomb has all four sensors */
     out->time_limit_s = (uint16_t)clamp_i(d.time_limit_s, (int)GAME_MIN_TIME_LIMIT_S, (int)GAME_MAX_TIME_LIMIT_S);
     for (i = 0u; i < PROTO_DIAL_DIGITS; i++) {
         out->dial_code[i] = (uint8_t)(dial.dial_code[i] % DIAL_BASE);

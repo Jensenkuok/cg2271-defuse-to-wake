@@ -82,14 +82,14 @@ Type `diff`. With no mornings stored and the mode on Auto:
 ```
 [diff] 0 mornings stored: 0 explosions, 0 snoozes
 [diff] mode auto, score 50 -> level NORMAL
-[diff] bomb: 3 modules, 180 s, 4-5 wires [Normal (Auto, score 50)]
+[diff] bomb: 4 modules, 180 s, 4-5 wires [Normal (Auto, score 50)]
 ```
 
 The score starts at 50 and replays the stored mornings from the oldest to the newest: a fast clean
 defuse (0 strikes, 0 snoozes, 0 explosions, 90 s or less) is +8, any other defuse 0, each explosion
 -10, each snooze -5, clamped to 0..100 after every morning. 0-33 is EASY, 34-66 NORMAL, 67-100 HARD.
-The level sets the bomb: EASY 240 s, 3 modules, 3-4 wires; NORMAL 180 s, 3 modules, 4-5 wires; HARD
-150 s, 4 modules, 6 wires. PASS: after a few real mornings the printed score equals the rule above
+The level sets the bomb: EASY 240 s, 3-4 wires; NORMAL 180 s, 4-5 wires; HARD 150 s, 6 wires. Every
+level has the same four modules in the same order: dial, wires, tripwire, lights. PASS: after a few real mornings the printed score equals the rule above
 (work it out from `hist`).
 
 ### 2.4 BOMB_CONFIG accepted by the MCX (demo ring)
@@ -97,7 +97,7 @@ Press the ESP32 **BOOT** button (GPIO0). Expect on the ESP32:
 
 ```
 [btn] BOOT pressed: demo ring requested
-[cfg] BOMB_CONFIG queued (demo ring): pair 0, 3 modules, 180s, 5 wires (cut 3), dial 4271, tripwire 20-30cm [Normal (Auto, score 50)]
+[cfg] BOMB_CONFIG queued (demo ring): pair 0, 4 modules, 180s, 5 wires (cut 3), dial 4271, tripwire 20-30cm [Normal (Auto, score 50)]
 [btn] RING_NOW queued
 [cfg] BOMB_CONFIG ACKed: pair 0 is now the MCX's config for the next bomb
 ```
@@ -240,9 +240,9 @@ Also try a wrong key (2.9b): `brief` ends with `no model gave a usable text: the
    Wait for `installed`, then type `ai`: all 4 wire puzzles have 6 wires (`wires=6`). Type `puzzles`
    or wait for the run: AI puzzles are written at HARD.
 4. Press **Ring now** (or BOOT). PASS: the `[cfg] BOMB_CONFIG queued` line says `4 modules, 150s, 6 wires`
-   and `[Hard (manual, score 50)]`; the bomb has a 2:30 timer and the fourth module is a second dial;
+   and `[Hard (manual, score 50)]`; the bomb has a 2:30 timer and the fourth module is the lights module;
    the OLED wires screen draws 6 wires.
-5. Repeat with **Easy** (PASS: 240 s, 3 modules, 3 or 4 wires) and **Normal** (180 s, 3 modules, 4 or
+5. Repeat with **Easy** (PASS: 240 s, 4 modules, 3 or 4 wires) and **Normal** (180 s, 4 modules, 4 or
    5 wires). Saving the mode that is already stored does nothing (no refill).
 6. **Tripwire band:** ring several bombs in a row (let each explode or defuse) and reach the tripwire
    module each time. PASS: the OLED line reads `Hold hand A-Bcm 3s` with B = A + 10 and A between 10

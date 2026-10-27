@@ -683,11 +683,11 @@ static void test_build_config(void)
 
     puzzle_fill_bank_dial(&dial, code, 0);
     puzzle_fill_bank_wire(&wire, 5, 3, 0);
-    d = difficulty(NULL, 0, DIFF_MODE_AUTO);                             /* score 50 = NORMAL: 3 modules, 180 s */
+    d = difficulty(NULL, 0, DIFF_MODE_AUTO);                             /* score 50 = NORMAL: 4 modules, 180 s */
     puzzle_build_config(d, dial, wire, 0u, &c);
     check_config_ranges(c);
-    CHECK(c.module_count == 3 && c.module_order[0] == PROTO_MODULE_DIAL && c.module_order[1] == PROTO_MODULE_WIRES &&
-          c.module_order[2] == PROTO_MODULE_TRIPWIRE);
+    CHECK(c.module_count == 4 && c.module_order[0] == PROTO_MODULE_DIAL && c.module_order[1] == PROTO_MODULE_WIRES &&
+          c.module_order[2] == PROTO_MODULE_TRIPWIRE && c.module_order[3] == PROTO_MODULE_LIGHTS);   /* D, W, T, L */
     CHECK(c.time_limit_s == 180 && c.dial_code[0] == 4 && c.dial_code[1] == 2 && c.dial_code[2] == 7 && c.dial_code[3] == 1);
     CHECK(c.wire_count == 5 && c.correct_wire == 2);                    /* k = 3 (1-based) -> index 2 */
     CHECK(c.trip_min_cm == PUZZLE_TRIP_MIN_BASE_CM && c.trip_max_cm == PUZZLE_TRIP_MIN_BASE_CM + PUZZLE_TRIP_WIDTH_CM &&
@@ -697,11 +697,16 @@ static void test_build_config(void)
           back.time_limit_s == c.time_limit_s && back.wire_count == c.wire_count &&
           back.correct_wire == c.correct_wire && memcmp(back.dial_code, c.dial_code, 4) == 0);
 
-    d.module_count = 4;                                                  /* 4 modules: DIAL again as the 4th */
+    d.module_count = 4;
     d.time_limit_s = 210;
     puzzle_build_config(d, dial, wire, 1u, &c);
-    CHECK(c.module_count == 4 && c.module_order[3] == PROTO_MODULE_DIAL && c.time_limit_s == 210);
+    CHECK(c.module_count == 4 && c.module_order[3] == PROTO_MODULE_LIGHTS && c.time_limit_s == 210);
     check_config_ranges(c);
+    d.module_count = 3;                                                  /* a shorter bomb is a prefix: LIGHTS is dropped */
+    puzzle_build_config(d, dial, wire, 1u, &c);
+    CHECK(c.module_count == 3 && c.module_order[2] == PROTO_MODULE_TRIPWIRE);
+    check_config_ranges(c);
+    d.module_count = 4;
 
     for (n = 3; n <= 6; n++) {
         for (k = 1; k <= n; k++) {

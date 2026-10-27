@@ -203,7 +203,7 @@ static_assert(PUZZLE_TRIP_MIN_BASE_CM >= GAME_TRIP_BOUND_MIN_CM && PUZZLE_TRIP_F
 /* One 32-bit random word (esp_random on the board) -> a band of PUZZLE_TRIP_WIDTH_CM. */
 void trip_band_from_random(uint32_t r, uint8_t *min_cm, uint8_t *max_cm);
 
-/* Modules DIAL, WIRES, TRIPWIRE (+ DIAL when 4), the time of the level, the puzzle answers (wire count
+/* Modules DIAL, WIRES, TRIPWIRE, LIGHTS (every level asks for all four), the time of the level, the puzzle answers (wire count
  * and wire come from the puzzle actually used, so the clue and the config never disagree), a tripwire
  * band from trip_rnd and the default strikes. Every field is inside the MCX's range checks. */
 void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &wire, uint32_t trip_rnd,

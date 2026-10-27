@@ -45,8 +45,10 @@
 #define DIFF_EASY_TIME_S        240
 #define DIFF_NORMAL_TIME_S      180
 #define DIFF_HARD_TIME_S        150
-#define DIFF_EASY_MODULES       3
-#define DIFF_NORMAL_MODULES     3
+/* Every level uses all four sensor modules (dial, wires, tripwire, lights): the light module is the
+ * wake-up mechanic, so no level skips it. Levels differ by time, wire count and puzzle tier. */
+#define DIFF_EASY_MODULES       4
+#define DIFF_NORMAL_MODULES     4
 #define DIFF_HARD_MODULES       4
 #define DIFF_EASY_WIRES_MIN     3
 #define DIFF_EASY_WIRES_MAX     4
@@ -107,7 +109,7 @@ static inline LevelSpec difficulty_level_spec(int level)
 
 /* The bomb the ESP32 asks the MCX for, and why (briefing, /api/status, Serial "diff"). */
 struct Difficulty {
-    uint8_t module_count;           /* 3..4 */
+    uint8_t module_count;           /* 4 at every level */
     uint16_t time_limit_s;          /* 150..240 */
     uint8_t level;                  /* effective level, PR_EASY..PR_HARD */
     uint8_t mode;                   /* DiffMode */

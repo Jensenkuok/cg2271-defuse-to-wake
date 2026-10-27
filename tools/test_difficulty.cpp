@@ -274,7 +274,7 @@ static void test_empty_history_is_normal(void)
     Difficulty d = difficulty(NULL, 0, DIFF_MODE_AUTO);
 
     CHECK(d.score == 50 && d.level == PR_NORMAL && d.mode == DIFF_MODE_AUTO);
-    CHECK(d.module_count == 3 && d.time_limit_s == 180);
+    CHECK(d.module_count == 4 && d.time_limit_s == 180);
     CHECK(strcmp(d.explanation, "Normal (Auto, score 50)") == 0);
     {
         HistRecord none[1];
@@ -307,7 +307,7 @@ static void test_mode_override(void)
         d = difficulty(h, 8, DIFF_MODE_AUTO);
         CHECK(d.score == 100 && d.level == PR_HARD && d.time_limit_s == 150 && d.module_count == 4);
         d = difficulty(h, 8, DIFF_MODE_EASY);
-        CHECK(d.score == 100 && d.level == PR_EASY && d.time_limit_s == 240 && d.module_count == 3);   /* score still shown */
+        CHECK(d.score == 100 && d.level == PR_EASY && d.time_limit_s == 240 && d.module_count == 4);   /* score still shown */
         CHECK(strcmp(d.explanation, "Easy (manual, score 100)") == 0);
         d = difficulty(h, 8, DIFF_MODE_NORMAL);
         CHECK(d.level == PR_NORMAL && strcmp(d.explanation, "Normal (manual, score 100)") == 0);
@@ -351,8 +351,8 @@ static void test_level_table(void)
     LevelSpec h = difficulty_level_spec(PR_HARD);
     LevelSpec odd = difficulty_level_spec(0);
 
-    CHECK(e.time_s == 240 && e.modules == 3 && e.wire_min == 3 && e.wire_max == 4);
-    CHECK(n.time_s == 180 && n.modules == 3 && n.wire_min == 4 && n.wire_max == 5);
+    CHECK(e.time_s == 240 && e.modules == 4 && e.wire_min == 3 && e.wire_max == 4);
+    CHECK(n.time_s == 180 && n.modules == 4 && n.wire_min == 4 && n.wire_max == 5);
     CHECK(h.time_s == 150 && h.modules == 4 && h.wire_min == 6 && h.wire_max == 6);
     CHECK(odd.time_s == n.time_s && odd.modules == n.modules && odd.wire_min == n.wire_min);   /* unknown = NORMAL */
     CHECK(difficulty_level_spec(PR_UNSOLVABLE).wire_max == n.wire_max);
@@ -365,9 +365,9 @@ static void test_level_table(void)
         CHECK(s.modules >= GAME_MIN_MODULES && s.modules <= PROTO_MAX_MODULES);
         CHECK(s.wire_min >= GAME_MIN_WIRES && s.wire_max <= GAME_MAX_WIRES && s.wire_min <= s.wire_max);
     }
-    /* harder = less time, never fewer modules or fewer wires */
+    /* harder = less time, never fewer wires; every level has all four sensor modules (L4) */
     CHECK(e.time_s > n.time_s && n.time_s > h.time_s);
-    CHECK(e.modules <= n.modules && n.modules <= h.modules);
+    CHECK(e.modules == 4 && n.modules == 4 && h.modules == 4);
     CHECK(e.wire_min <= n.wire_min && n.wire_min <= h.wire_min);
 
     /* difficulty() applies the table for every mode */
@@ -483,9 +483,7 @@ static void test_config_follows_level_and_puzzle(void)
                 CHECK(c.wire_count == n && c.correct_wire == k - 1);         /* from the puzzle used, never from the level */
                 CHECK(c.module_order[0] == PROTO_MODULE_DIAL && c.module_order[1] == PROTO_MODULE_WIRES &&
                       c.module_order[2] == PROTO_MODULE_TRIPWIRE);
-                if (spec.modules == 4) {
-                    CHECK(c.module_order[3] == PROTO_MODULE_DIAL);
-                }
+                CHECK(spec.modules == 4 && c.module_order[3] == PROTO_MODULE_LIGHTS);   /* D, W, T, L at every level */
                 CHECK(c.trip_min_cm >= 10 && c.trip_max_cm == c.trip_min_cm + 10 && c.trip_max_cm <= 40);
                 CHECK(memcmp(c.dial_code, code, 4) == 0);
             }
