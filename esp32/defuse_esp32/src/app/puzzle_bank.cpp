@@ -411,6 +411,7 @@ void bank_fill_set(PuzzleSet *s, const uint32_t rnd[PUZZLE_BANK_WORDS], int leve
 {
     memset(s, 0, sizeof(*s));
     s->magic = PUZZLE_MAGIC;
+    s->level = (uint8_t)level;
     for (unsigned i = 0u; i < PUZZLE_PAIRS; i++) {
         BankRequest req;
         BankResult res;
@@ -431,7 +432,7 @@ void bank_fill_set(PuzzleSet *s, const uint32_t rnd[PUZZLE_BANK_WORDS], int leve
         memset(&req, 0, sizeof(req));
         req.level = level;
         req.kind = PUZZLE_WIRE;
-        wire_pick_from_random(rnd[3u * i + 1u], &req.wire_count, &req.wire_k);
+        wire_pick_from_random(level, rnd[3u * i + 1u], &req.wire_count, &req.wire_k);
         req.seed = rnd[3u * i + 2u] ^ SEED_WIRE_XOR;
         bank_generate(req, &res);
         Puzzle *wp = &s->wire[i];

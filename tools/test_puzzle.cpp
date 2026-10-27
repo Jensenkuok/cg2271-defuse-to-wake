@@ -636,124 +636,17 @@ static void test_random_picks(void)
     for (r = 1; r < 200000u; r += 7919u) {
         dial_code_from_random(r * 2654435761u, code);
         CHECK(code[0] < 10 && code[1] < 10 && code[2] < 10 && code[3] < 10);
-        wire_pick_from_random(r * 2654435761u, &n, &k);
-        CHECK(n >= 3 && n <= 6 && k >= 1 && k <= n);
+        wire_pick_from_random(PR_EASY, r * 2654435761u, &n, &k);
+        CHECK(n >= 3 && n <= 4 && k >= 1 && k <= n);
+        seen_n[n]++;
+        wire_pick_from_random(PR_NORMAL, r * 2654435761u, &n, &k);
+        CHECK(n >= 4 && n <= 5 && k >= 1 && k <= n);
+        seen_n[n]++;
+        wire_pick_from_random(PR_HARD, r * 2654435761u, &n, &k);
+        CHECK(n == 6 && k >= 1 && k <= n);
         seen_n[n]++;
     }
     CHECK(seen_n[3] > 0 && seen_n[4] > 0 && seen_n[5] > 0 && seen_n[6] > 0);
-}
-
-/* ================= difficulty ================= */
-static HistRecord mk(unsigned snoozes, unsigned strikes)
-{
-    HistRecord r;
-
-    memset(&r, 0, sizeof(r));
-    r.snoozes = (uint8_t)snoozes;
-    r.strikes = (uint8_t)strikes;
-    return r;
-}
-
-static void test_difficulty(void)
-{
-    HistRecord h[10];
-    Difficulty d;
-    int i;
-
-    d = difficulty(NULL, 0);
-    CHECK(d.module_count == 3 && d.time_limit_s == 180 && strlen(d.explanation) > 0);
-    CHECK(strcmp(d.explanation, "No history yet: standard bomb") == 0);
-    d = difficulty(h, 0);
-    CHECK(d.module_count == 3 && d.time_limit_s == 180);
-    d = difficulty(h, -3);
-    CHECK(d.module_count == 3 && d.time_limit_s == 180);
-
-    /* snoozes: 3 in the last 7 add a module, 2 do not; the 8th morning is ignored */
-    for (i = 0; i < 10; i++) {
-        h[i] = mk(0, 0);
-    }
-    h[3].snoozes = 2;
-    h[5].snoozes = 1;
-    d = difficulty(h, 10);
-    CHECK(d.module_count == 4 && d.time_limit_s == 150);                /* clean run of 3 earns -30 s */
-    h[5].snoozes = 0;
-    d = difficulty(h, 10);
-    CHECK(d.module_count == 3);
-    h[7].snoozes = 9;
-    d = difficulty(h, 10);
-    CHECK(d.module_count == 3);                                          /* outside the 7-morning window */
-    h[6].snoozes = 1;
-    d = difficulty(h, 10);
-    CHECK(d.module_count == 4);                                          /* 2 + 1 = 3 inside the window */
-
-    /* strikes: average >= 2 adds 30 s (one snooze on the newest morning keeps the clean bonus away) */
-    for (i = 0; i < 7; i++) {
-        h[i] = mk(0, 2);
-    }
-    h[0].snoozes = 1;
-    d = difficulty(h, 7);
-    CHECK(d.time_limit_s == 210 && d.module_count == 3);
-    h[0].strikes = 1;                                                    /* sum 13 over 7: avg < 2 */
-    d = difficulty(h, 7);
-    CHECK(d.time_limit_s == 180);
-    h[0].strikes = 3;                                                    /* sum 15 */
-    d = difficulty(h, 7);
-    CHECK(d.time_limit_s == 210);
-    d = difficulty(h, 2);                                                /* two mornings: (3 + 2) / 2 = 2.5 */
-    CHECK(d.time_limit_s == 210);
-    h[0].strikes = 0;
-    d = difficulty(h, 2);                                                /* (0 + 2) / 2 = 1 */
-    CHECK(d.time_limit_s == 180);
-
-    /* clean streak: 3 newest mornings without a snooze give -30 s, needs 3 records */
-    for (i = 0; i < 7; i++) {
-        h[i] = mk(0, 0);
-    }
-    d = difficulty(h, 3);
-    CHECK(d.time_limit_s == 150);
-    d = difficulty(h, 2);
-    CHECK(d.time_limit_s == 180);
-    h[2].snoozes = 1;                                                    /* the third newest snoozed */
-    d = difficulty(h, 7);
-    CHECK(d.time_limit_s == 180);
-    h[2].snoozes = 0;
-    h[3].snoozes = 1;                                                    /* the fourth does not matter */
-    d = difficulty(h, 7);
-    CHECK(d.time_limit_s == 150);
-
-    /* clean and hard cancel out (180 s); older snoozes then add a module without changing the time */
-    for (i = 0; i < 7; i++) {
-        h[i] = mk(0, 2);
-    }
-    d = difficulty(h, 7);
-    CHECK(d.time_limit_s == 180 && d.module_count == 3);
-    for (i = 3; i < 7; i++) {
-        h[i].snoozes = 1;
-    }
-    d = difficulty(h, 7);
-    CHECK(d.module_count == 4 && d.time_limit_s == 180);
-
-    /* always inside the allowed range and the explanation always fits, for every combination */
-    for (i = 0; i < 4000; i++) {
-        int j;
-
-        for (j = 0; j < 10; j++) {
-            h[j] = mk((unsigned)((i * 7 + j * 13) % 5 == 0 ? 255 : (i + j) % 3), (unsigned)((i / 3 + j * 5) % 5 == 0 ? 255 : (i + j) % 4));
-        }
-        d = difficulty(h, 1 + i % 10);
-        CHECK(d.module_count >= 3 && d.module_count <= 4);
-        CHECK(d.time_limit_s >= DIFF_TIME_MIN_S && d.time_limit_s <= DIFF_TIME_MAX_S && d.time_limit_s % 30 == 0);
-        CHECK(strlen(d.explanation) > 0 && strlen(d.explanation) <= PUZZLE_EXPLAIN_MAX);
-    }
-    /* the longest explanation: all three reasons with a two-digit snooze count */
-    for (i = 0; i < 7; i++) {
-        h[i] = mk(i < 3 ? 0 : 99, 2);
-    }
-    d = difficulty(h, 7);
-    CHECK(strlen(d.explanation) <= PUZZLE_EXPLAIN_MAX);
-    CHECK(strstr(d.explanation, "99 snoozes") != NULL && strstr(d.explanation, "+30s") != NULL &&
-          strstr(d.explanation, "-30s") != NULL);
-    printf("  explanation sample: \"%s\"\n", d.explanation);
 }
 
 /* ================= BOMB_CONFIG ================= */
@@ -790,14 +683,15 @@ static void test_build_config(void)
 
     puzzle_fill_bank_dial(&dial, code, 0);
     puzzle_fill_bank_wire(&wire, 5, 3, 0);
-    d = difficulty(NULL, 0);
-    puzzle_build_config(d, dial, wire, &c);
+    d = difficulty(NULL, 0, DIFF_MODE_AUTO);                             /* score 50 = NORMAL: 3 modules, 180 s */
+    puzzle_build_config(d, dial, wire, 0u, &c);
     check_config_ranges(c);
     CHECK(c.module_count == 3 && c.module_order[0] == PROTO_MODULE_DIAL && c.module_order[1] == PROTO_MODULE_WIRES &&
           c.module_order[2] == PROTO_MODULE_TRIPWIRE);
     CHECK(c.time_limit_s == 180 && c.dial_code[0] == 4 && c.dial_code[1] == 2 && c.dial_code[2] == 7 && c.dial_code[3] == 1);
     CHECK(c.wire_count == 5 && c.correct_wire == 2);                    /* k = 3 (1-based) -> index 2 */
-    CHECK(c.trip_min_cm == GAME_DEFAULT_TRIP_MIN_CM && c.trip_max_cm == GAME_DEFAULT_TRIP_MAX_CM && c.max_strikes == 3);
+    CHECK(c.trip_min_cm == PUZZLE_TRIP_MIN_BASE_CM && c.trip_max_cm == PUZZLE_TRIP_MIN_BASE_CM + PUZZLE_TRIP_WIDTH_CM &&
+          c.max_strikes == 3);                                           /* rnd 0 -> the nearest band, 10-20 cm */
     CHECK(proto_pack_bomb_config(&c, buf, sizeof(buf)) == PROTO_SIZE_BOMB_CONFIG);
     CHECK(proto_unpack_bomb_config(buf, sizeof(buf), &back) && back.module_count == c.module_count &&
           back.time_limit_s == c.time_limit_s && back.wire_count == c.wire_count &&
@@ -805,14 +699,14 @@ static void test_build_config(void)
 
     d.module_count = 4;                                                  /* 4 modules: DIAL again as the 4th */
     d.time_limit_s = 210;
-    puzzle_build_config(d, dial, wire, &c);
+    puzzle_build_config(d, dial, wire, 1u, &c);
     CHECK(c.module_count == 4 && c.module_order[3] == PROTO_MODULE_DIAL && c.time_limit_s == 210);
     check_config_ranges(c);
 
     for (n = 3; n <= 6; n++) {
         for (k = 1; k <= n; k++) {
             puzzle_fill_bank_wire(&wire, n, k, 0);
-            puzzle_build_config(d, dial, wire, &c);
+            puzzle_build_config(d, dial, wire, (uint32_t)(n * 7 + k), &c);
             check_config_ranges(c);
             CHECK(c.wire_count == n && c.correct_wire == k - 1);
         }
@@ -822,8 +716,9 @@ static void test_build_config(void)
     memset(&wire, 0, sizeof(wire));
     d.module_count = 9;
     d.time_limit_s = 9999;
-    puzzle_build_config(d, dial, wire, &c);
+    puzzle_build_config(d, dial, wire, 0xFFFFFFFFu, &c);
     CHECK(c.module_count == 4 && c.wire_count == 3 && c.correct_wire == 0);
+    check_config_ranges(c);
 }
 
 /* ================= selection rules ================= */
@@ -934,8 +829,7 @@ int main(void)
     test_bank_puzzles();
     test_bank_set();
     test_random_picks();
-    printf("test_puzzle: difficulty, config, selection\n");
-    test_difficulty();
+    printf("test_puzzle: config, selection\n");
     test_build_config();
     test_pair_rules();
     test_checker_order();

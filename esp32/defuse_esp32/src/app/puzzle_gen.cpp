@@ -24,8 +24,6 @@ namespace {
 #define LATENCY_MAX_MS      65535u
 #define BANK_SLOW_LOG_MS    1000u       /* a bank puzzle slower than this is worth a log line */
 
-static_assert(APP_PUZZLE_DEFAULT_LEVEL == PR_NORMAL, "O6: until the difficulty score exists the nightly run asks for NORMAL");
-
 /* ---- Prompts. The riddle answer is given by the ESP32; the checker never sees it. The setter writes
  * the riddle AND the same facts as rules in the puzzle_rules.h language; the ESP32 proves the rules
  * (one solution = our answer) and rates them, so the level is computed, never taken from the LLM. ---- */
@@ -77,7 +75,8 @@ struct Gen {
     uint32_t started_unix;
     uint8_t idx;                        /* 0..PAIRS-1 dial, PAIRS..2*PAIRS-1 wire */
     uint8_t attempt;                    /* 1..APP_PUZZLE_ATTEMPTS */
-    uint8_t level;                      /* requested level of this run (PrLevel) */
+    uint8_t level;                      /* requested level of this run (PrLevel), fixed when the run starts */
+    bool bank_only;                     /* O10 refill after a level change: bank puzzles only, installed even with no AI puzzle */
     uint8_t code[PROTO_DIAL_DIGITS];    /* the answer being worked on */
     int wire_n;
     int wire_k;
@@ -98,6 +97,7 @@ struct Gen {
     char last_said[PUZZLE_ANSWER_LEN];
 };
 
+uint8_t s_target_level = APP_PUZZLE_DEFAULT_LEVEL;  /* the level new runs ask for (network task only) */
 SemaphoreHandle_t s_mutex;
 PuzzleSet *s_set;                       /* the active set (PSRAM); guarded by s_mutex */
 uint32_t s_set_gen;                     /* guarded */
@@ -242,14 +242,24 @@ void fill_target(Puzzle *p)
     }
 }
 
-void gen_begin(uint32_t unix_now)
+/* level: what this run asks for (the whole set, one level). bank_only: no LLM at all (O10 refill). */
+void gen_begin(uint32_t unix_now, uint8_t level, bool bank_only)
 {
     memset(s_gen, 0, sizeof(Gen));
     s_gen->work.magic = PUZZLE_MAGIC;
+    s_gen->work.level = level;
+    s_gen->level = level;
     s_gen->started_unix = unix_now;
     s_gen->phase = PH_NEXT;
-    Serial.printf("[ai] generating %u dial + %u wire puzzles (setter %s, checker %s first)\n",
-                  (unsigned)PUZZLE_PAIRS, (unsigned)PUZZLE_PAIRS, k_setter_chain[0], k_checker_chain[0]);
+    if (bank_only) {
+        s_gen->bank_only = true;
+        s_gen->abort_ai = true;         /* step_next stores bank puzzles only */
+        Serial.printf("[ai] refilling the set from the bank at level %s\n", pr_level_name(level));
+        return;
+    }
+    Serial.printf("[ai] generating %u dial + %u wire puzzles at level %s (setter %s, checker %s first)\n",
+                  (unsigned)PUZZLE_PAIRS, (unsigned)PUZZLE_PAIRS, pr_level_name(level), k_setter_chain[0],
+                  k_checker_chain[0]);
 }
 
 /* Lets the idle task (and its watchdog) run during the bank's compute loop: one tick every few tries. */
@@ -324,7 +334,16 @@ void gen_finish(void)
 {
     s_gen->work.generated_unix = s_gen->started_unix;
     s_gen->work.ai_count = s_gen->ai_count;
-    print_set(s_gen->work, s_set_gen + (s_gen->ai_count > 0u ? 1u : 0u));
+    print_set(s_gen->work, s_set_gen + ((s_gen->ai_count > 0u || s_gen->bank_only) ? 1u : 0u));
+    if (s_gen->bank_only) {
+        /* O10: the cached set was built for another level, so it is replaced by the proven offline bank
+         * set at once. generated_unix stays 0 and ai_count 0: puzzle_set_fresh() says "not fresh" and the
+         * normal AI run (requested by puzzle_gen_apply_level) replaces it as soon as the network allows. */
+        install_set(s_gen->work);
+        Serial.printf("[ai] bank set at level %s installed\n", pr_level_name(s_gen->work.level));
+        s_gen->phase = PH_IDLE;
+        return;                         /* not a generation run: no retry logic, no briefing trigger */
+    }
     if (s_gen->ai_count > 0u) {
         install_set(s_gen->work);
         Serial.printf("[ai] new set stored in flash (%u AI + %u bank puzzles)\n", (unsigned)s_gen->ai_count,
@@ -384,11 +403,10 @@ void step_next(void)
         dial_code_from_random(esp_random(), s_gen->code);
         dial_code_text(s_gen->code, s_gen->answer);
     } else {
-        wire_pick_from_random(esp_random(), &s_gen->wire_n, &s_gen->wire_k);
+        wire_pick_from_random(s_gen->level, esp_random(), &s_gen->wire_n, &s_gen->wire_k);   /* wire count of the level */
         snprintf(s_gen->answer, sizeof(s_gen->answer), "%d", s_gen->wire_k);
     }
     s_gen->attempt = 0u;
-    s_gen->level = (uint8_t)APP_PUZZLE_DEFAULT_LEVEL;   /* O6; the difficulty score passes the real level later */
     s_gen->last_setter[0] = '\0';
     s_gen->last_checker[0] = '\0';
     s_gen->last_said[0] = '\0';
@@ -539,7 +557,7 @@ void gen_step(void)
 }  // namespace
 
 /* ================= public ================= */
-bool puzzle_gen_init(void)
+bool puzzle_gen_init(int level)
 {
     uint32_t rnd[PUZZLE_BANK_WORDS];
 
@@ -563,10 +581,11 @@ bool puzzle_gen_init(void)
                       (unsigned)s_set->ai_count, (unsigned)s_set->generated_unix, (unsigned)s_used);
     } else {
         random_words(rnd, PUZZLE_BANK_WORDS);
-        bank_fill_set(s_set, rnd, APP_PUZZLE_DEFAULT_LEVEL);
+        bank_fill_set(s_set, rnd, level);
         s_used = 0u;
         Serial.println("[ai] no stored puzzle set: using template-bank puzzles until the first run");
     }
+    s_target_level = (uint8_t)level;
     s_set_gen = 1u;
     return true;
 }
@@ -637,7 +656,39 @@ void puzzle_gen_service(uint32_t now_ms, uint32_t unix_now, bool net_ok, bool ge
     }
     s_requested = false;
     s_manual = false;
-    gen_begin(unix_now);
+    gen_begin(unix_now, s_target_level, false);
+}
+
+/* Level of the active set. A set stored before PZL2 got its level byte has 0: it was built for NORMAL. */
+static uint8_t set_level(void)
+{
+    return s_set->level != 0u ? s_set->level : (uint8_t)PR_NORMAL;
+}
+
+bool puzzle_gen_apply_level(int level, bool session_active)
+{
+    if (level < PR_EASY || level > PR_HARD) {
+        return false;
+    }
+    s_target_level = (uint8_t)level;                    /* every later run asks for it */
+    if (session_active) {
+        return false;                                   /* CLAUDE.md session guard: refill after DEFUSED -> IDLE */
+    }
+    if (s_gen->phase != PH_IDLE) {
+        if (s_gen->level == s_target_level) {
+            return false;                               /* the run in progress already builds the right level */
+        }
+        s_gen->phase = PH_IDLE;                         /* its puzzles are for the old level: drop the work buffer */
+        Serial.printf("[ai] level changed to %s: the running puzzle run is cancelled\n", pr_level_name(level));
+    }
+    if (set_level() == s_target_level) {
+        return false;
+    }
+    Serial.printf("[ai] level changed (set was built for %s, now %s)\n", pr_level_name(set_level()),
+                  pr_level_name(level));
+    gen_begin(0u, s_target_level, true);
+    request_auto("level changed");                      /* then the normal AI run replaces the bank set */
+    return true;
 }
 
 bool puzzle_set_snapshot(PuzzleSet *out, uint32_t *gen)

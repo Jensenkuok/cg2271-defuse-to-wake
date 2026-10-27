@@ -8,7 +8,7 @@
  * correct by construction (host tests solve every dial code 0000..9999 and every wire k of n).
  *
  * Contents: JSON/text helpers for model replies, puzzle validation, the template bank, the
- * difficulty rule, BOMB_CONFIG assembly and the small pair-selection rules.
+ * BOMB_CONFIG assembly and the small pair-selection rules.
  */
 #ifndef PUZZLE_LOGIC_H
 #define PUZZLE_LOGIC_H
@@ -16,6 +16,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "difficulty.h"
 #include "history_ring.h"
 #include "../game/game_config.h"
 #include "../shared/protocol.h"
@@ -30,20 +31,7 @@
 #define PUZZLE_TEXT_BUF         (PUZZLE_DIAL_TEXT_MAX + 1)
 #define PUZZLE_MODEL_LEN        16      /* "qwen3.6:35b" + NUL */
 #define PUZZLE_ANSWER_LEN       8
-#define PUZZLE_EXPLAIN_MAX      60
 #define PUZZLE_MAGIC            0x505A4C32u /* "PZL2": bump when PuzzleSet changes (PZL2 added Puzzle.level) */
-
-/* ---- Difficulty rule (CLAUDE.md "Difficulty"): deterministic, from the last mornings ---- */
-#define DIFF_WINDOW             7       /* mornings looked at */
-#define DIFF_BASE_MODULES       3
-#define DIFF_BASE_TIME_S        180
-#define DIFF_SNOOZE_LIMIT       3       /* snoozes in the window that add a module */
-#define DIFF_STRIKE_AVG         2       /* average strikes per morning that adds time pressure... */
-#define DIFF_TIME_STEP_S        30      /* ...as one step less/more time */
-#define DIFF_TIME_MAX_S         240
-#define DIFF_TIME_MIN_S         120
-#define DIFF_CLEAN_RUN          3       /* recent mornings with no snooze that earn more time */
-#define DIFF_MODULES_MAX        PROTO_MAX_MODULES
 
 enum PuzzleKind { PUZZLE_DIAL = 1, PUZZLE_WIRE = 2 };
 #define PUZZLE_LEVEL_MAX        3       /* Puzzle.level: 1 EASY, 2 NORMAL, 3 HARD (the PrLevel numbers), 0 = not rated */
@@ -71,7 +59,8 @@ struct PuzzleSet {
     uint32_t magic;                         /* PUZZLE_MAGIC */
     uint32_t generated_unix;                /* 0 = built from the bank only, not stored */
     uint8_t ai_count;                       /* puzzles of source AI */
-    uint8_t reserved[3];
+    uint8_t level;                          /* level (PrLevel) the set was built for; 0 = a P2-era set, built for NORMAL (O10) */
+    uint8_t reserved[2];
     Puzzle dial[PUZZLE_PAIRS];
     Puzzle wire[PUZZLE_PAIRS];
 };
@@ -126,7 +115,9 @@ void dial_code_text(const uint8_t code[PROTO_DIAL_DIGITS], char out[PROTO_DIAL_D
 bool puzzle_answer_text(const Puzzle &p, char *out, size_t out_size);
 /* Random picks from one 32-bit random word (esp_random on the board). */
 void dial_code_from_random(uint32_t r, uint8_t code[PROTO_DIAL_DIGITS]);
-void wire_pick_from_random(uint32_t r, int *wire_count, int *k);
+/* The wire count comes from the level's range (difficulty_level_spec: EASY 3-4, NORMAL 4-5, HARD 6), the
+ * wire from 1..count. An unknown level is treated as NORMAL. */
+void wire_pick_from_random(int level, uint32_t r, int *wire_count, int *k);
 
 /* ================= template bank (correct by construction) ================= */
 #define DIAL_FAMILIES   4
@@ -195,20 +186,28 @@ void puzzle_set_fill_bank(PuzzleSet *s, const uint32_t rnd[PUZZLE_BANK_WORDS]);
 /* Sanity check of a set read back from flash: magic, kinds, ranges, terminated text. */
 bool puzzle_set_valid(const PuzzleSet &s);
 
-/* ================= difficulty ================= */
-struct Difficulty {
-    uint8_t module_count;                   /* 3..4 */
-    uint16_t time_limit_s;                  /* 120..240 */
-    char explanation[PUZZLE_EXPLAIN_MAX + 1];
-};
-
-/* recent: newest first, n records (only the first DIFF_WINDOW count). Empty history = base. */
-Difficulty difficulty(const HistRecord *recent, int n);
-
 /* ================= BOMB_CONFIG ================= */
-/* Modules DIAL, WIRES, TRIPWIRE (+ DIAL when 4), the puzzle answers, default tripwire band and
- * strikes. Every field is inside the MCX's range checks. */
-void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &wire, proto_bomb_config_t *out);
+/* Tripwire band (O11, user: the HC-SR04 is not sensitive enough for a narrower band and reads beyond
+ * ~40 cm are unreliable): the band is always PUZZLE_TRIP_WIDTH_CM wide (the hold time stays the game's
+ * GAME_TRIP_HOLD_MS) and its start moves per bomb, the same at every level. Starts 10..30 cm, so the
+ * bands run from 10-20 to 30-40 cm. */
+#define PUZZLE_TRIP_MIN_BASE_CM     10u
+#define PUZZLE_TRIP_START_VALUES    21u     /* start = base + r % 21 -> 10..30 */
+#define PUZZLE_TRIP_WIDTH_CM        10u
+#define PUZZLE_TRIP_FAR_LIMIT_CM    40u     /* no band reaches beyond this */
+static_assert(PUZZLE_TRIP_MIN_BASE_CM + PUZZLE_TRIP_START_VALUES - 1u + PUZZLE_TRIP_WIDTH_CM == PUZZLE_TRIP_FAR_LIMIT_CM,
+              "the farthest band ends exactly at the limit");
+static_assert(PUZZLE_TRIP_MIN_BASE_CM >= GAME_TRIP_BOUND_MIN_CM && PUZZLE_TRIP_FAR_LIMIT_CM <= GAME_TRIP_BOUND_MAX_CM,
+              "inside the bounds the MCX range-checks");
+
+/* One 32-bit random word (esp_random on the board) -> a band of PUZZLE_TRIP_WIDTH_CM. */
+void trip_band_from_random(uint32_t r, uint8_t *min_cm, uint8_t *max_cm);
+
+/* Modules DIAL, WIRES, TRIPWIRE (+ DIAL when 4), the time of the level, the puzzle answers (wire count
+ * and wire come from the puzzle actually used, so the clue and the config never disagree), a tripwire
+ * band from trip_rnd and the default strikes. Every field is inside the MCX's range checks. */
+void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &wire, uint32_t trip_rnd,
+                         proto_bomb_config_t *out);
 
 /* ================= selection rules ================= */
 /* Lowest pair index whose bit is clear in used_mask, -1 if all `count` are used. */

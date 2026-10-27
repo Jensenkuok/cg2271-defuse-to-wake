@@ -70,7 +70,8 @@ bool bank_rules_to_text(const char *rules, int kind, char *text, size_t text_siz
 bool bank_recheck(const char *text, int kind, int wire_count, int answer, int *level);
 
 /* A whole set at one level: 3 random words per pair as in puzzle_set_fill_bank (dial code, wire pick,
- * seed). Every puzzle is source BANK, Puzzle.level is its measured level. */
+ * seed). Every puzzle is source BANK, Puzzle.level is its measured level, PuzzleSet.level the requested
+ * one, and the wire counts come from that level's range (difficulty_level_spec). */
 void bank_fill_set(PuzzleSet *s, const uint32_t rnd[PUZZLE_BANK_WORDS], int level);
 
 #endif /* PUZZLE_BANK_H */

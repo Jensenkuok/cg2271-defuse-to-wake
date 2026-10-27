@@ -391,6 +391,21 @@ static bool puzzle_calls_allowed(const NetCtx &c, const AppState &st, uint32_t u
 /* The BOOT demo ring and bomb_config_service() live in the LINK task now (see bomb_config.h):
  * the LLM jobs below can block this task for up to 30 s per call. */
 
+/* O10: the puzzle set follows the effective difficulty level (mode setting, or the score band in Auto).
+ * Runs every pass, before the MCX sync so a BOMB_CONFIG sent this pass already finds the new set; the work
+ * itself is cheap (one history copy) and puzzle_gen_apply_level only acts when the level differs from the
+ * cached set's. It never acts inside a bomb session (CLAUDE.md session guard): the refill waits for it. */
+static void service_difficulty_level(void)
+{
+    AppState *const st = s_puzzle_state;
+    Difficulty d;
+
+    if (!app_state_read(st) || !bomb_config_difficulty(&d)) {
+        return;                                    /* state or history busy: try again next pass */
+    }
+    (void)puzzle_gen_apply_level(d.level, st->session_active || game_ringing(*st));
+}
+
 /* LLM jobs: the puzzle run and the briefing. Together they do at most ONE LLM call per pass: the
  * briefing waits while a puzzle run is in progress, so the loop (timetable, results, alarm sync)
  * is back within one call's timeout. */
@@ -595,6 +610,7 @@ static void network_task(void *arg)
         service_outage_end(c, now);
         handle_settings(c, now);
         handle_results(c, unix_valid);
+        service_difficulty_level();
         puzzle_flush_used();                       /* the link task marks pairs used in RAM; the flash write is ours */
         if (c.time_valid) {
             if (c.wifi_up) {
@@ -618,6 +634,15 @@ static void network_task(void *arg)
     }
 }
 
+/* The level a new puzzle set is built for at boot: the mode, or the score of the stored mornings. */
+static int initial_level(void)
+{
+    Difficulty d;
+
+    (void)bomb_config_difficulty(&d);
+    return d.level;
+}
+
 bool network_task_start(void)
 {
     NetCtx &c = s_ctx;
@@ -628,8 +653,12 @@ bool network_task_start(void)
     c.resched_pending = true;                      /* schedule from the flash cache as soon as the time is valid */
     s_lessons = mem_big_new<Lesson>(SCHED_MAX_LESSONS, "network lessons");
     s_puzzle_state = mem_big_new<AppState>(1u, "network app state");
-    if (s_lessons == NULL || s_puzzle_state == NULL || !flash_store_init() || !timetable_init() ||
-        !history_init() || !puzzle_gen_init() || !briefing_init()) {
+    if (s_lessons == NULL || s_puzzle_state == NULL || !flash_store_init()) {
+        Serial.println("[net] could not create the storage objects");
+        return false;
+    }
+    settings_load_difficulty();                    /* RAM copy of the mode, before the first difficulty() call */
+    if (!timetable_init() || !history_init() || !puzzle_gen_init(initial_level()) || !briefing_init()) {
         Serial.println("[net] could not create the storage objects");
         return false;
     }

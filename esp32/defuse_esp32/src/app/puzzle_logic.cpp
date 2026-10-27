@@ -19,7 +19,6 @@
 #define DIAL_BASE           10
 #define DIAL_CODE_SPACE     10000u
 #define TOKEN_VALUE_CAP     100000L /* number tokens saturate here (no overflow on long digit runs) */
-#define DIFF_SHOWN_MAX      99u     /* snooze count printed in the explanation */
 
 static const char *const k_ordinal[] = { "1st", "2nd", "3rd", "4th", "5th", "6th" };
 #define ORDINAL_COUNT 6u
@@ -27,11 +26,6 @@ static const char *const k_ordinal[] = { "1st", "2nd", "3rd", "4th", "5th", "6th
 static const char *ordinal(unsigned i)
 {
     return i < ORDINAL_COUNT ? k_ordinal[i] : "?";
-}
-
-static unsigned min_u(unsigned a, unsigned b)
-{
-    return a < b ? a : b;
 }
 
 static int clamp_i(int v, int lo, int hi)
@@ -529,13 +523,22 @@ void dial_code_from_random(uint32_t r, uint8_t code[PROTO_DIAL_DIGITS])
     }
 }
 
-void wire_pick_from_random(uint32_t r, int *wire_count, int *k)
+void wire_pick_from_random(int level, uint32_t r, int *wire_count, int *k)
 {
-    const unsigned span = GAME_MAX_WIRES - GAME_MIN_WIRES + 1u;
-    const int n = (int)(GAME_MIN_WIRES + (r & 0xFFFFu) % span);
+    const LevelSpec spec = difficulty_level_spec(level);
+    const unsigned span = (unsigned)spec.wire_max - spec.wire_min + 1u;
+    const int n = (int)(spec.wire_min + (r & 0xFFFFu) % span);
 
     *wire_count = n;
     *k = 1 + (int)((r >> 16) % (uint32_t)n);
+}
+
+void trip_band_from_random(uint32_t r, uint8_t *min_cm, uint8_t *max_cm)
+{
+    const uint8_t lo = (uint8_t)(PUZZLE_TRIP_MIN_BASE_CM + r % PUZZLE_TRIP_START_VALUES);
+
+    *min_cm = lo;
+    *max_cm = (uint8_t)(lo + PUZZLE_TRIP_WIDTH_CM);
 }
 
 /* ================= dial templates ================= */
@@ -865,7 +868,7 @@ void puzzle_set_fill_bank(PuzzleSet *s, const uint32_t rnd[PUZZLE_BANK_WORDS])
     for (i = 0u; i < PUZZLE_PAIRS; i++) {
         dial_code_from_random(rnd[3u * i], code);
         puzzle_fill_bank_dial(&s->dial[i], code, rnd[3u * i + 2u] % PUZZLE_VARIANTS);
-        wire_pick_from_random(rnd[3u * i + 1u], &n, &k);
+        wire_pick_from_random(PR_NORMAL, rnd[3u * i + 1u], &n, &k);
         puzzle_fill_bank_wire(&s->wire[i], n, k, (rnd[3u * i + 2u] >> 8) % PUZZLE_VARIANTS);
     }
 }
@@ -912,74 +915,9 @@ bool puzzle_set_valid(const PuzzleSet &s)
     return true;
 }
 
-/* ================= difficulty ================= */
-static void explain_add(Difficulty *d, size_t *len, const char *piece)
-{
-    if (*len > 0u) {
-        snprintf(d->explanation + *len, sizeof(d->explanation) - *len, "; ");
-        *len = strlen(d->explanation);
-    }
-    snprintf(d->explanation + *len, sizeof(d->explanation) - *len, "%s", piece);
-    *len = strlen(d->explanation);
-}
-
-Difficulty difficulty(const HistRecord *recent, int n)
-{
-    Difficulty d;
-    unsigned w = (recent != NULL && n > 0) ? min_u((unsigned)n, DIFF_WINDOW) : 0u;
-    unsigned snoozes = 0u;
-    unsigned strikes = 0u;
-    bool clean = (w >= DIFF_CLEAN_RUN);
-    bool more_modules;
-    bool pressure;
-    int time_s = DIFF_BASE_TIME_S;
-    char piece[PUZZLE_EXPLAIN_MAX + 1];
-    size_t len = 0u;
-    unsigned i;
-
-    memset(&d, 0, sizeof(d));
-    for (i = 0u; i < w; i++) {
-        snoozes += recent[i].snoozes;
-        strikes += recent[i].strikes;
-        if (i < DIFF_CLEAN_RUN && recent[i].snoozes != 0u) {
-            clean = false;
-        }
-    }
-    more_modules = (snoozes >= DIFF_SNOOZE_LIMIT);
-    pressure = (w > 0u && strikes >= DIFF_STRIKE_AVG * w);       /* average strikes >= 2 */
-    d.module_count = (uint8_t)(more_modules ? DIFF_BASE_MODULES + 1 : DIFF_BASE_MODULES);
-    if (d.module_count > DIFF_MODULES_MAX) {
-        d.module_count = DIFF_MODULES_MAX;
-    }
-    if (pressure) {
-        time_s += DIFF_TIME_STEP_S;
-    }
-    if (clean) {
-        time_s -= DIFF_TIME_STEP_S;
-    }
-    d.time_limit_s = (uint16_t)clamp_i(time_s, DIFF_TIME_MIN_S, DIFF_TIME_MAX_S);
-
-    if (more_modules) {
-        snprintf(piece, sizeof(piece), "4 mod: %u snoozes/7d", min_u(snoozes, DIFF_SHOWN_MAX));
-        explain_add(&d, &len, piece);
-    }
-    if (pressure) {
-        snprintf(piece, sizeof(piece), "+30s: avg strikes>=%u", (unsigned)DIFF_STRIKE_AVG);
-        explain_add(&d, &len, piece);
-    }
-    if (clean) {
-        snprintf(piece, sizeof(piece), "-30s: %u clean", (unsigned)DIFF_CLEAN_RUN);
-        explain_add(&d, &len, piece);
-    }
-    if (len == 0u) {
-        snprintf(d.explanation, sizeof(d.explanation), "%s",
-                 w == 0u ? "No history yet: standard bomb" : "Steady mornings: standard bomb");
-    }
-    return d;
-}
-
 /* ================= BOMB_CONFIG ================= */
-void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &wire, proto_bomb_config_t *out)
+void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &wire, uint32_t trip_rnd,
+                         proto_bomb_config_t *out)
 {
     unsigned i;
 
@@ -989,14 +927,13 @@ void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &
     out->module_order[1] = PROTO_MODULE_WIRES;
     out->module_order[2] = PROTO_MODULE_TRIPWIRE;
     out->module_order[3] = PROTO_MODULE_DIAL;
-    out->time_limit_s = d.time_limit_s;
+    out->time_limit_s = (uint16_t)clamp_i(d.time_limit_s, (int)GAME_MIN_TIME_LIMIT_S, (int)GAME_MAX_TIME_LIMIT_S);
     for (i = 0u; i < PROTO_DIAL_DIGITS; i++) {
         out->dial_code[i] = (uint8_t)(dial.dial_code[i] % DIAL_BASE);
     }
     out->wire_count = (uint8_t)clamp_i(wire.wire_count, (int)GAME_MIN_WIRES, (int)GAME_MAX_WIRES);
     out->correct_wire = (uint8_t)clamp_i((int)wire.wire_k - 1, 0, (int)out->wire_count - 1);
-    out->trip_min_cm = GAME_DEFAULT_TRIP_MIN_CM;
-    out->trip_max_cm = GAME_DEFAULT_TRIP_MAX_CM;
+    trip_band_from_random(trip_rnd, &out->trip_min_cm, &out->trip_max_cm);
     out->max_strikes = GAME_DEFAULT_MAX_STRIKES;
 }
 

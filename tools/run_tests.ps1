@@ -40,14 +40,20 @@ $cxxPrograms = @(
     @{ Name = 'test_schedule'; Sources = @('esp32\defuse_esp32\src\app\schedule.cpp') },
     @{ Name = 'test_history';  Sources = @('esp32\defuse_esp32\src\app\history_ring.cpp', 'esp32\defuse_esp32\src\app\schedule.cpp') },
     # test_puzzle solves every 4-digit code by brute force: optimised build to keep it to seconds.
-    @{ Name = 'test_puzzle';   Sources = @('esp32\defuse_esp32\src\app\puzzle_logic.cpp', 'esp32\defuse_esp32\src\app\history_ring.cpp',
+    @{ Name = 'test_puzzle';   Sources = @('esp32\defuse_esp32\src\app\puzzle_logic.cpp', 'esp32\defuse_esp32\src\app\difficulty.cpp',
+                                           'esp32\defuse_esp32\src\app\history_ring.cpp',
                                            'esp32\defuse_esp32\src\app\schedule.cpp', 'shared\protocol.c'); Flags = @('-O2') },
+    # test_difficulty: the 0..100 score replay (O9), bands, Auto/manual mode, level table, level-aware wire pick, tripwire band (O11), BOMB_CONFIG.
+    @{ Name = 'test_difficulty'; Sources = @('esp32\defuse_esp32\src\app\difficulty.cpp', 'esp32\defuse_esp32\src\app\puzzle_logic.cpp',
+                                             'esp32\defuse_esp32\src\app\history_ring.cpp', 'esp32\defuse_esp32\src\app\schedule.cpp',
+                                             'shared\protocol.c'); Flags = @('-O2') },
     # test_text: OLED wrap/marquee, hints, summary, briefing/coach templates and LLM reply validation.
     @{ Name = 'test_text';     Sources = @('esp32\defuse_esp32\src\app\text_logic.cpp', 'esp32\defuse_esp32\src\app\puzzle_logic.cpp',
                                            'esp32\defuse_esp32\src\app\history_ring.cpp', 'esp32\defuse_esp32\src\app\schedule.cpp',
                                            'shared\protocol.c') },
-    # test_web: settings validation, outage expiry, JSON writer/escaping, answer hiding (web page helpers).
-    @{ Name = 'test_web';      Sources = @('esp32\defuse_esp32\src\app\web_logic.cpp', 'esp32\defuse_esp32\src\app\schedule.cpp') },
+    # test_web: settings validation (incl. the difficulty field), outage expiry, JSON writer/escaping, answer hiding (web page helpers).
+    @{ Name = 'test_web';      Sources = @('esp32\defuse_esp32\src\app\web_logic.cpp', 'esp32\defuse_esp32\src\app\difficulty.cpp',
+                                           'esp32\defuse_esp32\src\app\schedule.cpp') },
     # test_framelog: link frame log ring, names, filter and the corrupt-CRC fault helper.
     @{ Name = 'test_framelog'; Sources = @('esp32\defuse_esp32\src\app\frame_log.cpp', 'shared\protocol.c') },
     # test_rules: puzzle rule language parser, brute-force prover and tiered difficulty rater (pure; timing printed, built without -O to be pessimistic).

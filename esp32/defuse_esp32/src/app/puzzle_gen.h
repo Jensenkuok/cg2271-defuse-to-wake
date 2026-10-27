@@ -2,8 +2,8 @@
  * Defuse to Wake - nightly puzzle generation (network task only, lowest priority).
  *
  * A SET is 4 dial + 4 wire puzzles; pair i = dial[i] + wire[i] is used for one bomb. Per puzzle:
- *   1. the ESP32 picks the answer (esp_random): a 4-digit code, or a wire 1..N, and the LEVEL
- *      (EASY / NORMAL / HARD; NORMAL until the difficulty score exists);
+ *   1. the ESP32 picks the answer (esp_random): a 4-digit code, or a wire 1..N (N from the level's
+ *      wire-count range), and the LEVEL (EASY / NORMAL / HARD = the effective difficulty level);
  *   2. the SETTER model writes a riddle AND the same facts as rules in the puzzle_rules.h language
  *      (JSON {"puzzle":"..","rules":".."});
  *   3. the gate (puzzle_gate.cpp) accepts it only if the text passes validate_puzzle, the rules have
@@ -27,8 +27,18 @@
 
 #include "puzzle_logic.h"
 
-/* After flash_store_init(): load the stored set, else build one from the bank. */
-bool puzzle_gen_init(void);
+/* After flash_store_init(): load the stored set, else build one from the bank at `level` (PrLevel,
+ * the effective difficulty level). */
+bool puzzle_gen_init(int level);
+
+/* Network task, every pass: the effective difficulty level (PR_EASY..PR_HARD) and whether a bomb session
+ * is running. Every later run asks for that level. When the cached set was built for another level
+ * (O10: the user saved a new mode, or Auto crossed a band after a morning) it is replaced at once by a
+ * bank set at the new level (proven, offline, one puzzle per pass) and a normal AI run is requested.
+ * A running run for another level is cancelled. Inside a session (first BOMB_ACTIVE until DEFUSED ->
+ * IDLE) nothing is touched: the check repeats every pass, so the refill happens when the session ends.
+ * Returns true on the pass that starts a refill. */
+bool puzzle_gen_apply_level(int level, bool session_active);
 
 /* Ask for a run now (serial "puzzles"). It starts as soon as the Wi-Fi, the clock and the game
  * state allow it. */

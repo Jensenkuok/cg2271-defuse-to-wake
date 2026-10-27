@@ -507,6 +507,13 @@ static void test_bank_set(void)
             CHECK(puzzle_answer_text(s.dial[i], ans, sizeof ans));
             CHECK(strlen(s.dial[i].text) <= (size_t)PUZZLE_DIAL_TEXT_LIMIT);
             CHECK(strlen(s.wire[i].text) <= (size_t)PUZZLE_WIRE_TEXT_MAX);
+            /* P3: the set is built for one level - its wire count comes from that level's range (EASY 3-4,
+             * NORMAL 4-5, HARD 6), the wire puzzle is proven for that count and answer, and the set remembers it */
+            CHECK(s.level == level);
+            CHECK(s.wire[i].wire_count >= difficulty_level_spec(level).wire_min &&
+                  s.wire[i].wire_count <= difficulty_level_spec(level).wire_max);
+            CHECK(bank_recheck(s.wire[i].text, PUZZLE_WIRE, s.wire[i].wire_count, s.wire[i].wire_k, &measured));
+            CHECK(measured == s.wire[i].level);
             counts[s.dial[i].level]++;
         }
     }
