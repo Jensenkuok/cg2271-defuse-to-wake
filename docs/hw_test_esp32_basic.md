@@ -102,7 +102,7 @@ RING_NOW`) or with **SW3** on the MCX. Both ring in 3 s. Then check each screen:
 | after a right digit | that box shows `*`, the caret moves right |
 | wrong digit | one strike box fills in; the digit resets to 0 |
 | wires | 4 vertical wires, a cursor arrow under one; a cut wire is drawn broken |
-| tripwire | horizontal 0-50 cm gauge with the band marked, a marker at the current distance, and a hold bar that fills over 3 s; the bottom line reads `Hold hand 15-25cm 3s` (band from the config) |
+| tripwire | horizontal 0-50 cm gauge with the band marked, a marker at the current distance, and a hold bar that fills over 3 s; the bottom line reads `Hold hand A-Bcm 3s` (the band of the BOMB_CONFIG, B = A + 10, A between 10 and 30; 15-25 only for the built-in default bomb before any config) |
 | 2nd dial in one bomb (e.g. dial, wires, tripwire, dial) | a different clue from the first dial: a built-in bank clue whose answer is the first code with each digit +3 (mod 10); entering that code clears the module, and a strike hint is built from it |
 | defused | `DEFUSED` and `TIME mm:ss` |
 | exploded | `BOOM`, the screen flashes inverted about twice a second, then a new bomb starts |
