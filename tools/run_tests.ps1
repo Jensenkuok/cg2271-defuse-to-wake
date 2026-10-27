@@ -56,6 +56,12 @@ $cxxPrograms = @(
     @{ Name = 'test_gate';     Sources = @('esp32\defuse_esp32\src\app\puzzle_gate.cpp', 'esp32\defuse_esp32\src\app\puzzle_rules.cpp',
                                            'esp32\defuse_esp32\src\app\puzzle_logic.cpp', 'esp32\defuse_esp32\src\app\history_ring.cpp',
                                            'esp32\defuse_esp32\src\app\schedule.cpp', 'shared\protocol.c') },
+    # test_bank: procedural puzzle bank (every level x many answers, proven by the test's own converter + pr_check); the gate accepts its output.
+    @{ Name = 'test_bank';     Sources = @('esp32\defuse_esp32\src\app\puzzle_bank.cpp', 'esp32\defuse_esp32\src\app\puzzle_bank_dial.cpp',
+                                           'esp32\defuse_esp32\src\app\puzzle_bank_wire.cpp', 'esp32\defuse_esp32\src\app\puzzle_gate.cpp',
+                                           'esp32\defuse_esp32\src\app\puzzle_rules.cpp', 'esp32\defuse_esp32\src\app\puzzle_logic.cpp',
+                                           'esp32\defuse_esp32\src\app\text_logic.cpp', 'esp32\defuse_esp32\src\app\history_ring.cpp',
+                                           'esp32\defuse_esp32\src\app\schedule.cpp', 'shared\protocol.c'); Flags = @('-O2') },
     # test_page: the two embedded web pages (web_page.h, web_eng_page.h), each: 20 KB budget, no external assets, no innerHTML, endpoints.
     @{ Name = 'test_page';     Sources = @() }
 )

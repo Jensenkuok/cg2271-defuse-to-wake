@@ -9,6 +9,7 @@
 #include "flash_store.h"
 #include "llm_client.h"
 #include "mem_big.h"
+#include "puzzle_bank.h"
 #include "puzzle_gate.h"
 #include "puzzle_rules.h"
 
@@ -21,6 +22,7 @@ namespace {
 #define SYS_PROMPT_MAX      1600        /* the setter prompts (grammar + examples) are ~1.1 KB; PSRAM, see puzzle_gen_init */
 #define USER_PROMPT_MAX     96
 #define LATENCY_MAX_MS      65535u
+#define BANK_SLOW_LOG_MS    1000u       /* a bank puzzle slower than this is worth a log line */
 
 static_assert(APP_PUZZLE_DEFAULT_LEVEL == PR_NORMAL, "O6: until the difficulty score exists the nightly run asks for NORMAL");
 
@@ -250,16 +252,43 @@ void gen_begin(uint32_t unix_now)
                   (unsigned)PUZZLE_PAIRS, (unsigned)PUZZLE_PAIRS, k_setter_chain[0], k_checker_chain[0]);
 }
 
-/* The bank fills the slot: the answer was already picked, only the text comes from a template.
+/* Lets the idle task (and its watchdog) run during the bank's compute loop: one tick every few tries. */
+void bank_yield(void)
+{
+    vTaskDelay(1);
+}
+
+/* The bank fills the slot: the answer was already picked, the rule set and its text are generated
+ * at the run's level (proven unique and rated by puzzle_bank.cpp, or an old template, logged).
  * What the LLM did before giving up is kept for the listing. */
 void gen_store_bank(void)
 {
     Puzzle *p = &slot(s_gen->idx);
+    BankRequest req;
+    BankResult res;
+    char tag[8];
+    const uint32_t t0 = millis();
 
-    if (cur_is_dial()) {
-        puzzle_fill_bank_dial(p, s_gen->code, esp_random() % PUZZLE_VARIANTS);
-    } else {
-        puzzle_fill_bank_wire(p, s_gen->wire_n, s_gen->wire_k, esp_random() % PUZZLE_VARIANTS);
+    memset(&req, 0, sizeof(req));
+    req.kind = cur_is_dial() ? PUZZLE_DIAL : PUZZLE_WIRE;
+    memcpy(req.code, s_gen->code, sizeof(req.code));
+    req.wire_count = s_gen->wire_n;
+    req.wire_k = s_gen->wire_k;
+    req.level = s_gen->level;
+    req.seed = esp_random();
+    req.yield = bank_yield;
+    bank_generate(req, &res);
+    fill_target(p);
+    copy_str(p->text, sizeof(p->text), res.text);
+    p->source = PUZZLE_SRC_BANK;
+    p->level = res.level;
+    if (res.fallback != 0u) {
+        cur_tag(tag, sizeof(tag));
+        Serial.printf("[ai] %s: no %s rule set found in %u tries: old template used (rated %s)\n", tag,
+                      pr_level_name(s_gen->level), (unsigned)res.tries, pr_level_name(res.level));
+    }
+    if (millis() - t0 > BANK_SLOW_LOG_MS) {
+        Serial.printf("[ai] bank puzzle took %u ms (%u tries)\n", (unsigned)(millis() - t0), (unsigned)res.tries);
     }
     p->attempts = s_gen->attempt;
     copy_str(p->setter, sizeof(p->setter), s_gen->last_setter);
@@ -534,7 +563,7 @@ bool puzzle_gen_init(void)
                       (unsigned)s_set->ai_count, (unsigned)s_set->generated_unix, (unsigned)s_used);
     } else {
         random_words(rnd, PUZZLE_BANK_WORDS);
-        puzzle_set_fill_bank(s_set, rnd);
+        bank_fill_set(s_set, rnd, APP_PUZZLE_DEFAULT_LEVEL);
         s_used = 0u;
         Serial.println("[ai] no stored puzzle set: using template-bank puzzles until the first run");
     }
