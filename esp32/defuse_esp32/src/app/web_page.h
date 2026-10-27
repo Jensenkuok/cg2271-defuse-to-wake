@@ -31,7 +31,7 @@ main{max-width:420px;margin:0 auto;padding:32px 16px 48px}
 .time{font:600 56px/1.1 ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums;margin:4px 0 6px}
 .mute{color:var(--mute);font-size:14px}
 label{display:block;font-weight:600;font-size:14px;margin:28px 0 8px}
-input[type=text]{width:100%;padding:11px 12px;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:12px}
+input[type=text],select{width:100%;padding:11px 12px;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:12px}
 .rng{display:flex;align-items:center;gap:14px}
 .rng input{flex:1;accent-color:var(--acc);margin:0}
 .rng output{min-width:64px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
@@ -39,7 +39,7 @@ input[type=text]{width:100%;padding:11px 12px;font:inherit;color:var(--ink);back
 .btn.fill{background:var(--acc);color:var(--on);margin-top:28px}
 .btn.line{background:none;color:var(--acc);margin-top:12px}
 .btn:disabled{opacity:.5;cursor:default}
-.btn:focus-visible,input:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+.btn:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
 .msg{min-height:20px;margin:10px 0 0;font-size:14px;text-align:center}
 .ok{color:var(--ok)}.err{color:var(--bad)}
 #lost{position:sticky;top:0;z-index:5;background:var(--bad);color:#fff;text-align:center;font-size:14px;font-weight:600;padding:6px}
@@ -52,6 +52,9 @@ input[type=text]{width:100%;padding:11px 12px;font:inherit;color:var(--ink);back
 <input type="text" id="lk" maxlength="512" autocomplete="off" spellcheck="false">
 <label for="ld">Wake up before first class</label>
 <div class="rng"><input type="range" id="ld" min="15" max="180" step="5" value="60"><output id="ldv" for="ld">60 min</output></div>
+<label for="df">Difficulty</label>
+<select id="df"><option value="auto">Auto</option><option value="easy">Easy</option><option value="normal">Normal</option><option value="hard">Hard</option></select>
+<div class="mute" id="dfn">&nbsp;</div>
 <button class="btn fill" type="submit">Save</button><div class="msg" id="fmsg"></div></form>
 <button class="btn line" id="ring" type="button">Ring now</button><div class="msg" id="ringmsg"></div>
 </div></main>
@@ -80,21 +83,23 @@ function render(s){
   const a=s.alarm;
   $("al").textContent=a.valid?a.local.slice(-5):"No alarm set";
   $("al2").textContent=a.valid?(a.local.slice(0,3)+" · "+a.module+" "+a.type+" at "+a.class_local.slice(-5)):" ";
+  $("dfn").textContent="Now: "+s.diff.why;
   if(s.settings.ver!==cfgVer)loadCfg(s.settings.ver);
 }
 async function loadCfg(v){
   cfgVer=v;
   try{const r=await api("/api/settings");if(!r.ok)throw 0;
-    if(!dirty&&document.activeElement!==$("lk")&&document.activeElement!==$("ld")){$("lk").value=r.j.nusmods_link;$("ld").value=r.j.lead_min;readout()}
+    if(!dirty&&document.activeElement!==$("lk")&&document.activeElement!==$("ld")&&document.activeElement!==$("df")){$("lk").value=r.j.nusmods_link;$("ld").value=r.j.lead_min;$("df").value=r.j.difficulty;readout()}
   }catch(e){cfgVer=-1}
 }
 $("lk").oninput=()=>{dirty=true};
 $("ld").oninput=()=>{dirty=true;readout()};
+$("df").onchange=()=>{dirty=true};
 $("form").onsubmit=async e=>{
   e.preventDefault();say("fmsg","","saving...");
-  try{const b=new URLSearchParams({nusmods_link:$("lk").value.trim(),lead_min:$("ld").value}).toString();
+  try{const b=new URLSearchParams({nusmods_link:$("lk").value.trim(),lead_min:$("ld").value,difficulty:$("df").value}).toString();
     const r=await api("/api/settings",b);
-    if(r.ok){dirty=false;say("fmsg","ok","Saved: "+r.j.lead_min+" min lead; timetable refresh started")}
+    if(r.ok){dirty=false;say("fmsg","ok","Saved: "+r.j.lead_min+" min lead, difficulty "+r.j.difficulty)}
     else say("fmsg","err",r.j.error||"rejected")
   }catch(x){say("fmsg","err","No answer from the device")}
   poll();

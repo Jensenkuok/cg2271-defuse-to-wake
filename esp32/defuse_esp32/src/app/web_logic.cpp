@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "config.h"
+#include "difficulty.h"
 #include "schedule.h"
 #include "../shared/protocol.h"
 
@@ -92,6 +93,11 @@ SettingsErr web_validate_settings(const char *link, const char *lead_text, int *
     return check_lead(lead_text, lead_out);
 }
 
+SettingsErr web_validate_difficulty(const char *text, int *mode_out)
+{
+    return difficulty_mode_parse(text, mode_out) ? SETTINGS_OK : SETTINGS_ERR_DIFFICULTY;
+}
+
 const char *web_settings_err_text(SettingsErr err)
 {
     switch (err) {
@@ -104,6 +110,7 @@ const char *web_settings_err_text(SettingsErr err)
     case SETTINGS_ERR_LEAD_MISSING:    return "lead_min is missing";
     case SETTINGS_ERR_LEAD_NOT_NUMBER: return "lead_min must be a whole number";
     case SETTINGS_ERR_LEAD_RANGE:      return "lead_min must be between 15 and 180";
+    case SETTINGS_ERR_DIFFICULTY:      return "difficulty must be auto, easy, normal or hard";
     }
     return "invalid settings";
 }

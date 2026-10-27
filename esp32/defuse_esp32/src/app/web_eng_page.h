@@ -134,7 +134,7 @@ function renderMornings(s){
   const t=s.today,tb=$("today");
   if(!t.classes.length)put(tb,el("div",0,(t.date||"Today")+": no classes"));
   else put(tb,...t.classes.map(c=>el("div",0,c.start+"  "+c.module+" "+c.type+"  "+c.venue)));
-  $("diff").textContent=s.diff.modules+" modules, "+mmss(s.diff.time_s);
+  $("diff").textContent=s.diff.level+": "+s.diff.modules+" modules, "+mmss(s.diff.time_s);
   $("diffy").textContent=s.diff.why;
   $("brief").textContent=s.brief.briefing;$("coach").textContent=s.brief.coach;
   $("streak").textContent="streak "+s.history.streak;

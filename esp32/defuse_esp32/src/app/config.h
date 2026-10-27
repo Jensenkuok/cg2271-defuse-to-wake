@@ -132,6 +132,7 @@
 #define APP_FLASH_MUTEX_WAIT_MS     2000u   /* a flash write can take tens of ms; bounded, never forever */
 #define APP_KEY_LINK                "nusmods_link"
 #define APP_KEY_LEAD                "lead_min"
+#define APP_KEY_DIFFICULTY          "diff_mode"     /* DiffMode number (difficulty.h) */
 #define APP_KEY_TIMETABLE           "tt_cache"
 #define APP_KEY_HISTORY             "hist"
 #define APP_KEY_MIRROR              "mirror"
@@ -177,7 +178,7 @@
 #define APP_LLM_REPLY_MAX           8192    /* reply text kept per call (PSRAM buffers) */
 #define APP_LLM_BODY_MAX            16384   /* larger HTTP bodies are refused */
 #define APP_PUZZLE_ATTEMPTS         3       /* setter + checker rounds per puzzle before the bank */
-#define APP_PUZZLE_DEFAULT_LEVEL    2       /* requested puzzle level: 1 EASY, 2 NORMAL, 3 HARD (PrLevel). NORMAL until the difficulty score picks it */
+#define APP_PUZZLE_DEFAULT_LEVEL    2       /* fallback level (NORMAL) until puzzle_gen_init / puzzle_gen_apply_level give the effective one */
 #define APP_PUZZLE_DEAD_CHAINS      2       /* chains that failed outright in a row: stop asking the LLM */
 #define APP_PUZZLE_FRESH_S          (24 * 3600) /* a stored set younger than this needs no new run at boot */
 #define APP_PUZZLE_NIGHTLY_HOUR     22      /* local hour of the nightly run */

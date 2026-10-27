@@ -52,6 +52,11 @@ static void test_main_page(void)
           strstr(WEB_PAGE, "max=\"180\"") != NULL && strstr(WEB_PAGE, "step=\"5\"") != NULL);
     CHECK(strstr(WEB_PAGE, "Next alarm") != NULL && strstr(WEB_PAGE, "No alarm set") != NULL);
     CHECK(strstr(WEB_PAGE, "NUSMods share link") != NULL && strstr(WEB_PAGE, "Wake up before first class") != NULL);
+    /* difficulty: a small <select> with the four ids, sent with the form, and the "Now:" line from /api/status */
+    CHECK(strstr(WEB_PAGE, "<select id=\"df\">") != NULL && strstr(WEB_PAGE, "value=\"auto\"") != NULL &&
+          strstr(WEB_PAGE, "value=\"easy\"") != NULL && strstr(WEB_PAGE, "value=\"normal\"") != NULL &&
+          strstr(WEB_PAGE, "value=\"hard\"") != NULL);
+    CHECK(strstr(WEB_PAGE, "difficulty:$(\"df\").value") != NULL && strstr(WEB_PAGE, "s.diff.why") != NULL);
     CHECK(strstr(WEB_PAGE, "Save") != NULL && strstr(WEB_PAGE, "Ring now") != NULL);
     /* minimal: no tabs, no engineering controls, and no link to /eng */
     CHECK(strstr(WEB_PAGE, "/eng") == NULL && strstr(WEB_PAGE, "role=\"tab") == NULL);
@@ -70,6 +75,7 @@ static void test_eng_page(void)
     CHECK(strstr(WEB_ENG_PAGE, "href=\"/\"") != NULL && strstr(WEB_ENG_PAGE, ">Settings<") != NULL);
     CHECK(strstr(WEB_ENG_PAGE, "Link to the MCX") != NULL && strstr(WEB_ENG_PAGE, "AI puzzles") != NULL);
     CHECK(strstr(WEB_ENG_PAGE, "Fault injection") != NULL);
+    CHECK(strstr(WEB_ENG_PAGE, "s.diff.level") != NULL && strstr(WEB_ENG_PAGE, "s.diff.why") != NULL);   /* difficulty line */
 }
 
 int main(void)

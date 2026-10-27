@@ -26,7 +26,7 @@ the link and the display never wait on it):
 |---|---|
 | `GET /` | the page, from flash (about 16 KB) |
 | `GET /api/status` | one JSON object, polled every 500 ms |
-| `GET/POST /api/settings` | read / save `nusmods_link` and `lead_min` |
+| `GET/POST /api/settings` | read / save `nusmods_link`, `lead_min` and `difficulty` (`auto`, `easy`, `normal`, `hard`; optional in a POST, anything else is a 400) |
 | `POST /api/ring` | the BOOT-button demo ring (runs in the link task) |
 | `POST /api/fault/corrupt` | arm "corrupt the CRC of the next reliable frame to the MCX" |
 | `POST /api/fault/outage` | 60 s simulated internet outage |
@@ -64,7 +64,7 @@ Two behaviours to know before you test:
 Open `http://defuse.local/`. PASS: it loads in about a second; the main page (settings) shows
 "Next alarm", the alarm time big, a muted line such as `Fri · QF2104 LEC at 12:00` (or "No alarm
 set"), the NUSMods link field and the lead slider (15-180, step 5, live "60 min" readout) filled
-with the stored values, **Save** and **Ring now**. It has no link to the panel. Compare the alarm
+with the stored values, a **Difficulty** list (Auto / Easy / Normal / Hard) with the line `Now: Normal (Auto, score 50)`, **Save** and **Ring now**. It has no link to the panel. Compare the alarm
 with the OLED IDLE bottom line and the Serial `[sched] next alarm ...` line: same time.
 Then open `http://defuse.local/eng`: its header has the clock and the IP and a **Settings** link
 back to `/`; it shows today's classes (or "no classes"), tonight's bomb difficulty with its
@@ -72,8 +72,8 @@ explanation, the briefing and coach text, the streak chip and the table of up to
 first), then the bomb, link, AI, system and fault panels.
 
 ### 2.2 Change `lead_min`, the alarm moves
-On the main page move the lead slider from 60 to 90 and **Save**. PASS: the form says `Saved: 90 min lead;
-timetable refresh started`; the Serial shows `[web] settings saved: lead 90 min`, `[cfg] settings
+On the main page move the lead slider from 60 to 90 and **Save**. PASS: the form says `Saved: 90 min lead, difficulty auto`;
+the Serial shows `[web] settings saved: lead 90 min, difficulty auto`, `[cfg] settings
 changed: timetable refresh + reschedule` and `[sched] next alarm ... lead 90 min`; the alarm time
 moves 30 minutes earlier within a few seconds (the OLED too); with the MCX not in a bomb session a
 `SET_ALARM` is sent. Change it back to 60.

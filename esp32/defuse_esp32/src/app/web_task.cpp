@@ -10,6 +10,7 @@
 #include "app_state.h"
 #include "bomb_config.h"
 #include "config.h"
+#include "difficulty.h"
 #include "display_task.h"
 #include "fault.h"
 #include "frame_log.h"
@@ -28,6 +29,7 @@
 
 #define TIME_TEXT_LEN       48
 #define LEAD_TEXT_MAX       15u
+#define DIFF_TEXT_MAX       15u     /* longer than "normal": rejected as unknown, never truncated into a valid id */
 #define STATE_COUNT         5
 #define WEB_REDUCED_LOG     8       /* frame-log rows kept if the full status does not fit the buffer */
 #define WEB_REDUCED_HIST    7
@@ -47,6 +49,7 @@ static FrameLogEntry s_flog[FRAME_LOG_LEN];
 static HistRecord s_hist[HIST_LEN];
 static char s_cfg_link[APP_LINK_MAX_CHARS + 1];   /* settings cache: re-read only when settings_version() moves */
 static int s_cfg_lead;
+static int s_cfg_diff;
 static uint32_t s_cfg_version;
 static bool s_cfg_valid;
 static char s_in_link[APP_LINK_MAX_CHARS + 1];    /* the form value being validated */
@@ -113,15 +116,22 @@ static void reply(int code, bool ok, const char *key, const char *text)
     send_json(code, jb_ok(j) ? s_json : "{\"ok\":false,\"error\":\"internal\"}");
 }
 
+/* What the page compares to know its form is stale: any change of a setting, the link/lead or the difficulty. */
+static uint32_t settings_page_version(void)
+{
+    return settings_version() + settings_difficulty_version();
+}
+
 static void refresh_settings_cache(void)
 {
-    const uint32_t v = settings_version();
+    const uint32_t v = settings_page_version();
 
     if (s_cfg_valid && v == s_cfg_version) {
         return;
     }
     settings_get_link(s_cfg_link, sizeof(s_cfg_link));
     s_cfg_lead = settings_get_lead_min();
+    s_cfg_diff = settings_get_difficulty_mode();
     s_cfg_version = v;
     s_cfg_valid = true;
 }
@@ -418,6 +428,9 @@ static void put_diff_brief(JsonBuf *j, uint32_t unix_now)
     jb_obj(j);
     jb_kv_uint(j, "modules", d.module_count);
     jb_kv_uint(j, "time_s", d.time_limit_s);
+    jb_kv_str(j, "mode", difficulty_mode_name(d.mode));
+    jb_kv_uint(j, "score", d.score);
+    jb_kv_str(j, "level", pr_level_name(d.level));    /* the effective level: the mode, or the score band in Auto */
     jb_kv_str(j, "why", d.explanation);
     jb_end(j);
     jb_key(j, "brief");
@@ -464,6 +477,7 @@ static void put_settings(JsonBuf *j)
     jb_key(j, "settings");
     jb_obj(j);
     jb_kv_int(j, "lead_min", s_cfg_lead);
+    jb_kv_str(j, "difficulty", difficulty_mode_name(s_cfg_diff));
     jb_kv_uint(j, "ver", s_cfg_version);
     jb_end(j);
 }
@@ -528,7 +542,7 @@ static void handle_status(void)
     send_json(200, s_json);
 }
 
-/* {"ok":true,"nusmods_link":"..","lead_min":N}: the stored values (also the answer to a save). */
+/* {"ok":true,"nusmods_link":"..","lead_min":N,"difficulty":"auto"}: the stored values (also the answer to a save). */
 static void send_settings(void)
 {
     JsonBuf j;
@@ -539,6 +553,7 @@ static void send_settings(void)
     jb_kv_bool(&j, "ok", true);
     jb_kv_str(&j, "nusmods_link", s_cfg_link);
     jb_kv_int(&j, "lead_min", s_cfg_lead);
+    jb_kv_str(&j, "difficulty", difficulty_mode_name(s_cfg_diff));
     jb_end(&j);
     send_json(jb_ok(j) ? 200 : 500, jb_ok(j) ? s_json : "{\"ok\":false,\"error\":\"internal\"}");
 }
@@ -559,9 +574,12 @@ static void handle_settings(void)
 {
     const String &link_arg = s_server.arg("nusmods_link");
     const String &lead_arg = s_server.arg("lead_min");
+    const String &diff_arg = s_server.arg("difficulty");
     char lead_text[LEAD_TEXT_MAX + 1];
+    char diff_text[DIFF_TEXT_MAX + 1];
     SettingsErr err;
     int lead = 0;
+    int diff_mode = settings_get_difficulty_mode();     /* the form field is optional: absent keeps the stored mode */
 
     if (!post_allowed()) {
         return;
@@ -579,15 +597,24 @@ static void handle_settings(void)
         snprintf(lead_text, sizeof(lead_text), "%s", lead_arg.c_str());
         err = web_validate_settings(s_in_link, lead_text, &lead);
     }
+    if (err == SETTINGS_OK && s_server.hasArg("difficulty")) {
+        if (diff_arg.length() > DIFF_TEXT_MAX) {
+            err = SETTINGS_ERR_DIFFICULTY;
+        } else {
+            snprintf(diff_text, sizeof(diff_text), "%s", diff_arg.c_str());
+            err = web_validate_difficulty(diff_text, &diff_mode);
+        }
+    }
     if (err != SETTINGS_OK) {
         reply(400, false, "error", web_settings_err_text(err));
         return;
     }
-    if (!settings_set_link(s_in_link) || settings_set_lead_min(lead) != lead) {
+    if (!settings_set_link(s_in_link) || settings_set_lead_min(lead) != lead ||
+        settings_set_difficulty_mode(diff_mode) != diff_mode) {
         reply(500, false, "error", "could not store the settings in flash");
         return;
     }
-    Serial.printf("[web] settings saved: lead %d min\n", lead);   /* the link is not logged: it can be 500 characters */
+    Serial.printf("[web] settings saved: lead %d min, difficulty %s\n", lead, difficulty_mode_name(diff_mode));   /* the link is not logged: it can be 500 characters */
     send_settings();
 }
 
