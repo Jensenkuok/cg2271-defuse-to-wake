@@ -104,6 +104,26 @@ bool difficulty_mode_parse(const char *text, int *mode_out)
 
 Difficulty difficulty(const HistRecord *recent, int n, int mode)
 {
+    return difficulty_from_score(difficulty_score(recent, n), mode);
+}
+
+Difficulty difficulty_resolve(const HistRecord *recent, int n, int mode, bool history_ok, int *last_good_score)
+{
+    int score;
+
+    if (history_ok || last_good_score == NULL) {
+        score = difficulty_score(recent, n);
+        if (history_ok && last_good_score != NULL) {
+            *last_good_score = score;
+        }
+    } else {
+        score = (*last_good_score >= DIFF_SCORE_MIN) ? *last_good_score : DIFF_SCORE_START;
+    }
+    return difficulty_from_score(score, mode);
+}
+
+Difficulty difficulty_from_score(int score, int mode)
+{
     Difficulty d;
     LevelSpec spec;
 
@@ -112,7 +132,7 @@ Difficulty difficulty(const HistRecord *recent, int n, int mode)
         mode = DIFF_MODE_DEFAULT;
     }
     d.mode = (uint8_t)mode;
-    d.score = (uint8_t)difficulty_score(recent, n);
+    d.score = (uint8_t)clamp_score(score);
     d.level = (uint8_t)difficulty_effective_level(mode, d.score);
     spec = difficulty_level_spec(d.level);
     d.module_count = spec.modules;

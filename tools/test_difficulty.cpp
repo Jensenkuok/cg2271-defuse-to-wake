@@ -512,6 +512,46 @@ static void test_config_follows_level_and_puzzle(void)
     }
 }
 
+/* ================= history lock timeout (L9) ================= */
+static void test_resolve_survives_a_history_timeout(void)
+{
+    HistRecord h[8];
+    HistRecord none[1];
+    int last = DIFF_NO_SCORE;
+    Difficulty d;
+    int i;
+
+    for (i = 0; i < 8; i++) {
+        h[i] = fast_clean();                                                 /* score 100 = HARD */
+    }
+    /* a good read is the same answer as difficulty() and is remembered */
+    d = difficulty_resolve(h, 8, DIFF_MODE_AUTO, true, &last);
+    CHECK(last == 100 && d.score == 100 && d.level == PR_HARD && d.time_limit_s == 150 && d.module_count == 4);
+    /* a timed-out read (zero records, history_ok false): the remembered score is reused, not 50 */
+    d = difficulty_resolve(none, 0, DIFF_MODE_AUTO, false, &last);
+    CHECK(d.score == 100 && d.level == PR_HARD && d.time_limit_s == 150 && d.module_count == 4);
+    CHECK(last == 100);
+    /* a manual mode still wins over the remembered score while the history is unreadable */
+    d = difficulty_resolve(none, 0, DIFF_MODE_EASY, false, &last);
+    CHECK(d.level == PR_EASY && d.time_limit_s == 240 && d.score == 100);
+    /* a later good read replaces the remembered score; an empty but readable history is the real 50 */
+    d = difficulty_resolve(none, 0, DIFF_MODE_AUTO, true, &last);
+    CHECK(last == 50 && d.score == 50 && d.level == PR_NORMAL);
+    /* nothing good seen yet: Auto falls back to NORMAL, a manual mode to its own level */
+    last = DIFF_NO_SCORE;
+    d = difficulty_resolve(none, 0, DIFF_MODE_AUTO, false, &last);
+    CHECK(d.score == DIFF_SCORE_START && d.level == PR_NORMAL && last == DIFF_NO_SCORE);
+    d = difficulty_resolve(none, 0, DIFF_MODE_HARD, false, &last);
+    CHECK(d.level == PR_HARD && d.time_limit_s == 150);
+    d = difficulty_resolve(none, 0, DIFF_MODE_EASY, false, &last);
+    CHECK(d.level == PR_EASY);
+    /* no memory slot given: plain difficulty() behaviour */
+    d = difficulty_resolve(h, 8, DIFF_MODE_AUTO, false, NULL);
+    CHECK(d.score == 100);
+    /* from_score clamps and matches difficulty() */
+    CHECK(difficulty_from_score(250, DIFF_MODE_AUTO).score == 100 && difficulty_from_score(-5, DIFF_MODE_AUTO).score == 0);
+}
+
 int main(void)
 {
     printf("test_difficulty: score and bands\n");
@@ -529,6 +569,7 @@ int main(void)
     test_wire_pick_stays_in_the_levels_range();
     test_trip_band();
     test_config_follows_level_and_puzzle();
+    test_resolve_survives_a_history_timeout();
     printf("test_difficulty: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed == 0 ? 0 : 1;
 }

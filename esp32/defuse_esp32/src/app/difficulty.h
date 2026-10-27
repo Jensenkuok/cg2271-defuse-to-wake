@@ -137,4 +137,18 @@ bool difficulty_mode_valid(int mode);
 /* The whole answer: score, level, time and module count of that level, and the explanation. */
 Difficulty difficulty(const HistRecord *recent, int n, int mode);
 
+/* The same answer from a score that is already known (clamped to 0..100). */
+Difficulty difficulty_from_score(int score, int mode);
+
+#define DIFF_NO_SCORE           (-1)    /* "no good score seen yet" for difficulty_resolve */
+
+/* difficulty() that survives a history lock timeout. history_ok is false when the zero records read
+ * were NOT "no history" (the ring could not be locked in time): the score is then not recomputed but
+ * taken from *last_good_score, the score of the last good computation, so an Auto user does not drop
+ * to the score-50 NORMAL bomb with puzzles still rated for their real level. With no good score yet
+ * the fallback is DIFF_SCORE_START (NORMAL in Auto; a manual mode ignores the score anyway). The
+ * score is remembered, not the level, so a mode change still takes effect while the history is
+ * unreadable. *last_good_score starts at DIFF_NO_SCORE and is updated on every good computation. */
+Difficulty difficulty_resolve(const HistRecord *recent, int n, int mode, bool history_ok, int *last_good_score);
+
 #endif /* DIFFICULTY_H */

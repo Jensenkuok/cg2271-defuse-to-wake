@@ -44,17 +44,24 @@ SemaphoreHandle_t s_lock;   /* guards every static above: bomb_config_send is ca
                              * SET_ALARM case) the network task, bomb_config_service by the link task */
 #define CFG_LOCK_WAIT_MS 20u /* short: the link task has 100 ms retransmit timing; a missed pass is retried in 50 ms */
 
+/* Score of the last good history read (DIFF_NO_SCORE until there is one). One int, written by whichever
+ * task computed a good score: a stale or torn-free word is all the fallback needs. */
+int s_last_good_score = DIFF_NO_SCORE;
+
 /* ok (optional) is false when the history lock timed out: the zero records read then are NOT "no history",
- * and the caller that reacts to a level change must not act on that score. */
+ * and the caller that reacts to a level change must not act on that score. The returned difficulty is
+ * still usable: on a timeout it reuses the last good score (difficulty_resolve), so a bomb is never built
+ * from the made-up score 50 of an unreadable history. */
 Difficulty current_difficulty(bool *ok)
 {
     HistRecord recs[HIST_LEN];                          /* the whole ring: the score replays all stored mornings */
     const int n = history_recent(recs, HIST_LEN);
+    const bool history_ok = (n > 0) || (history_count() == 0);
 
     if (ok != NULL) {
-        *ok = (n > 0) || (history_count() == 0);
+        *ok = history_ok;
     }
-    return difficulty(recs, n, settings_get_difficulty_mode());
+    return difficulty_resolve(recs, n, settings_get_difficulty_mode(), history_ok, &s_last_good_score);
 }
 
 void make_view(ActivePuzzle *v, int pair, uint32_t gen, const Puzzle &d, const Puzzle &w)
