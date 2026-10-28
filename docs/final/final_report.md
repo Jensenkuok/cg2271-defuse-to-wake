@@ -27,11 +27,13 @@ Feature list:
 |---|---|---|
 | Rotary encoder with push (MCX) | Safe dial. Channels A and B (PTA12, PTA5) interrupt on both edges. The ISR decodes the Gray-code transition with a 16-entry table and emits one step per detent (2 valid transitions). The push (PTC1) interrupts on both edges: a press under 800 ms locks the digit, a longer one snoozes. | None; register-level code on the SDK's CMSIS device header |
 | PS2 joystick with button (MCX) | Wire cutter. X (PTE20) and Y (PTE21) are read every 20 ms as 12-bit values. X becomes LEFT or RIGHT events with hysteresis (fires below 1000 or above 3000, re-arms between 1500 and 2600) and moves the wire cursor. The button (PTC2, interrupt) cuts the wire. | None (register level) |
-| HC-SR04 ultrasonic (MCX) | Distance tripwire. A task pulses TRIG (PTB3) for 10 us every 60 ms. The echo (PTA13, TPM1_CH1) is timestamped on both edges at 1 us per count; cm = width / 58. A bad echo is 999. The game gets the median of the last 3 readings. | None (register level) |
+| HC-SR04 ultrasonic (MCX) | Distance tripwire. A task pulses TRIG (PTB3) for 10 us every 60 ms. The echo (PTA13, TPM1_CH1) is timestamped on both edges at 1 us per count; cm = width / 58. A bad echo is 999; edge order is checked against the pin level (APP_US_USE_PIN_LEVEL 1), implemented but not yet verified on hardware [TODO: confirm on hardware]. The game gets the median of the last 3 readings. | None (register level) |
 | LDR module KY-018 (MCX) | Lights on. The analog output (PTB0, ADC0_SE8) is sampled at 10 Hz in the joystick task, averaged over 4 samples, shifted from 12 to 8 bits and inverted (APP_LDR_INVERT 1, the module reads high in the dark): level 0 (dark) to 255 (bright). | None (register level) |
 | Passive buzzer (MCX) | TPM2_CH0 (PTB2) PWM at 50 % duty and the wanted frequency: a 2 kHz 30 ms tick, note patterns for digit accepted, strike (200 Hz), module cleared, defused jingle (523, 659, 784, 1047 Hz) and explosion. | None (register level) |
 | RGB LED, on-board (MCX) | TPM0 PWM at 1 kHz (PTE31, PTD5, PTE29): dim blue armed, red blinking active, green defused, red and white alternating exploded, blue blink if the link is down while idle. | None (register level) |
 | SSD1306 OLED 128x64, I2C 0x3C (ESP32) | Bomb screen at 10 frames per second: clock and next alarm, module graphics (dial digits, wires, tripwire gauge, light bar), the brain-teaser, hints after a strike, briefing and coach pages after a defuse. | Adafruit_SSD1306, Adafruit_GFX, Wire |
+
+**Libraries.** MCX side: no third-party library; register-level code on the SDK's CMSIS device header, the SDK board initialisation, clock driver and debug console. ESP32 side (Arduino core): Wire, Adafruit_SSD1306 and Adafruit_GFX (OLED); WiFi, WiFiMulti, NetworkClientSecure and HTTPClient (Wi-Fi and HTTPS); ArduinoJson (JSON build, parse and filter); Preferences (flash storage); WebServer and ESPmDNS (local web page).
 
 The ESP32 BOOT button and the MCX switch SW3 trigger a demo ring after 3 s. A GY-521 gyro was dropped (see Challenges), so the group has 4 sensors and 3 actuators.
 
@@ -55,6 +57,10 @@ The FRDM-MCXC444 holds the sensors, buzzer and LED; the ESP32-S2 holds the OLED 
 Ports B and E cannot raise pin interrupts on this chip (RM Table 11-1), so the encoder and buttons sit on Ports A and C. TPM0 drives the LED, TPM1 free-runs for the echo capture and TPM2 drives the buzzer (its modulus changes with every note, which would disturb a capture); all share an 8 MHz clock divided by 8, so one count is 1 us. On the ESP32-S2: Serial1 RX is GPIO2 (from PTE22) and TX is GPIO1 (to PTE23) at 115200 8N1; the OLED is on I2C SDA GPIO8 and SCL GPIO9 at 400 kHz; the BOOT button is GPIO0.
 
 Wiring rules: the HC-SR04 echo is 5 V, so it goes through a resistor divider (our pin table proposes 1 kΩ in series and 2 kΩ to ground) [TODO: confirm the divider values used]. Joystick, encoder and LDR run from 3.3 V. The KY-018 needed an external 1 kΩ pull-up from its signal pin to 3.3 V (see Challenges), which is not yet in docs/pin_table.md.
+
+![System architecture](architecture.png)
+
+Figure 1. System architecture: sensors and actuators on the MCXC444, OLED and network on the ESP32-S2, and the online services.
 
 ![Wiring photo or circuit diagram](wiring.png)
 
@@ -87,7 +93,7 @@ A session runs from the first BOMB_ACTIVE until DEFUSED returns to IDLE, so snoo
 - Tripwire: stay in a 10 cm band for 3000 ms. The ESP32 picks the band per bomb (lower edge 10 to 30 cm); leaving it for under 300 ms is forgiven. No strike.
 - Lights: the first reading is the baseline and the target is min(max(baseline + 40, 120), 240); hold it for 2000 ms (300 ms grace). No strike. [TODO: update when the final torch-only threshold is fixed]
 
-Every ESP32-sent config field is range-checked in the engine (module count 1 to 4, time limit 30 to 600 s, wires 3 to 6, strikes 1 to 5, tripwire bounds 5 to 100 cm with min below max, dial digits 0 to 9); a bad config is rejected and the previous one stays. On the ESP32 a session flag derived from GAME_STATE stops all SET_ALARM and CMD_CANCEL from the first BOMB_ACTIVE until the MCX is IDLE, so a snooze (which leaves the MCX ARMED) is never overwritten.
+The engine validates every BOMB_CONFIG from the ESP32: the time limit (30 to 600 s), wire count (3 to 6) and max strikes (1 to 5) are clamped, while a module count outside 1 to 4, an invalid module type, a dial digit above 9, tripwire bounds outside 5 to 100 cm or with min not below max, or a correct wire not below the wire count reject the whole config and the previous one stays. On the ESP32 a session flag derived from GAME_STATE stops all SET_ALARM and CMD_CANCEL from the first BOMB_ACTIVE until the MCX is IDLE, so a snooze (which leaves the MCX ARMED) is never overwritten.
 
 #### Task Structure
 
@@ -125,7 +131,7 @@ ISRs use only FromISR calls and portYIELD_FROM_ISR, with no printf, delay or wai
 
 #### Coordination & Synchronisation
 
-The MCX is event driven. Every input (encoder, buttons, joystick, ultrasonic, LDR, ESP32 commands) becomes a game event in one input queue, so the game task has a single blocking point: a queue receive whose timeout is the next 50 ms tick. The ADC and echo-capture ISRs wake their tasks with task notifications. Flow: sensor ISR or task, input queue, game task, snapshot, comm task, GAME_STATE frame; and ESP32 frame, comm task, control or input queue, game task.
+The MCX is event driven. Every input (encoder, buttons, joystick, ultrasonic, LDR, and the ESP32's CMD and TAMPER frames) becomes a game event in one input queue, so the game task has a single blocking point: a queue receive whose timeout is the next 50 ms tick. The ADC and echo-capture ISRs wake their tasks with task notifications. Flow: sensor ISR or task, input queue, game task, snapshot, comm task, GAME_STATE frame; and ESP32 frame, comm task, then the control queue (TIME_SYNC, SET_ALARM, BOMB_CONFIG) or the input queue (CMD, TAMPER), game task.
 
 | Object | Type and size | Producer to consumer | Purpose |
 |---|---|---|---|
@@ -145,7 +151,20 @@ Every send uses a zero timeout and counts a drop instead of blocking, so no prod
 - ADC0 is shared by the joystick and the LDR, so one owner task samples both (the LDR after the joystick) and two conversions can never overlap. TPM0 and TPM2 belong to the feedback task, TPM1 to the ultrasonic task and its ISR.
 - The state snapshot is a multi-word struct copied by three tasks. It uses a mutex, not a critical section, because a critical section would mask the UART interrupt for the whole copy. FreeRTOS mutexes have priority inheritance: if the priority 1 debug task holds it and priority 2 comm preempts it, the priority 4 game task waiting for it lends its priority, which avoids priority inversion. Every take has a bounded wait and a timeout is counted.
 - The TX ring is written by the comm task and read by the UART ISR. The task copies one whole frame (at most 37 bytes) in a short critical section; a frame that does not fit is dropped whole and retransmission recovers it.
-- ESP32: bounded-wait mutexes guard the app state (10 ms), I2C bus (30 ms), flash store, timetable, history ring, puzzle set and BOMB_CONFIG state (20 ms). Short critical sections guard single flags and the frame log.
+- ESP32: bounded-wait mutexes guard the app state (10 ms wait), I2C bus (30 ms), flash store, timetable and history ring (2000 ms each, because a flash write can take tens of ms), puzzle set (100 ms) and BOMB_CONFIG state (20 ms). Short critical sections guard single flags and the frame log.
+
+Requirements checklist (where each assignment requirement is met):
+
+| Requirement | Where it is met |
+|---|---|
+| 4 sensors, 3 actuators | sensors: rotary encoder, PS2 joystick, HC-SR04, LDR; actuators: passive buzzer, RGB LED, OLED |
+| A polled and an interrupt sensor | polled: joystick (20 ms, vTaskDelayUntil) and LDR (100 ms) in joystick_task; interrupt: encoder and buttons (PORTA, PORTC_PORTD), HC-SR04 echo (TPM1 capture) |
+| At least one ISR | UART2_FLEXIO, TPM1, ADC0, PORTA, PORTC_PORTD |
+| At least three tasks | MCX: game, joystick, comm, ultrasonic, feedback; ESP32: link, display, network, web |
+| Mutex or semaphore, and queue | snapshot mutex (app_state.c) with RX, TX request, input, control and feedback queues; ESP32 app-state and other mutexes, TX and result queues |
+| Preemption and time slicing on, unused features off | configUSE_PREEMPTION 1, configUSE_TIME_SLICING 1; timers, counting semaphores, recursive mutexes, queue sets, trace and hooks off |
+| Data in both directions between boards | ESP32 to MCX: TIME_SYNC, SET_ALARM, BOMB_CONFIG, CMD; MCX to ESP32: GAME_STATE, RESULT, TELEMETRY |
+| Database, REST and cloud inference | Firebase Realtime Database write; NUSMods REST GET; SoCLaaS LLM chat completions |
 
 ## Communication Protocol
 
@@ -175,7 +194,7 @@ Reliable frames use stop-and-wait (shared/proto_link.c, 148 host checks): one fr
 
 ## Online Function Used
 
-All online calls run in the lowest-priority network task over HTTPS, with the server certificate checked against the ESP32 core's CA bundle and a 10 s timeout (30 s for the LLM). None is needed at alarm time.
+The three HTTPS calls (NUSMods, SoCLaaS, Firebase) run in the lowest-priority network task, with the server certificate checked against the ESP32 core's CA bundle and a 10 s timeout (30 s for the LLM). NTP is not HTTPS: it is SNTP over UDP, started from the same task with configTime. None of them is needed at alarm time.
 
 | Service | ESP32 sends | ESP32 receives | Offline fallback |
 |---|---|---|---|
@@ -192,22 +211,22 @@ The LLM writes the puzzles and the morning message. The ESP32 picks each answer 
 
 - Local web page, served by the ESP32 in its own task at http://defuse.local (mDNS) or the IP on the OLED. The main page (next alarm, NUSMods link, lead-time slider, difficulty mode, Save, Ring now) polls every 2 s. The engineering page /eng (polled every 500 ms) shows the briefing, live bomb, link statistics, frame log, AI panel (setter model, checker answer, verified or rejected) and Firebase queue, with two fault buttons: "Corrupt next packet" and "Simulate internet outage" (60 s, HTTPS calls fail but Wi-Fi stays up).
 - Deterministic difficulty: a score starts at 50 and is replayed over the stored mornings (+8 for a fast clean defuse of 90 s or less, -10 per explosion, -5 per snooze, clamped to 0 to 100). 0 to 33 is Easy (240 s, 3 or 4 wires), 34 to 66 Normal (180 s, 4 or 5 wires), 67 to 100 Hard (150 s, 6 wires); the user can force a level.
-- Host tests: 15 test programs, all passing when run on 28 Oct 2026, including the codec (91 checks), link layer (148), game engine (353), scheduler (209), rule language (6237) and procedural bank (39573). Bench-test procedures for both boards are in docs/hw_test_*.md. [TODO: end-to-end hardware test results of the full four-module bomb on both boards]
+- Host tests: 15 test programs, all passing when run on 28 Oct 2026, including the codec (91 checks), link layer (148), game engine (353), scheduler (209), rule language (6237) and procedural bank (39573). Bench procedures are in docs/hw_test_*.md. [TODO: end-to-end hardware test results of the full four-module bomb on both boards]
 
 ## Challenges faced & Solutions
 
 - **Gyro shorted the I2C bus.** The GY-521 gyro shared the I2C bus with the OLED, and its board shorted the bus and stopped the OLED. After several days on an I2C scan, an address fallback and a register-level driver for clone chips, we dropped it on 27 Oct (rule: no new I2C devices) and replaced tamper detection with the LDR "lights on" module. The gyro code stays behind APP_USE_GYRO 0.
 - **LDR module stuck at 0 or 255.** The on-board resistor of our KY-018 module was open, so its level did not move until we added an external 1 kΩ pull-up from the signal pin to 3.3 V [TODO: confirm the resistor value on the bench]. Its polarity was also reversed (high in the dark), so we added APP_LDR_INVERT.
-- **One ADC for two sensors.** Joystick and LDR both need ADC0. The joystick task owns the ADC and samples the LDR every fifth loop, and the conversion-complete interrupt wakes it through a notification.
+- **One ADC for two sensors.** Joystick and LDR both need ADC0, so the joystick task owns it and samples the LDR every fifth loop.
 - **Empty LLM replies.** On 21 Oct x-test-2 (DeepSeek) returned empty replies on the board, and thinking models spent a 600-token budget before answering. We raised max_tokens to 2000, log finish_reason, use different models for setter (qwen3.6:35b) and checker (x-test-1) with the others as fallbacks, and keep a local bank behind them. The interim report had the roles the other way round.
 - **Wrong or leaking puzzles.** An LLM can write a riddle with no answer, several answers, a wrong answer or the code spelled out. The LLM now returns rules that the ESP32 proves unique by brute force and rates itself, answer leaks are rejected, and a checker from another model must solve the text alone. The bank uses the same proof.
 - **Never overwriting an armed alarm.** After a snooze the MCX stays ARMED, and a re-sent SET_ALARM or a CANCEL would overwrite or kill it. The ESP32 now tracks a session and sends nothing during it, and always sends TIME_SYNC before SET_ALARM.
 - **Slow network calls on the alarm path.** A 30 s LLM call delayed a button press and could miss the 3 s window between an explosion and the next bomb. BOMB_CONFIG building and the demo ring moved to the priority 4 link task, which only touches RAM; flash writes stay in the network task behind a queue.
-- **Noisy tripwire.** One lost or stray echo reset the 3 s hold. The capture rule re-arms at every ping and rejects edges in the wrong order, the game uses a median of 3 readings, and a 300 ms grace period delays the reset.
-- **ESP32 memory and parsing.** Streaming the NUSMods JSON stalled partway, so the body is read fully and parsed through a filter. TLS and LLM buffers need contiguous RAM, so large buffers are allocated once from PSRAM.
+- **Noisy tripwire.** One lost or stray echo reset the 3 s hold. The capture rule (implemented; [TODO: confirm on hardware]) re-arms at every ping and rejects edges in the wrong order, the game uses a median of 3 readings, and a 300 ms grace period delays the reset.
+- **ESP32 parsing and memory.** Streaming the NUSMods JSON stalled, so the body is read fully and then filtered; large buffers come from PSRAM.
 
 ## Conclusion
 
-Defuse to Wake meets the brief with four sensors and three actuators over two boards. The MCXC444 runs a preemptive FreeRTOS design with five interrupt handlers, one event queue and one game task, where each peripheral and each state structure has one owner. The ESP32-S2 adds timetable-driven alarms, proven LLM puzzles, a briefing, a web page and a write-only cloud mirror, and the game keeps working when any of them fails. The CRC, ACK and retransmission protocol is one shared source file on both boards and is covered by host tests.
+Defuse to Wake meets the brief with four sensors and three actuators over two boards. The MCXC444 runs a preemptive FreeRTOS design with five interrupt handlers, one event queue and one game task, where each peripheral and each state structure has one owner. The ESP32-S2 adds timetable-driven alarms, proven LLM puzzles, a briefing, a web page and a write-only cloud mirror, and the game keeps working when any of them fails.
 
 Next steps: finish calibrating the light threshold, record retransmit and latency figures, and run the full four-module bomb repeatedly on both boards [TODO: end-to-end test results]. A battery-backed RTC would remove the need for Wi-Fi once after power-up. The online monitor page (stretch goal) is not implemented.
