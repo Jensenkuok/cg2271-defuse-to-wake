@@ -104,6 +104,32 @@ static void test_settings_messages(void)
 }
 
 /* ================= outage ================= */
+/* The difficulty field is optional in the request; when present it must be one of the four ids. */
+static void test_difficulty_field(void)
+{
+    static const char *const good[] = { "auto", "easy", "normal", "hard" };
+    static const char *const bad[] = { "", " ", "Auto", "EASY", "Hard", "hard ", " hard", "ha rd", "harder", "medium", "0", "1",
+                                       "easy;normal", "auto\n", "normal x", "au", "autoo", "\t" };
+    int mode = -1;
+    unsigned i;
+
+    for (i = 0; i < 4u; i++) {
+        mode = -1;
+        CHECK(web_validate_difficulty(good[i], &mode) == SETTINGS_OK && mode == (int)i);
+    }
+    CHECK(web_validate_difficulty("hard", NULL) == SETTINGS_OK);                  /* mode_out is optional */
+    for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        mode = 77;
+        CHECK(web_validate_difficulty(bad[i], &mode) == SETTINGS_ERR_DIFFICULTY && mode == 77);   /* untouched on failure */
+    }
+    CHECK(web_validate_difficulty(NULL, &mode) == SETTINGS_ERR_DIFFICULTY);
+    /* the page shows the same style of error as for the other fields */
+    CHECK(strstr(web_settings_err_text(SETTINGS_ERR_DIFFICULTY), "difficulty must be") != NULL);
+    CHECK(strstr(web_settings_err_text(SETTINGS_ERR_DIFFICULTY), "auto, easy, normal or hard") != NULL);
+    /* link / lead errors are independent of the difficulty field */
+    CHECK(web_validate_settings(GOOD_LINK, "60", NULL) == SETTINGS_OK);
+}
+
 static void test_outage_basics(void)
 {
     Outage o = { false, 0u };
@@ -322,6 +348,7 @@ int main(void)
     test_settings_reject_bad_link();
     test_settings_link_error_wins_over_lead_error();
     test_settings_messages();
+    test_difficulty_field();
     test_outage_basics();
     test_outage_restart_resets_the_timer();
     test_outage_survives_millis_wraparound();

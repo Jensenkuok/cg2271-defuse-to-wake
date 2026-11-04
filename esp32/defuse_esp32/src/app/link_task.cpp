@@ -8,6 +8,7 @@
 #include "config.h"
 #include "fault.h"
 #include "frame_log.h"
+#include "mem_big.h"
 #include "../shared/proto_link.h"
 #include "../shared/protocol.h"
 
@@ -21,7 +22,7 @@ static QueueHandle_t s_tx_queue;
 static QueueHandle_t s_result_queue;   /* RESULT frames for the network task (it records them in flash) */
 static TaskHandle_t s_task;
 static proto_link_t s_link;        /* owned by the link task only */
-static AppState s_st;              /* link task only: a local copy would take ~1 KB of its 4 KB stack */
+static AppState *s_st;             /* link task only, PSRAM (mem_big.h): a local copy would take ~1.3 KB of its stack */
 static uint32_t s_tx_backpressure;
 static uint8_t s_cfg_handed;       /* BOMB_CONFIG frames given to proto_link whose outcome is not reported yet */
 static uint8_t s_cfg_failed_events;/* PROTO_EVT_SEND_FAILED for BOMB_CONFIG not yet reported */
@@ -186,7 +187,8 @@ bool link_task_init(void)
 {
     s_tx_queue = xQueueCreate(APP_TX_QUEUE_LEN, sizeof(TxMsg));
     s_result_queue = xQueueCreate(APP_RESULT_QUEUE_LEN, sizeof(proto_result_msg_t));
-    return s_tx_queue != NULL && s_result_queue != NULL;
+    s_st = mem_big_new<AppState>(1u, "link app state");
+    return s_tx_queue != NULL && s_result_queue != NULL && s_st != NULL;
 }
 
 bool link_result_pop(proto_result_msg_t *out)
@@ -339,13 +341,13 @@ static void demo_ring(const AppState &st)
  * APP_STATE_MUTEX_WAIT_MS for a short memcpy. */
 static void service_game_config(void)
 {
-    if (!app_state_read(&s_st)) {
+    if (!app_state_read(s_st)) {
         return;                                    /* retried next period; a press stays pending */
     }
     if (ring_request_take()) {
-        demo_ring(s_st);
+        demo_ring(*s_st);
     }
-    bomb_config_service(s_st);
+    bomb_config_service(*s_st);
 }
 
 static void link_task(void *arg)

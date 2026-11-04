@@ -30,9 +30,9 @@ if ([string]::IsNullOrWhiteSpace($key)) {
 
 # ---- Settings (config.h: APP_SOCLAAS_*, APP_LLM_*, APP_PUZZLE_ATTEMPTS) ----
 $Url = 'https://soclaas-api.comp.nus.edu.sg/v1/chat/completions'
-$SetterChain  = @('x-test-2', 'x-test-1', 'qwen3.6:35b', 'default')     # APP_LLM_SETTER_CHAIN
-$CheckerChain = @('x-test-1', 'x-test-2', 'qwen3.6:35b', 'default')     # APP_LLM_CHECKER_CHAIN
-$MaxTokens    = 600      # APP_LLM_MAX_TOKENS
+$SetterChain  = @('qwen3.6:35b', 'x-test-1', 'x-test-2', 'default')     # APP_LLM_SETTER_CHAIN
+$CheckerChain = @('x-test-1', 'default', 'x-test-2', 'qwen3.6:35b')     # APP_LLM_CHECKER_CHAIN
+$MaxTokens    = 2000     # APP_LLM_MAX_TOKENS
 $SetterTemp   = 0.9      # APP_LLM_SETTER_TEMP
 $CheckerTemp  = 0.0      # APP_LLM_CHECKER_TEMP
 $TimeoutSec   = 30       # APP_LLM_TIMEOUT_S
@@ -46,10 +46,13 @@ $RawShown     = 200
 $SetterDialSys = 'You write one short logic puzzle for a bomb-defusal game. The user gives a secret 4-digit code. ' +
     'Write ONE puzzle of at most 80 characters, plain ASCII only, whose only solution is exactly that code ' +
     'and which pins down all four digits. Never write the code itself. ' +
+    'Never list or state the code''s digits; the solver must deduce them from relations ' +
+    '(sums, differences, comparisons, positions). ' +
     'Reply ONLY with JSON: {"puzzle":"..."}'
 $SetterWireSys = 'You write one short riddle for a bomb-defusal game. The user gives the number of wires (numbered 1..N ' +
     'from the left) and the wire to cut. Write ONE riddle of at most 60 characters, plain ASCII only, whose ' +
-    'only solution is that wire number. Never state the number directly. ' +
+    'only solution is that wire number. Never state the number directly; ' +
+    'the solver must deduce it from relations (sums, differences, comparisons, positions). ' +
     'Reply ONLY with JSON: {"puzzle":"..."}'
 $CheckerDialSys = 'Solve the puzzle. The answer is a 4-digit code (digits 0-9, leading zeros allowed). ' +
     'Reply ONLY with JSON: {"answer":"1234"}'
@@ -98,13 +101,15 @@ function Get-JsonString([string]$Json, [string]$Name) {
     return [string]$v
 }
 
-# validate_puzzle: length, printable ASCII, and for a dial the code must not appear literally.
+# validate_puzzle: length, printable ASCII, and for a dial the code must not appear literally
+# nor in the text's digits-only form (so "2,5,8,7" is rejected too).
 function Test-Puzzle([string]$Text, [string]$Kind, [string]$Answer) {
     $max = $DialTextMax
     if ($Kind -eq 'wire') { $max = $WireTextMax }
     if ($Text.Length -lt $TextMin -or $Text.Length -gt $max) { return 'length ' + $Text.Length + ' not in ' + $TextMin + '..' + $max }
     if ($Text -notmatch '\A[\x20-\x7E]+\z') { return 'not printable ASCII' }
     if ($Kind -eq 'dial' -and $Text.Contains($Answer)) { return 'contains the code literally' }
+    if ($Kind -eq 'dial' -and ($Text -replace '[^0-9]', '').Contains($Answer)) { return 'spells the code in its digits' }
     return $null
 }
 

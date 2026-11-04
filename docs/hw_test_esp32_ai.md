@@ -9,15 +9,16 @@ Comms protocol (reliable `BOMB_CONFIG`), Sync, Task design.
 
 - Host tests (`tools/run_tests.ps1`): JSON/`<think>` handling, puzzle validation, checker parsing,
   the template bank (every dial code 0000-9999 and every wire k of n solved by an independent
-  solver), the difficulty rule, config ranges, pair selection. All pass.
-- The firmware compiles for `esp32:esp32:esp32s2:PartitionScheme=huge_app` with no warnings in our
+  solver), the difficulty score and level table (`tools/test_difficulty.cpp`), config ranges, the
+  tripwire band, pair selection. All pass.
+- The firmware compiles for `esp32:esp32:esp32s2:PartitionScheme=huge_app,PSRAM=enabled` with no warnings in our
   files (numbers in section 5).
 - **Not tested on hardware or against the real SoCLaaS yet**: this document is that test. The TLS
   certificate of the SoCLaaS host, the real latency and the way each model formats its JSON are the
   unknowns. If every call fails with `FAILED http (...)` before any HTTP status, see section 4.
 
 New serial commands (115200, ESP32 Serial): `puzzles` (regenerate now), `ai` (print the stored set,
-answers included: debug only), `diff` (print the difficulty rule applied to the stored mornings),
+answers included: debug only), `diff` (print the difficulty mode, score, effective level and the bomb that level asks for),
 `brief` (generate the morning briefing + coach message now, section 2.13).
 
 **Who does what (changed):** `BOMB_CONFIG` triggers and the BOOT demo ring now run in the **link
@@ -50,13 +51,13 @@ Expect lines like (latencies vary):
 
 ```
 [ai] puzzle run wanted (boot: no fresh set)
-[ai] generating 4 dial + 4 wire puzzles (setter x-test-2, checker x-test-1 first)
-[llm] model=x-test-2 HTTP 200 2310 ms          <- setter call
+[ai] generating 4 dial + 4 wire puzzles (setter qwen3.6:35b, checker x-test-1 first)
+[llm] model=qwen3.6:35b HTTP 200 2310 ms          <- setter call
 [llm] model=x-test-1 HTTP 200 1780 ms          <- checker call (a DIFFERENT model)
-[ai] D0 verified: x-test-2 wrote it, x-test-1 solved it (attempt 1)
+[ai] D0 verified: qwen3.6:35b wrote it, x-test-1 solved it (attempt 1)
 ...
 [ai] set gen=2: 8 of 8 puzzles AI-verified, generated at unix 17...
-[ai] D0 AI   verified   setter=x-test-2 checker=x-test-1 said=4271 tries=1 2310ms/1780ms ans=4271 "..."
+[ai] D0 AI   verified   setter=qwen3.6:35b checker=x-test-1 said=4271 tries=1 2310ms/1780ms ans=4271 "..."
 ...
 [ai] new set stored in flash (8 AI + 0 bank puzzles)
 ```
@@ -76,17 +77,27 @@ wire 1 = leftmost). PASS: the 4 dial riddles are at most 80 characters, the 4 wi
 60, none prints the 4-digit code literally.
 
 ### 2.3 Difficulty (`diff`)
-Type `diff`. With no mornings stored: `-> 3 modules, 180 s: No history yet: standard bomb`. After
-some real mornings (or after you defused with snoozes/strikes): the line explains the change, e.g.
-`4 mod: 3 snoozes/7d` (3 or more snoozes in the last 7 mornings), `+30s: avg strikes>=2`,
-`-30s: 3 clean` (the 3 newest mornings without a snooze). PASS: matches the rule in CLAUDE.md.
+Type `diff`. With no mornings stored and the mode on Auto:
+
+```
+[diff] 0 mornings stored: 0 explosions, 0 snoozes
+[diff] mode auto, score 50 -> level NORMAL
+[diff] bomb: 4 modules, 180 s, 4-5 wires [Normal (Auto, score 50)]
+```
+
+The score starts at 50 and replays the stored mornings from the oldest to the newest: a fast clean
+defuse (0 strikes, 0 snoozes, 0 explosions, 90 s or less) is +8, any other defuse 0, each explosion
+-10, each snooze -5, clamped to 0..100 after every morning. 0-33 is EASY, 34-66 NORMAL, 67-100 HARD.
+The level sets the bomb: EASY 240 s, 3-4 wires; NORMAL 180 s, 4-5 wires; HARD 150 s, 6 wires. Every
+level has the same four modules in the same order: dial, wires, tripwire, lights. PASS: after a few real mornings the printed score equals the rule above
+(work it out from `hist`).
 
 ### 2.4 BOMB_CONFIG accepted by the MCX (demo ring)
 Press the ESP32 **BOOT** button (GPIO0). Expect on the ESP32:
 
 ```
 [btn] BOOT pressed: demo ring requested
-[cfg] BOMB_CONFIG queued (demo ring): pair 0, 3 modules, 180s, 5 wires (cut 3), dial 4271 [No history yet: standard bomb]
+[cfg] BOMB_CONFIG queued (demo ring): pair 0, 4 modules, 180s, 5 wires (cut 3), dial 4271, tripwire 20-30cm [Normal (Auto, score 50)]
 [btn] RING_NOW queued
 [cfg] BOMB_CONFIG ACKed: pair 0 is now the MCX's config for the next bomb
 ```
@@ -95,7 +106,8 @@ On the MCX console the next stats block shows `[ctrl] accepted/rejected: ... bom
 (`accepted/rejected`; the rejected counter must stay 0). After 3 s the bomb starts: enter the
 dial code from the `[cfg]` line (not the old default 4-2-7-1) and cut the printed wire. PASS:
 `bomb_config=N/0` rises by one per config, the bomb uses the new code and wire, and with 4
-modules (if `diff` says so) the 4th module is a second dial.
+modules (if `diff` says so) the 4th module is a second dial. The `[cfg]` line now also prints the
+tripwire band, e.g. `tripwire 20-30cm`, and the difficulty text `[Normal (Auto, score 50)]`.
 
 ### 2.5 After an explosion: a different dial code
 Start a bomb (BOOT), let it explode (3 wrong presses or let the timer run out). Within the 3 s
@@ -167,7 +179,7 @@ Run a bomb (BOOT). Layout, size-1 font, 21 x 8 characters:
   second).
 - **Wires module:** the wires with their number 1..N under each (the cursor is the inverted
   number), then 2 rows with the wire riddle (the last one scrolls if it does not fit).
-- **Tripwire:** unchanged.
+- **Tripwire:** the bottom line prints the band of the config, e.g. `Hold hand 20-30cm 3s` (section 2.14).
 
 After an **explosion** the next bomb shows a different riddle (the next pair), also on the OLED.
 Make **one strike** (wrong dial digit, or cut a wrong wire):
@@ -186,9 +198,9 @@ After network + puzzles are up, with a timetable loaded (`link` set) type `brief
 
 ```
 [cmd] briefing run requested
-[brief] generating for local day 20xxx: 3 classes, alarm Fri 07:30 (chain starts with x-test-2)
-[llm] model=x-test-2 HTTP 200 3120 ms
-[brief] stored for local day 20xxx (briefing: LLM, coach: LLM, model x-test-2)
+[brief] generating for local day 20xxx: 3 classes, alarm Fri 07:30 (chain starts with qwen3.6:35b)
+[llm] model=qwen3.6:35b HTTP 200 3120 ms
+[brief] stored for local day 20xxx (briefing: LLM, coach: LLM, model qwen3.6:35b)
 [brief] briefing: "First: CG2271 LEC 14:00 @LT19. Then ..."
 [brief] coach:    "..."
 ```
@@ -208,13 +220,49 @@ order, 4 s each; text readable; after a reboot the stored briefing is loaded
 (`[brief] loaded from flash: for local day N`).
 Also try a wrong key (2.9b): `brief` ends with `no model gave a usable text: the template is used`.
 
+### 2.14 Difficulty mode, level -> bomb, moving tripwire band (P3)
+1. Open `http://defuse.local/`. Under the lead slider there is a **Difficulty** list (Auto, Easy,
+   Normal, Hard) and a muted line `Now: Normal (Auto, score 50)` (the effective level, the mode and the
+   score). Choose **Hard** and press **Save**. PASS: the page says Saved and the line becomes
+   `Now: Hard (manual, score 50)`; `http://defuse.local/eng` shows `HARD: 4 modules, 2:30`.
+2. On the ESP32 Serial type `diff`. PASS: `mode hard, score 50 -> level HARD` and
+   `bomb: 4 modules, 150 s, 6-6 wires`.
+3. Within a few seconds of the Save (no session running) the Serial log shows the set being replaced
+   from the offline bank, one puzzle per pass, then the normal AI run being requested:
+
+   ```
+   [ai] level changed (set was built for NORMAL, now HARD)
+   [ai] refilling the set from the bank at level HARD
+   [ai] bank set at level HARD installed
+   [ai] puzzle run wanted (level changed)
+   ```
+
+   Wait for `installed`, then type `ai`: all 4 wire puzzles have 6 wires (`wires=6`). Type `puzzles`
+   or wait for the run: AI puzzles are written at HARD.
+4. Press **Ring now** (or BOOT). PASS: the `[cfg] BOMB_CONFIG queued` line says `4 modules, 150s, 6 wires`
+   and `[Hard (manual, score 50)]`; the bomb has a 2:30 timer and the fourth module is the lights module;
+   the OLED wires screen draws 6 wires.
+5. Repeat with **Easy** (PASS: 240 s, 4 modules, 3 or 4 wires) and **Normal** (180 s, 4 modules, 4 or
+   5 wires). Saving the mode that is already stored does nothing (no refill).
+6. **Tripwire band:** ring several bombs in a row (let each explode or defuse) and reach the tripwire
+   module each time. PASS: the OLED line reads `Hold hand A-Bcm 3s` with B = A + 10 and A between 10
+   and 30 (never above 40 cm), a different band between bombs; the gauge marks that band; the
+   `[cfg] ... tripwire A-Bcm` line on the ESP32 shows the same numbers; holding a hand inside that band
+   for 3 s clears the module. The hold time and the 10 cm width never change with the level.
+7. **No refill inside a bomb:** start a bomb, and while it runs save another mode on the page. PASS: no
+   `refilling the set` line until the bomb is defused and the MCX is back in IDLE; then the refill
+   runs.
+8. **Auto:** choose Auto again. With a history of fast clean defuses the score climbs by 8 per morning;
+   when it passes 66 the level (and after the morning ends, the cached set) becomes HARD. With
+   snoozes/explosions it drops by 5/10 each.
+
 ## 3. Results
 
 | Test | Result (PASS/FAIL) | Notes (models, latency, counts) |
 |---|---|---|
 | 2.1 first run: setter/checker differ, set stored | | |
 | 2.2 `ai` listing, riddles correct by hand | | |
-| 2.3 `diff` matches the rule | | |
+| 2.3 `diff` matches the rule (mode, score, level) | | |
 | 2.4 BOOT: config accepted (`bomb_config=N/0`), new code works | | |
 | 2.5 explosion: different dial code | | |
 | 2.6 snooze: new config | | |
@@ -228,6 +276,9 @@ Also try a wrong key (2.9b): `brief` ends with `no model gave a usable text: the
 | 2.12 OLED riddle matches `ai`; hints after a strike; X on a wrong wire | | |
 | 2.13 `brief` text valid; DEFUSED pages rotate 4 s each; stored text loads after reboot | | |
 | 2.7b used mask survives a reboot | | |
+| 2.14 mode on `/` saved, `diff` shows it, Ring now shows the level's time / modules / wires | | |
+| 2.14 cached set refilled from the bank at the new level, not inside a bomb | | |
+| 2.14 tripwire band moves between bombs (10-20 .. 30-40 cm), OLED shows the config's band | | |
 | Verified puzzles in a run (of 8) / average calls | | |
 
 ## 4. Troubleshooting
@@ -250,11 +301,11 @@ Also try a wrong key (2.9b): `brief` ends with `no model gave a usable text: the
 
 ## 5. Build numbers
 
-`arduino-cli compile --fqbn esp32:esp32:esp32s2:PartitionScheme=huge_app --warnings all`: 0 errors,
+`arduino-cli compile --fqbn esp32:esp32:esp32s2:PartitionScheme=huge_app,PSRAM=enabled --warnings all`: 0 errors,
 0 warnings in our files.
 
 | | Value |
 |---|---|
-| Sketch (flash) | 1,184,524 bytes (37 % of 3,145,728) |
-| Global variables (RAM) | 73,652 bytes (22 % of 327,680) |
+| Sketch (flash) | 1,303,616 bytes (41 % of 3,145,728) |
+| Global variables (RAM) | 61,220 bytes (18 % of 327,680) |
 | Your run of the same command | |

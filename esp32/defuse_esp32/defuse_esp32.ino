@@ -1,26 +1,29 @@
 /*
  * Defuse to Wake - ESP32-S2 firmware (renderer + network gateway).
- * The MCXC444 runs the game; this board shows it on the OLED, detects tamper with the
- * MPU-6050, keeps time over Wi-Fi/NTP and talks to the MCX over Serial1 (proto_link).
+ * The MCXC444 runs the game; this board shows it on the OLED, keeps time over Wi-Fi/NTP and
+ * talks to the MCX over Serial1 (proto_link). The MPU-6050 tamper task exists in the tree but
+ * is off (APP_USE_GYRO 0 in config.h, see the note there).
  *
  * Single-core ESP32-S2, Arduino-on-FreeRTOS. Tasks (priority, why): see src/app/config.h
- *   link 4 > gyro 3 > display 2 > network 1 = web 1.
+ *   link 4 > display 2 > network 1 = web 1   (gyro 3 sits between link and display when enabled).
  * setup() only creates the shared objects and the tasks; loop() deletes itself.
  */
 #include "src/app/app_state.h"
 #include "src/app/config.h"
 #include "src/app/display_task.h"
 #include "src/app/fault.h"
+#if APP_USE_GYRO
 #include "src/app/gyro_task.h"
+#endif
 #include "src/app/i2c_bus.h"
 #include "src/app/link_task.h"
+#include "src/app/mem_big.h"
 #include "src/app/network_task.h"
 #include "src/app/web_task.h"
 
 /* Library headers are also listed here so the Arduino build always finds the libraries
  * used by the files under src/app/. */
 #include <Adafruit_GFX.h>
-#include <Adafruit_MPU6050.h>
 #include <Adafruit_SSD1306.h>
 #include <ArduinoJson.h>
 #include <ESPmDNS.h>
@@ -39,6 +42,7 @@ void setup()
     Serial.setRxBufferSize(APP_SERIAL_RX_BUF); /* room for a pasted "link <url>" test command */
     Serial.begin(APP_DEBUG_BAUD);
     Serial.println("\n[boot] Defuse to Wake ESP32-S2");
+    mem_boot_report("start");
 
     fault_init();
     ok = app_state_init() && i2c_bus_init() && link_task_init();
@@ -46,11 +50,16 @@ void setup()
         Serial.println("[boot] FATAL: could not create shared objects");
         return; /* loop() deletes the loop task; nothing else runs */
     }
-    ok = link_task_start() && gyro_task_start() && display_task_start() && network_task_start() &&
-         web_task_start();
+    i2c_bus_report(true); /* before the OLED task starts: shows what is on the bus */
+    ok = link_task_start() &&
+#if APP_USE_GYRO
+         gyro_task_start() &&
+#endif
+         display_task_start() && network_task_start() && web_task_start();
     if (!ok) {
         Serial.println("[boot] FATAL: could not create a task");
     }
+    mem_boot_report("after init");
 }
 
 void loop()

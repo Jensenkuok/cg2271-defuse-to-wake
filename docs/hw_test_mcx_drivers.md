@@ -23,6 +23,7 @@ J3[12] / J3[14]** (or J2[14]).
 | | TRIG | J4[8] | PTB3 | 3.3 V drive (UNVERIFIED for the HC-SR04, see pin table) |
 | | ECHO | J2[2] | PTA13 (TPM1_CH1) | **5 V output: use a divider.** ECHO → 1 kΩ → PTA13, and PTA13 → 2 kΩ → GND (≈ 3.3 V) |
 | Passive buzzer | + / signal | J4[6] | PTB2 (TPM2_CH0) | other leg to GND |
+| Light sensor (LDR module) | AO | J4[2] | PTB0 (ADC0_SE8) | VCC to **3.3 V** (J3[8], never 5 V), GND to GND; leave DO unconnected |
 | RGB LED | – | on-board | PTE31 / PTD5 / PTE29 | nothing to wire |
 | SW3 | – | on-board | PTA4 | nothing to wire |
 
@@ -70,6 +71,20 @@ design; look past it for the other events.
 - PASS: one event per push, LEFT/RIGHT match the physical direction (otherwise set
   `APP_JOY_X_INVERT 1`), `adc_err=0` in `[io]`.
 
+### 3.3b Light sensor (LDR) calibration
+The joystick task samples the LDR at 10 Hz. The `[io]` line shows `ldr_raw=` (12-bit average) and
+`ldr_level=` (0..255). `ldr_drops` counts lost GAME_EVT_LIGHT posts and should stay 0. Individual
+LIGHT events are not printed.
+- Cover the sensor with a finger, wait 5 s, note `ldr_level` (the baseline).
+- Uncover it in normal room light and note `ldr_level`.
+- Shine a phone torch about 5 cm from the sensor and note `ldr_level`.
+- Polarity: covering must give the LOWEST level. If covering RAISES the level, set
+  `APP_LDR_INVERT 1` in app_config.h, rebuild and repeat.
+- Expected rule: target = min(max(baseline + 40, 120), 240). Room light should beat the baseline by
+  40 or more, or the torch should reach the target. A very bright room is fine, a torch reads near 255.
+- PASS: covered < room < torch, torch >= target, `adc_err=0`, `ldr_drops=0`, and the joystick checks
+  in 3.3 still pass.
+
 ### 3.4 Ultrasonic
 - Hold a flat object (a book) at **10 cm**, **20 cm** and **50 cm** from the sensor face.
 - Expect `[evt] DISTANCE` values around 10, 20 and 50 (±2 cm). `dist_cm=` in `[io]` agrees.
@@ -112,6 +127,7 @@ and each LED mode matches:
 | Joystick left | JOY_LEFT once | | |
 | Joystick right | JOY_RIGHT once | | |
 | Joystick press | JOY_PRESS | | |
+| LDR covered / room / torch | rising levels, torch >= target | | |
 | Ultrasonic 10 cm | 8–12 | | |
 | Ultrasonic 20 cm | 18–22 | | |
 | Ultrasonic 50 cm | 48–52 | | |

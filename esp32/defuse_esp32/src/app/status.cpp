@@ -7,9 +7,12 @@
 #include "app_state.h"
 #include "config.h"
 #include "display_task.h"
+#if APP_USE_GYRO
 #include "gyro_task.h"
+#endif
 #include "history.h"
 #include "link_task.h"
+#include "mem_big.h"
 #include "network_task.h"
 #include "web_task.h"
 
@@ -46,11 +49,14 @@ static void status_print(uint32_t now_ms)
                   history_current_streak(st.time_valid ? (uint32_t)time(nullptr) : 0u));
     Serial.print("[stack bytes free]");
     print_stack("link", link_task_handle());
+#if APP_USE_GYRO
     print_stack("gyro", gyro_task_handle());
+#endif
     print_stack("display", display_task_handle());
     print_stack("net", network_task_handle());
     print_stack("web", web_task_handle());
-    Serial.printf("  heap_free=%u min_heap=%u\n", (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap());
+    Serial.println();
+    mem_status_print();
 }
 
 void status_tick(uint32_t now_ms)

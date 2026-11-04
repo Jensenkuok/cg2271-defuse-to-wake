@@ -159,6 +159,35 @@ static void trigger_pulse(void)
     taskEXIT_CRITICAL();
 }
 
+/* Median of the last APP_US_MEDIAN_N readings (invalid = 999 sorts as the largest, so a
+ * lone lost echo is outvoted). Until the window is full the raw reading is posted.
+ * Used only by the ultrasonic task. */
+static int32_t median_filter(int32_t cm)
+{
+    static int32_t window[APP_US_MEDIAN_N];
+    static uint32_t count;
+    int32_t sorted[APP_US_MEDIAN_N];
+    uint32_t i;
+    uint32_t j;
+
+    window[count % APP_US_MEDIAN_N] = cm;
+    count++;
+    if (count < APP_US_MEDIAN_N) {
+        return cm;
+    }
+    for (i = 0; i < APP_US_MEDIAN_N; i++) {
+        sorted[i] = window[i];
+    }
+    for (i = 1; i < APP_US_MEDIAN_N; i++) {
+        int32_t key = sorted[i];
+        for (j = i; j > 0u && sorted[j - 1u] > key; j--) {
+            sorted[j] = sorted[j - 1u];
+        }
+        sorted[j] = key;
+    }
+    return sorted[APP_US_MEDIAN_N / 2u];
+}
+
 static void ultrasonic_task(void *arg)
 {
     TickType_t wake = xTaskGetTickCount();
@@ -172,7 +201,7 @@ static void ultrasonic_task(void *arg)
         if (APP_US_USE_PIN_LEVEL && (GPIOA->PDIR & ECHO_MASK) != 0u) {
             s_stale++;
             s_last_cm = APP_US_INVALID_CM;
-            input_post(GAME_EVT_DISTANCE, APP_US_INVALID_CM);
+            input_post(GAME_EVT_DISTANCE, median_filter(APP_US_INVALID_CM));
             continue;
         }
 
@@ -197,7 +226,7 @@ static void ultrasonic_task(void *arg)
             }
         }
         s_last_cm = cm;
-        input_post(GAME_EVT_DISTANCE, cm);
+        input_post(GAME_EVT_DISTANCE, median_filter(cm));
     }
 }
 

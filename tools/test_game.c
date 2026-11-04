@@ -68,10 +68,11 @@ static game_sound_t last_sound(void)
 static void default_cfg(proto_bomb_config_t *c)
 {
     memset(c, 0, sizeof(*c));
-    c->module_count = 3;
+    c->module_count = 4;
     c->module_order[0] = PROTO_MODULE_DIAL;
     c->module_order[1] = PROTO_MODULE_WIRES;
     c->module_order[2] = PROTO_MODULE_TRIPWIRE;
+    c->module_order[3] = PROTO_MODULE_LIGHTS;
     c->time_limit_s = 180;
     c->dial_code[0] = 4; c->dial_code[1] = 2; c->dial_code[2] = 7; c->dial_code[3] = 1;
     c->wire_count = 4;
@@ -95,11 +96,14 @@ static void start_bomb(uint32_t start, const proto_bomb_config_t *cfg)
     drain();
 }
 
+/* Solve the current dial: the configured code, shifted for its module index. */
 static void solve_dial(void)
 {
-    static const int code[4] = { 4, 2, 7, 1 };
+    static const uint8_t base[4] = { 4, 2, 7, 1 };
+    uint8_t code[4];
     int i;
     int k;
+    game_dial_code(base, view().module_idx, code);
     for (i = 0; i < 4; i++) {
         for (k = 0; k < code[i]; k++) { ev(GAME_EVT_ENC_STEP, 1); }
         ev(GAME_EVT_ENC_PRESS, 0);
@@ -117,6 +121,14 @@ static void solve_trip(void)
 {
     ev(GAME_EVT_DISTANCE, 20);
     advance(3000);
+}
+
+/* Baseline 100 -> target 140; one bright reading, then the 2 s hold. */
+static void solve_lights(void)
+{
+    ev(GAME_EVT_LIGHT, 100);
+    ev(GAME_EVT_LIGHT, 200);
+    advance(GAME_LIGHT_HOLD_MS);
 }
 
 /* ---- tests ---- */
@@ -151,7 +163,7 @@ static void test_config_rejects(void)
     default_cfg(&c); c.module_count = 0;            CHECK(!game_set_config(&g, &c));
     default_cfg(&c); c.module_count = 5;            CHECK(!game_set_config(&g, &c));
     default_cfg(&c); c.module_order[1] = 0;         CHECK(!game_set_config(&g, &c));
-    default_cfg(&c); c.module_order[2] = 4;         CHECK(!game_set_config(&g, &c));
+    default_cfg(&c); c.module_order[2] = 5;         CHECK(!game_set_config(&g, &c)); /* LIGHTS (4) is valid */
     default_cfg(&c); c.module_count = 2; c.module_order[2] = 9;
     CHECK(game_set_config(&g, &c));                 /* unused entries are ignored */
     default_cfg(&c); c.dial_code[3] = 10;           CHECK(!game_set_config(&g, &c));
@@ -360,7 +372,7 @@ static void test_dial_module(void)
     drain();
     CHECK(nsnd == 1 && last_sound() == GAME_SOUND_MODULE_CLEARED);
     v = view();
-    CHECK(v.module_idx == 1 && v.module_type == PROTO_MODULE_WIRES && v.progress_pct == 33);
+    CHECK(v.module_idx == 1 && v.module_type == PROTO_MODULE_WIRES && v.progress_pct == 25);
     CHECK(v.strikes == 1 && v.module_value == 0);
 }
 
@@ -410,7 +422,7 @@ static void test_wires_module(void)
     drain();
     CHECK(last_sound() == GAME_SOUND_MODULE_CLEARED);
     v = view();
-    CHECK(v.module_idx == 2 && v.module_type == PROTO_MODULE_TRIPWIRE && v.progress_pct == 66);
+    CHECK(v.module_idx == 2 && v.module_type == PROTO_MODULE_TRIPWIRE && v.progress_pct == 50);
     CHECK(v.module_value == 0);
 }
 
@@ -440,20 +452,22 @@ static void test_tripwire_module(void)
     ev(GAME_EVT_ENC_PRESS, 0); /* wrong module */
     CHECK(view().strikes == 0);
 
-    ev(GAME_EVT_DISTANCE, 17); /* just below the band */
-    CHECK(view().module_value == 17);
-    ev(GAME_EVT_DISTANCE, 18); /* inclusive lower bound */
+    ev(GAME_EVT_DISTANCE, 14); /* just below the band */
+    CHECK(view().module_value == 14);
+    ev(GAME_EVT_DISTANCE, 15); /* inclusive lower bound */
     advance(1500);
     v = view();
-    CHECK(v.module_value == (18 | (50 << 8)));
-    ev(GAME_EVT_DISTANCE, 23); /* above the band: reset, no strike */
+    CHECK(v.module_value == (15 | (50 << 8)));
+    ev(GAME_EVT_DISTANCE, 26); /* above the band for the whole grace: reset, no strike */
+    advance(GAME_TRIP_GRACE_MS);
     v = view();
-    CHECK(v.module_value == (23 | (0 << 8)) && v.strikes == 0);
+    CHECK(v.module_value == (26 | (0 << 8)) && v.strikes == 0);
 
-    ev(GAME_EVT_DISTANCE, 22); /* inclusive upper bound */
+    ev(GAME_EVT_DISTANCE, 25); /* inclusive upper bound */
     advance(2950);
     CHECK(view().module_type == PROTO_MODULE_TRIPWIRE && view().state == PROTO_STATE_BOMB_ACTIVE);
-    ev(GAME_EVT_DISTANCE, 401); /* >400 is noise: resets the hold */
+    ev(GAME_EVT_DISTANCE, 401); /* >400 is noise: out of band, resets after the grace */
+    advance(GAME_TRIP_GRACE_MS);
     CHECK(view().module_value == 255);
     ev(GAME_EVT_DISTANCE, 300);
     CHECK(view().module_value == 255); /* low byte saturates */
@@ -463,8 +477,81 @@ static void test_tripwire_module(void)
     CHECK(view().state == PROTO_STATE_BOMB_ACTIVE);
     advance(TICK_MS);
     v = view();
+    CHECK(v.state == PROTO_STATE_BOMB_ACTIVE && v.module_idx == 3 && v.module_type == PROTO_MODULE_LIGHTS);
+    solve_lights();
+    v = view();
     CHECK(v.state == PROTO_STATE_DEFUSED && v.progress_pct == 100);
-    CHECK(v.module_idx == 2 && v.module_type == PROTO_MODULE_TRIPWIRE);
+    CHECK(v.module_idx == 3 && v.module_type == PROTO_MODULE_LIGHTS);
+}
+
+static void test_tripwire_grace(void)
+{
+    start_bomb(0, NULL);
+    solve_dial();
+    solve_wires();
+
+    /* A 250 ms blip keeps the hold running from its original start. */
+    ev(GAME_EVT_DISTANCE, 20);
+    advance(1000);
+    ev(GAME_EVT_DISTANCE, 999);
+    advance(250);
+    ev(GAME_EVT_DISTANCE, 20);
+    CHECK((view().module_value >> 8) == 41);
+    advance(1700);
+    CHECK(view().state == PROTO_STATE_BOMB_ACTIVE);
+    advance(TICK_MS);
+    CHECK(view().module_type == PROTO_MODULE_LIGHTS); /* tripwire cleared; LIGHTS is next */
+
+    /* 350 ms out resets the hold, even if the next reading is in band. */
+    start_bomb(0, NULL);
+    solve_dial();
+    solve_wires();
+    ev(GAME_EVT_DISTANCE, 20);
+    advance(1000);
+    ev(GAME_EVT_DISTANCE, 30);
+    advance(350);
+    ev(GAME_EVT_DISTANCE, 20);
+    CHECK((view().module_value >> 8) == 0);
+    advance(2900);
+    CHECK(view().state == PROTO_STATE_BOMB_ACTIVE);
+    advance(TICK_MS * 2);
+    CHECK(view().module_type == PROTO_MODULE_LIGHTS);
+
+    /* Completion is blocked while the latest reading is out of band. */
+    start_bomb(0, NULL);
+    solve_dial();
+    solve_wires();
+    ev(GAME_EVT_DISTANCE, 20);
+    advance(2800);
+    ev(GAME_EVT_DISTANCE, 30);
+    advance(200);                       /* hold is 3000 ms, but the hand is out */
+    CHECK(view().state == PROTO_STATE_BOMB_ACTIVE);
+    ev(GAME_EVT_DISTANCE, 20);          /* back in band within the grace */
+    advance(TICK_MS);
+    CHECK(view().module_type == PROTO_MODULE_LIGHTS);
+
+    /* The grace timer works across a now_ms wraparound. */
+    {
+        proto_bomb_config_t c;
+        default_cfg(&c);
+        c.module_count = 1;
+        c.module_order[0] = PROTO_MODULE_TRIPWIRE;
+        now = 0xFFFFFFFFu - 500u;
+        game_init(&g, now);
+        CHECK(game_set_config(&g, &c));
+        ev(GAME_EVT_CMD_RING_NOW, 0);
+        advance(TICK_MS);
+        ev(GAME_EVT_DISTANCE, 20);
+        advance(500);
+        ev(GAME_EVT_DISTANCE, 30);
+        advance(250);                   /* crosses the wrap, still inside the grace */
+        CHECK(now < 1000u);
+        ev(GAME_EVT_DISTANCE, 20);
+        CHECK((view().module_value >> 8) > 0);
+        ev(GAME_EVT_DISTANCE, 30);
+        advance(GAME_TRIP_GRACE_MS);
+        CHECK((view().module_value >> 8) == 0);
+    }
 }
 
 static void test_defuse_result_and_return_to_idle(void)
@@ -481,6 +568,7 @@ static void test_defuse_result_and_return_to_idle(void)
     solve_wires();
     drain();
     solve_trip();
+    solve_lights();
     t_defused = now;
     CHECK(view().state == PROTO_STATE_DEFUSED);
     CHECK(game_led_mode(&g) == GAME_LED_DEFUSED_GREEN);
@@ -560,7 +648,7 @@ static void test_explosion_by_strikes_and_second_bomb(void)
     CHECK(v.state == PROTO_STATE_BOMB_ACTIVE && v.strikes == 0 && v.time_left_s == 180);
     CHECK(v.module_idx == 0 && v.progress_pct == 0 && v.module_type == PROTO_MODULE_DIAL);
 
-    /* The new bomb has 4 modules: DIAL, WIRES, TRIPWIRE and the extra DIAL. */
+    /* The new bomb has 4 modules (the base bomb is already at the cap): D, W, T, L. */
     solve_dial();
     CHECK(view().module_type == PROTO_MODULE_WIRES && view().progress_pct == 25);
     solve_wires();
@@ -568,8 +656,8 @@ static void test_explosion_by_strikes_and_second_bomb(void)
     solve_trip();
     v = view();
     CHECK(v.state == PROTO_STATE_BOMB_ACTIVE && v.module_idx == 3);
-    CHECK(v.module_type == PROTO_MODULE_DIAL && v.progress_pct == 75);
-    solve_dial();
+    CHECK(v.module_type == PROTO_MODULE_LIGHTS);
+    solve_lights();
     CHECK(view().state == PROTO_STATE_DEFUSED && view().progress_pct == 100);
     CHECK(game_pop_result(&g, &r) && r.outcome == PROTO_OUTCOME_DEFUSED);
     CHECK(r.strikes == 3); /* session total keeps counting across bombs */
@@ -599,7 +687,7 @@ static void test_module_cap_of_four(void)
     proto_bomb_config_t c;
     int i;
 
-    start_bomb(0, NULL); /* 3 base modules, two explosions -> still 4 */
+    start_bomb(0, NULL); /* 4 base modules, two explosions -> still 4 */
     for (i = 0; i < 2; i++) {
         ev(GAME_EVT_ENC_PRESS, 0); ev(GAME_EVT_ENC_PRESS, 0); ev(GAME_EVT_ENC_PRESS, 0);
         advance(3000);
@@ -644,6 +732,8 @@ static void extra_type_case(uint8_t first, uint8_t expected_extra)
         solve_dial();
     } else if (first == PROTO_MODULE_WIRES) {
         solve_wires();
+    } else if (first == PROTO_MODULE_LIGHTS) {
+        solve_lights();
     } else {
         solve_trip();
     }
@@ -658,9 +748,10 @@ static void test_extra_module_type_rule(void)
 
     extra_type_case(PROTO_MODULE_DIAL, PROTO_MODULE_WIRES);
     extra_type_case(PROTO_MODULE_WIRES, PROTO_MODULE_TRIPWIRE);
-    extra_type_case(PROTO_MODULE_TRIPWIRE, PROTO_MODULE_DIAL);
+    extra_type_case(PROTO_MODULE_TRIPWIRE, PROTO_MODULE_LIGHTS);
+    extra_type_case(PROTO_MODULE_LIGHTS, PROTO_MODULE_DIAL); /* the cycle wraps L > D */
 
-    /* Two explosions: TRIPWIRE, DIAL, WIRES. */
+    /* Two explosions: TRIPWIRE, LIGHTS, DIAL. */
     default_cfg(&c);
     c.module_count = 1;
     c.module_order[0] = PROTO_MODULE_TRIPWIRE;
@@ -671,10 +762,10 @@ static void test_extra_module_type_rule(void)
     ev(GAME_EVT_TAMPER, 2000); /* cooldown was reset with the new bomb */
     advance(3000);
     solve_trip();
-    CHECK(view().module_idx == 1 && view().module_type == PROTO_MODULE_DIAL);
-    solve_dial();
+    CHECK(view().module_idx == 1 && view().module_type == PROTO_MODULE_LIGHTS);
+    solve_lights();
     v = view();
-    CHECK(v.module_idx == 2 && v.module_type == PROTO_MODULE_WIRES && v.progress_pct == 66);
+    CHECK(v.module_idx == 2 && v.module_type == PROTO_MODULE_DIAL && v.progress_pct == 66);
 }
 
 static void test_snooze_twice_then_denied(void)
@@ -707,12 +798,12 @@ static void test_snooze_twice_then_denied(void)
     drain();
     CHECK(nsnd == 1 && snd[0] == GAME_SOUND_DENIED);
 
-    /* Two snoozes -> 3 + 2 modules capped at 4. */
+    /* Two snoozes -> 4 base + 2 extras, capped at 4. */
     solve_dial();
     CHECK(view().progress_pct == 25);
     solve_wires();
     solve_trip();
-    solve_dial();
+    solve_lights();
     CHECK(view().state == PROTO_STATE_DEFUSED);
     CHECK(game_pop_result(&g, &r));
     CHECK(r.outcome == PROTO_OUTCOME_DEFUSED && r.snoozes == 2);
@@ -741,10 +832,10 @@ static void test_cancel(void)
     CHECK(view().state == PROTO_STATE_IDLE && view().strikes == 0 && view().module_type == 0);
     CHECK(!game_pop_result(&g, &r)); /* cancel never produces a RESULT */
 
-    ev(GAME_EVT_CMD_RING_NOW, 0); /* a new session starts clean: 3 modules */
+    ev(GAME_EVT_CMD_RING_NOW, 0); /* a new session starts clean: 4 modules */
     advance(TICK_MS);
     solve_dial();
-    CHECK(view().progress_pct == 33);
+    CHECK(view().progress_pct == 25);
     ev(GAME_EVT_CMD_CANCEL, 0);
     CHECK(view().state == PROTO_STATE_IDLE);
 }
@@ -905,6 +996,277 @@ static void test_wraparound_alarm_hold_and_timeout(void)
     CHECK(view().state == PROTO_STATE_BOMB_ACTIVE);
 }
 
+/* Enter the 4-digit code `code` on the current dial. */
+static void enter_code(const uint8_t code[4])
+{
+    int i;
+    int k;
+    for (i = 0; i < 4; i++) {
+        for (k = 0; k < code[i]; k++) { ev(GAME_EVT_ENC_STEP, 1); }
+        ev(GAME_EVT_ENC_PRESS, 0);
+    }
+}
+
+static void test_dial_code_derivation(void)
+{
+    static const uint8_t codes[][4] = {
+        { 4, 2, 7, 1 }, { 0, 0, 0, 0 }, { 9, 9, 9, 9 }, { 1, 5, 8, 3 }
+    };
+    uint8_t out[4][4];
+    size_t c;
+    int a;
+    int b;
+
+    for (c = 0; c < sizeof(codes) / sizeof(codes[0]); c++) {
+        for (a = 0; a < 4; a++) { game_dial_code(codes[c], (uint8_t)a, out[a]); }
+        CHECK(memcmp(out[0], codes[c], 4) == 0);
+        for (a = 0; a < 4; a++) {
+            for (b = a + 1; b < 4; b++) { CHECK(memcmp(out[a], out[b], 4) != 0); }
+        }
+    }
+    game_dial_code(codes[0], 1, out[0]);   /* pinned: 4271 + 3 each */
+    CHECK(out[0][0] == 7 && out[0][1] == 5 && out[0][2] == 0 && out[0][3] == 4);
+    game_dial_code(codes[2], 3, out[0]);   /* 9 + 9 = 18 -> 8 */
+    CHECK(out[0][0] == 8 && out[0][3] == 8);
+}
+
+static void test_repeated_dial_bomb(void)
+{
+    static const uint8_t base[4] = { 4, 2, 7, 1 };
+    proto_bomb_config_t c;
+    uint8_t derived[4];
+    int k;
+
+    default_cfg(&c);
+    c.module_count = 4;
+    c.module_order[3] = PROTO_MODULE_DIAL;
+    start_bomb(0, &c);
+    solve_dial(); solve_wires(); solve_trip();
+    CHECK(view().state == PROTO_STATE_BOMB_ACTIVE && view().module_idx == 3);
+    CHECK(view().module_type == PROTO_MODULE_DIAL);
+    /* Base digit 4 where the derived code expects 7: one strike. */
+    for (k = 0; k < base[0]; k++) { ev(GAME_EVT_ENC_STEP, 1); }
+    ev(GAME_EVT_ENC_PRESS, 0);
+    CHECK(view().strikes == 1 && view().state == PROTO_STATE_BOMB_ACTIVE);
+    game_dial_code(base, view().module_idx, derived);
+    enter_code(derived);
+    CHECK(view().state == PROTO_STATE_DEFUSED);
+
+    start_bomb(0, &c);                      /* winnable with the derived code only */
+    solve_dial(); solve_wires(); solve_trip();
+    game_dial_code(base, 3, derived);
+    enter_code(derived);
+    CHECK(view().state == PROTO_STATE_DEFUSED && view().strikes == 0);
+}
+
+/* Bomb with LIGHTS as the only module (type 4 in a one-entry order). */
+static void start_lights_only(void)
+{
+    proto_bomb_config_t c;
+
+    default_cfg(&c);
+    c.module_count = 1;
+    c.module_order[0] = PROTO_MODULE_LIGHTS;
+    start_bomb(0, &c);
+}
+
+static uint16_t lights_value(void)
+{
+    return (uint16_t)view().module_value;
+}
+
+static void test_lights_baseline_and_target(void)
+{
+    proto_game_state_t v;
+
+    start_lights_only();
+    v = view();
+    CHECK(v.module_type == PROTO_MODULE_LIGHTS && v.module_value == 0 && v.progress_pct == 0);
+    ev(GAME_EVT_LIGHT, 100);            /* first event = baseline: 100 + 40 */
+    CHECK(lights_value() == (100u | (140u << 8)));
+    ev(GAME_EVT_LIGHT, 20);             /* later events never move the target */
+    CHECK(lights_value() == (20u | (140u << 8)));
+
+    start_lights_only();                /* floor: dark room, 10 + 40 < 120 */
+    ev(GAME_EVT_LIGHT, 10);
+    CHECK(lights_value() == (10u | (120u << 8)));
+    start_lights_only();                /* exactly at the floor boundary: 80 + 40 */
+    ev(GAME_EVT_LIGHT, 80);
+    CHECK(lights_value() == (80u | (120u << 8)));
+    start_lights_only();                /* cap: 230 + 40 -> 240 */
+    ev(GAME_EVT_LIGHT, 230);
+    CHECK(lights_value() == (230u | (240u << 8)));
+    start_lights_only();                /* bright room is already at/over the capped target */
+    ev(GAME_EVT_LIGHT, 255);
+    CHECK(lights_value() == (255u | (240u << 8)));
+    CHECK(view().module_value < 0);     /* target >= 128 makes the i16 negative: receivers read u16 */
+    start_lights_only();                /* out-of-range input is clamped */
+    ev(GAME_EVT_LIGHT, 1000);
+    CHECK((lights_value() & 0xFFu) == 255u);
+    start_lights_only();
+    ev(GAME_EVT_LIGHT, -5);
+    CHECK((lights_value() & 0xFFu) == 0u && (lights_value() >> 8) == 120u);
+}
+
+static void test_lights_hold_clears(void)
+{
+    proto_game_state_t v;
+
+    start_lights_only();
+    ev(GAME_EVT_LIGHT, 100);
+    CHECK(view().progress_pct == 0);
+    ev(GAME_EVT_LIGHT, 140);            /* exactly the target counts */
+    advance(1000);
+    v = view();
+    CHECK(v.state == PROTO_STATE_BOMB_ACTIVE && v.progress_pct == 0); /* overall progress, not the hold */
+    advance(GAME_LIGHT_HOLD_MS - 1000u - TICK_MS);
+    CHECK(view().state == PROTO_STATE_BOMB_ACTIVE && view().progress_pct == 0);
+    advance(TICK_MS);                   /* exactly 2000 ms held */
+    CHECK(view().state == PROTO_STATE_DEFUSED && view().strikes == 0);
+
+    /* Sub-target readings never start a hold. */
+    start_lights_only();
+    ev(GAME_EVT_LIGHT, 100);
+    ev(GAME_EVT_LIGHT, 139);
+    advance(10000);
+    CHECK(view().state == PROTO_STATE_BOMB_ACTIVE && view().progress_pct == 0);
+}
+
+static void test_lights_grace(void)
+{
+    /* A 250 ms dip is forgiven: the hold keeps its original start. */
+    start_lights_only();
+    ev(GAME_EVT_LIGHT, 100);
+    ev(GAME_EVT_LIGHT, 200);
+    advance(1000);
+    ev(GAME_EVT_LIGHT, 50);
+    advance(250);
+    ev(GAME_EVT_LIGHT, 200);
+    CHECK(view().progress_pct == 0);    /* hold is not in progress_pct */
+    advance(700);
+    CHECK(view().state == PROTO_STATE_BOMB_ACTIVE);
+    advance(TICK_MS);
+    CHECK(view().state == PROTO_STATE_DEFUSED && view().strikes == 0);
+
+    /* A 350 ms dip resets the hold, even if the next reading is bright again. */
+    start_lights_only();
+    ev(GAME_EVT_LIGHT, 100);
+    ev(GAME_EVT_LIGHT, 200);
+    advance(1000);
+    ev(GAME_EVT_LIGHT, 50);
+    advance(350);
+    ev(GAME_EVT_LIGHT, 200);
+    CHECK(view().progress_pct == 0);
+    advance(GAME_LIGHT_HOLD_MS - TICK_MS);
+    CHECK(view().state == PROTO_STATE_BOMB_ACTIVE);
+    advance(TICK_MS);
+    CHECK(view().state == PROTO_STATE_DEFUSED);
+
+    /* Completion is blocked while the latest reading is below target. */
+    start_lights_only();
+    ev(GAME_EVT_LIGHT, 100);
+    ev(GAME_EVT_LIGHT, 200);
+    advance(1900);
+    ev(GAME_EVT_LIGHT, 50);
+    advance(200);                       /* 2100 ms since the hold start, but the light is off */
+    CHECK(view().state == PROTO_STATE_BOMB_ACTIVE);
+    ev(GAME_EVT_LIGHT, 200);            /* back within the grace */
+    advance(TICK_MS);
+    CHECK(view().state == PROTO_STATE_DEFUSED);
+}
+
+static void test_lights_no_strikes_and_ignored_elsewhere(void)
+{
+    proto_game_state_t v;
+
+    /* Events on other modules are ignored: no strike, no state. */
+    start_bomb(0, NULL);                /* DIAL current */
+    ev(GAME_EVT_LIGHT, 255);
+    advance(5000);
+    v = view();
+    CHECK(v.module_type == PROTO_MODULE_DIAL && v.strikes == 0 && v.module_value == 0);
+    solve_dial();
+    ev(GAME_EVT_LIGHT, 255);            /* WIRES current */
+    CHECK(view().strikes == 0 && view().module_type == PROTO_MODULE_WIRES);
+    solve_wires();
+    ev(GAME_EVT_LIGHT, 255);            /* TRIPWIRE current */
+    advance(5000);
+    CHECK(view().strikes == 0 && view().module_type == PROTO_MODULE_TRIPWIRE);
+    solve_trip();
+    /* Earlier ignored events left no baseline behind: the first event now is the baseline. */
+    CHECK(view().module_type == PROTO_MODULE_LIGHTS && view().module_value == 0);
+    ev(GAME_EVT_LIGHT, 100);
+    CHECK(lights_value() == (100u | (140u << 8)));
+
+    /* Other inputs on LIGHTS are ignored without a strike. */
+    ev(GAME_EVT_ENC_PRESS, 0);
+    ev(GAME_EVT_JOY_PRESS, 0);
+    ev(GAME_EVT_DISTANCE, 20);
+    CHECK(view().strikes == 0 && view().module_type == PROTO_MODULE_LIGHTS);
+
+    /* Dark for a long time: no strike, the bomb just keeps running. */
+    advance(30000);
+    CHECK(view().strikes == 0 && view().state == PROTO_STATE_BOMB_ACTIVE);
+
+    /* Events outside BOMB_ACTIVE are ignored. */
+    now = 0;
+    game_init(&g, now);
+    ev(GAME_EVT_LIGHT, 255);
+    CHECK(view().state == PROTO_STATE_IDLE && view().module_value == 0);
+}
+
+static void test_lights_full_bomb_and_cycle(void)
+{
+    proto_game_state_t v;
+    proto_result_msg_t r;
+
+    start_bomb(0, NULL);                /* engine default: D, W, T, L */
+    solve_dial();
+    solve_wires();
+    solve_trip();
+    v = view();
+    CHECK(v.module_idx == 3 && v.module_type == PROTO_MODULE_LIGHTS && v.progress_pct == 75);
+    solve_lights();
+    v = view();
+    CHECK(v.state == PROTO_STATE_DEFUSED && v.progress_pct == 100 && v.strikes == 0);
+    CHECK(game_pop_result(&g, &r) && r.outcome == PROTO_OUTCOME_DEFUSED && r.strikes == 0);
+
+    /* Light state is reset for the next bomb (after a strike-out). */
+    start_lights_only();
+    ev(GAME_EVT_LIGHT, 200);            /* baseline 200 -> target 240 */
+    CHECK(lights_value() == (200u | (240u << 8)));
+    ev(GAME_EVT_TAMPER, 2000);          /* tamper still strikes; three strikes explode */
+    advance(2000);
+    ev(GAME_EVT_TAMPER, 2000);
+    advance(2000);
+    ev(GAME_EVT_TAMPER, 2000);
+    CHECK(view().state == PROTO_STATE_EXPLODED);
+    advance(3000);                      /* new bomb: L, then the extra D (L > D wrap) */
+    v = view();
+    CHECK(v.state == PROTO_STATE_BOMB_ACTIVE && v.module_type == PROTO_MODULE_LIGHTS && v.module_value == 0);
+    ev(GAME_EVT_LIGHT, 60);
+    CHECK(lights_value() == (60u | (120u << 8)));
+}
+
+static void test_lights_config(void)
+{
+    proto_bomb_config_t c;
+
+    game_init(&g, 0);
+    default_cfg(&c);
+    c.module_count = 4;
+    c.module_order[0] = PROTO_MODULE_LIGHTS;
+    c.module_order[3] = PROTO_MODULE_LIGHTS;
+    CHECK(game_set_config(&g, &c));     /* type 4 accepted */
+    c.module_order[1] = 5;
+    CHECK(!game_set_config(&g, &c));    /* type 5 rejected */
+    default_cfg(&c);
+    c.module_order[3] = 5;
+    CHECK(!game_set_config(&g, &c));
+    c.module_count = 3;                 /* unused entry is ignored */
+    CHECK(game_set_config(&g, &c));
+}
+
 int main(void)
 {
     test_init_default_view();
@@ -922,6 +1284,7 @@ int main(void)
     test_wires_module();
     test_wire_cut_mask_encoding();
     test_tripwire_module();
+    test_tripwire_grace();
     test_defuse_result_and_return_to_idle();
     test_tamper();
     test_explosion_by_strikes_and_second_bomb();
@@ -936,6 +1299,14 @@ int main(void)
     test_sound_fifo_overflow();
     test_result_fifo_overflow();
     test_wraparound_alarm_hold_and_timeout();
+    test_dial_code_derivation();
+    test_repeated_dial_bomb();
+    test_lights_baseline_and_target();
+    test_lights_hold_clears();
+    test_lights_grace();
+    test_lights_no_strikes_and_ignored_elsewhere();
+    test_lights_full_bomb_and_cycle();
+    test_lights_config();
 
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

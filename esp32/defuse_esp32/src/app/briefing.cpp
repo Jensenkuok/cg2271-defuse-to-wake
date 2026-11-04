@@ -11,6 +11,7 @@
 #include "flash_store.h"
 #include "history.h"
 #include "llm_client.h"
+#include "mem_big.h"
 #include "puzzle_gen.h"
 #include "text_logic.h"
 #include "timetable.h"
@@ -56,12 +57,12 @@ uint32_t s_seen_runs;
 bool s_today_valid;
 TodayKey s_today_key;
 
-Lesson s_lessons[SCHED_MAX_LESSONS];
+Lesson *s_lessons;                  /* PSRAM, SCHED_MAX_LESSONS entries (mem_big.h) */
 BriefClass s_cls[BRIEF_CLASSES_MAX];
 int s_ncls;
 char s_summary[HIST_SUMMARY_TEXT_MAX + 1];
 char s_prompt[APP_BRIEF_PROMPT_MAX];
-char s_reply[APP_LLM_REPLY_MAX];
+char *s_reply;                      /* PSRAM, APP_LLM_REPLY_MAX bytes */
 char s_json[BRIEF_JSON_MAX];
 BriefText s_llm;                    /* what brief_parse accepted */
 BriefText s_fallback;               /* the template pair for the day being briefed */
@@ -178,7 +179,7 @@ bool begin_run(uint32_t unix_now)
 void step_call(void)
 {
     const char *model = k_chain[s_pos];
-    LlmReply r = llm_chat(model, kBriefSys, s_prompt, APP_BRIEF_MAX_TOKENS, APP_BRIEF_TEMP, s_reply, sizeof(s_reply));
+    LlmReply r = llm_chat(model, kBriefSys, s_prompt, APP_BRIEF_MAX_TOKENS, APP_BRIEF_TEMP, s_reply, APP_LLM_REPLY_MAX);
     int mask = 0;
 
     if (r.status == LLM_ERR_NO_KEY) {
@@ -231,6 +232,11 @@ void refresh_today(uint32_t unix_now)
 
 bool briefing_init(void)
 {
+    s_lessons = mem_big_new<Lesson>(SCHED_MAX_LESSONS, "briefing lessons");
+    s_reply = mem_big_new<char>(APP_LLM_REPLY_MAX, "briefing LLM reply");
+    if (s_lessons == NULL || s_reply == NULL) {
+        return false;
+    }
     memset(&s_blob, 0, sizeof(s_blob));
     if (flash_read_blob(APP_KEY_BRIEF, &s_blob, sizeof(s_blob)) && s_blob.magic == APP_BRIEF_MAGIC &&
         brief_valid(s_blob.text)) {

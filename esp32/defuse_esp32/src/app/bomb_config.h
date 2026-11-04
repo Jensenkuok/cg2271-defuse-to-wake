@@ -1,5 +1,5 @@
 /*
- * Defuse to Wake - BOMB_CONFIG for the MCX: difficulty rule + the next unused puzzle pair.
+ * Defuse to Wake - BOMB_CONFIG for the MCX: difficulty (difficulty.h) + the next unused puzzle pair.
  * Runs in the LINK task (priority 4); the network task only calls bomb_config_send for the SET_ALARM
  * case. All state is guarded by one short mutex (20 ms bound). A bomb snapshots its config when it starts, so a config sent at any
  * time before it (with the SET_ALARM, during the 3 s EXPLODED hold, or while ARMED after a snooze)
@@ -12,7 +12,7 @@
  *   - the puzzle set is read in one short lock of its mutex (puzzle_take_next_pair);
  *   - "used" pair flags are only changed in RAM, the flash write is deferred to the network task
  *     (puzzle_flush_used, dirty flag);
- *   - the difficulty rule reads the history ring under its own short lock (no flash).
+ *   - the difficulty reads the history ring under its own short lock and the mode from a RAM copy (no flash).
  *
  * Triggers (bomb_config_send is also called from the network task for the SET_ALARM case):
  *   - every SET_ALARM sent outside a session (the MCX is IDLE or ARMED, no bomb running);
@@ -42,10 +42,12 @@ bool bomb_config_send(const char *why);
  * bookkeeping, pair consumption when a bomb starts, the EXPLODED / snooze / new-set triggers. */
 void bomb_config_service(const AppState &st);
 
-/* The difficulty rule applied to the stored mornings (also the briefing's "difficulty" input). */
-void bomb_config_difficulty(Difficulty *out);
+/* The difficulty: mode setting + score of the stored mornings (also the briefing's "difficulty" input
+ * and the effective level the puzzle generator is asked for). */
+bool bomb_config_difficulty(Difficulty *out);
+/* (false: the history lock timed out, *out was computed from no records and must not drive a level change) */
 
-/* Serial "diff": the difficulty rule applied to the stored mornings. */
+/* Serial "diff": mode, score, effective level and the bomb that level asks for. */
 void bomb_config_print_difficulty(void);
 
 #endif /* BOMB_CONFIG_H */

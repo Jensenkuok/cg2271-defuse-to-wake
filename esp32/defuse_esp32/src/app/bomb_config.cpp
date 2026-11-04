@@ -2,11 +2,13 @@
 #include "bomb_config.h"
 
 #include <Arduino.h>
+#include <esp_random.h>
 #include <string.h>
 
 #include "config.h"
 #include "history.h"
 #include "link_task.h"
+#include "settings.h"
 #include "puzzle_gen.h"
 #include "puzzle_logic.h"
 #include "../shared/protocol.h"
@@ -21,6 +23,10 @@ struct Pending {
     uint32_t gen;
     uint32_t since_ms;
     ActivePuzzle view;      /* what app_state shows once the MCX ACKs it */
+    uint8_t wires;          /* the bomb as the display must draw it once the MCX ACKs it (O11: the tripwire band moves per bomb) */
+    uint8_t trip_min_cm;
+    uint8_t trip_max_cm;
+    uint8_t max_strikes;
 };
 
 Pending s_pending;
@@ -38,12 +44,24 @@ SemaphoreHandle_t s_lock;   /* guards every static above: bomb_config_send is ca
                              * SET_ALARM case) the network task, bomb_config_service by the link task */
 #define CFG_LOCK_WAIT_MS 20u /* short: the link task has 100 ms retransmit timing; a missed pass is retried in 50 ms */
 
-Difficulty current_difficulty(void)
-{
-    HistRecord recs[DIFF_WINDOW];
-    const int n = history_recent(recs, DIFF_WINDOW);
+/* Score of the last good history read (DIFF_NO_SCORE until there is one). One int, written by whichever
+ * task computed a good score: a stale or torn-free word is all the fallback needs. */
+int s_last_good_score = DIFF_NO_SCORE;
 
-    return difficulty(recs, n);
+/* ok (optional) is false when the history lock timed out: the zero records read then are NOT "no history",
+ * and the caller that reacts to a level change must not act on that score. The returned difficulty is
+ * still usable: on a timeout it reuses the last good score (difficulty_resolve), so a bomb is never built
+ * from the made-up score 50 of an unreadable history. */
+Difficulty current_difficulty(bool *ok)
+{
+    HistRecord recs[HIST_LEN];                          /* the whole ring: the score replays all stored mornings */
+    const int n = history_recent(recs, HIST_LEN);
+    const bool history_ok = (n > 0) || (history_count() == 0);
+
+    if (ok != NULL) {
+        *ok = history_ok;
+    }
+    return difficulty_resolve(recs, n, settings_get_difficulty_mode(), history_ok, &s_last_good_score);
 }
 
 void make_view(ActivePuzzle *v, int pair, uint32_t gen, const Puzzle &d, const Puzzle &w)
@@ -71,6 +89,9 @@ void on_ack(void)
     s_active_gen = s_pending.gen;
     s_active_consumed = false;
     app_state_set_active_puzzle(s_pending.view);
+    /* The OLED / web page draw the wire count and the tripwire band from this: the band of the config the MCX
+     * actually holds, not the GAME_DEFAULT_* one. */
+    app_state_set_bomb_config(s_pending.wires, s_pending.trip_min_cm, s_pending.trip_max_cm, s_pending.max_strikes);
     s_pending.active = false;
     Serial.printf("[cfg] BOMB_CONFIG ACKed: pair %d is now the MCX's config for the next bomb\n", s_active_pair);
 }
@@ -98,11 +119,14 @@ void bomb_config_init(void)
     s_ready = (s_lock != NULL);
 }
 
-void bomb_config_difficulty(Difficulty *out)
+bool bomb_config_difficulty(Difficulty *out)
 {
+    bool ok = false;
+
     if (out != NULL) {
-        *out = current_difficulty();
+        *out = current_difficulty(&ok);
     }
+    return ok;
 }
 
 /* s_lock held by the caller. */
@@ -122,8 +146,8 @@ static bool send_locked(const char *why)
     if (link_tx_space() < 1u || !puzzle_take_next_pair(&dial, &wire, &pair, &gen)) {
         return false;
     }
-    diff = current_difficulty();
-    puzzle_build_config(diff, dial, wire, &cfg);
+    diff = current_difficulty(NULL);
+    puzzle_build_config(diff, dial, wire, esp_random(), &cfg);   /* the random word moves the tripwire band (O11) */
     if (proto_pack_bomb_config(&cfg, pl, sizeof(pl)) == 0u || !link_send(PROTO_MSG_BOMB_CONFIG, pl, PROTO_SIZE_BOMB_CONFIG)) {
         return false;
     }
@@ -132,10 +156,15 @@ static bool send_locked(const char *why)
     s_pending.gen = gen;
     s_pending.since_ms = millis();
     make_view(&s_pending.view, pair, gen, dial, wire);
-    Serial.printf("[cfg] BOMB_CONFIG queued (%s): pair %d, %u modules, %us, %u wires (cut %u), dial %u%u%u%u [%s]\n", why,
-                  pair, (unsigned)cfg.module_count, (unsigned)cfg.time_limit_s, (unsigned)cfg.wire_count,
+    s_pending.wires = cfg.wire_count;
+    s_pending.trip_min_cm = cfg.trip_min_cm;
+    s_pending.trip_max_cm = cfg.trip_max_cm;
+    s_pending.max_strikes = cfg.max_strikes;
+    Serial.printf("[cfg] BOMB_CONFIG queued (%s): pair %d, %u modules, %us, %u wires (cut %u), dial %u%u%u%u, tripwire %u-%ucm [%s]\n",
+                  why, pair, (unsigned)cfg.module_count, (unsigned)cfg.time_limit_s, (unsigned)cfg.wire_count,
                   (unsigned)cfg.correct_wire + 1u, (unsigned)cfg.dial_code[0], (unsigned)cfg.dial_code[1],
-                  (unsigned)cfg.dial_code[2], (unsigned)cfg.dial_code[3], diff.explanation);
+                  (unsigned)cfg.dial_code[2], (unsigned)cfg.dial_code[3], (unsigned)cfg.trip_min_cm,
+                  (unsigned)cfg.trip_max_cm, diff.explanation);
     return true;
 }
 
@@ -220,16 +249,19 @@ void bomb_config_print_difficulty(void)
 {
     HistRecord recs[HIST_LEN];
     const int n = history_recent(recs, HIST_LEN);
-    const Difficulty d = difficulty(recs, n);
+    const Difficulty d = difficulty(recs, n, settings_get_difficulty_mode());
+    const LevelSpec spec = difficulty_level_spec(d.level);
     unsigned snoozes = 0u;
-    unsigned strikes = 0u;
+    unsigned explosions = 0u;
     int i;
 
-    for (i = 0; i < n && i < DIFF_WINDOW; i++) {
+    for (i = 0; i < n; i++) {
         snoozes += recs[i].snoozes;
-        strikes += recs[i].strikes;
+        explosions += recs[i].explosions;
     }
-    Serial.printf("[diff] %d mornings stored, last %d: %u snoozes, %u strikes\n", n, n < DIFF_WINDOW ? n : DIFF_WINDOW,
-                  snoozes, strikes);
-    Serial.printf("[diff] -> %u modules, %u s: %s\n", (unsigned)d.module_count, (unsigned)d.time_limit_s, d.explanation);
+    Serial.printf("[diff] %d mornings stored: %u explosions, %u snoozes\n", n, explosions, snoozes);
+    Serial.printf("[diff] mode %s, score %u -> level %s\n", difficulty_mode_name(d.mode), (unsigned)d.score,
+                  pr_level_name(d.level));
+    Serial.printf("[diff] bomb: %u modules, %u s, %u-%u wires [%s]\n", (unsigned)d.module_count,
+                  (unsigned)d.time_limit_s, (unsigned)spec.wire_min, (unsigned)spec.wire_max, d.explanation);
 }
