@@ -32,6 +32,10 @@ struct ScreenModel {
     char ip_text[APP_IP_TEXT_LEN]; /* IDLE top-left corner: where the web page is, "" until Wi-Fi has an address */
     char next_text[APP_CLUE_MAX_CHARS + 1]; /* IDLE bottom line, e.g. "Fri 15:00 CG2271 LT19", "" if none */
     int32_t ring_in_s;        /* ARMED: seconds until the alarm, -1 unknown */
+    char ring_text[12];       /* ARMED big line: "MM:SS", "5h 07m" or "Fri 11:00" */
+    bool ring_is_at;          /* ring_text is a day/time rather than a countdown */
+    char alarm_text[APP_CLUE_MAX_CHARS + 1]; /* ARMED bottom line: "Alarm Fri 11:00" or "Rings in MM:SS" */
+    bool show_alarm;          /* ARMED: the bottom line shows alarm_text now, else next_text */
     char timer_text[8];       /* ACTIVE "MM:SS" */
     uint8_t strikes;
     uint8_t max_strikes;
@@ -48,8 +52,13 @@ struct ScreenModel {
     uint8_t trip_hold_pct;
     uint8_t trip_min_cm;
     uint8_t trip_max_cm;
+    /* LIGHTS */
+    uint8_t light_level;      /* 0..255 */
+    uint8_t light_target;     /* 0 = the MCX has no baseline yet ("Calibrating...") */
+    uint8_t light_hold_pct;   /* local estimate (light_hold.h), set by the display task; build_model leaves 0 */
+    bool light_holding;       /* the hold is running (grace included): same source as light_hold_pct */
     char taken_text[8];       /* DEFUSED "MM:SS" */
-    char clue[APP_CLUE_MAX_CHARS + 1]; /* TRIPWIRE bottom line (placeholder, unchanged) */
+    char clue[APP_CLUE_MAX_CHARS + 1]; /* TRIPWIRE / LIGHTS bottom line: "Hold hand 15-25cm 3s", "Turn on a light" */
     /* ACTIVE DIAL / WIRES: the riddle of the ACTIVE pair (the config the MCX ACKed) and the hint */
     char puzzle_text[PUZZLE_TEXT_BUF];
     char hint[HINT_BUF];      /* "" until the current bomb has a strike */

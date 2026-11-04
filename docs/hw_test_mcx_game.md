@@ -33,14 +33,14 @@ Press **SW3**. Expect within 3 s:
 ## 3. Defuse the three default modules
 
 Dial code **4-2-7-1**, wire **index 2** (the third wire, counting from 0), tripwire band
-**18–22 cm** for 3 s.
+**15–25 cm** for 3 s.
 
 | Step | Do this | Expected console line (examples) | Buzzer / LED |
 |---|---|---|---|
 | Dial, digit 1 | turn the encoder to **4**, press the encoder | `dial digit=0 val=4`, then `dial digit=1 val=0` | click per detent, two rising beeps (DIGIT_OK) |
 | Dial, digits 2–4 | **2**, press; **7**, press; **1**, press | `dial digit=2 val=7`, `digit=3 val=1` | DIGIT_OK each; after the 4th press three rising beeps (MODULE_CLEARED) |
 | Wires | joystick right twice, then press the stick | `mod 2/3 ... wires cursor=2 cut=0b000000`, then `mod 3/3` | click per move; MODULE_CLEARED |
-| Tripwire | hold a flat hand 18–22 cm from the HC-SR04 for 3 s | `trip dist=20cm hold=0%` … `hold=50%` … `hold=100%`, then `[game] DEFUSED mod 3/3 ... prog=100%` | four-note rising jingle, **solid green** LED |
+| Tripwire | hold a flat hand 15–25 cm from the HC-SR04 for 3 s | `trip dist=20cm hold=0%` … `hold=50%` … `hold=100%`, then `[game] DEFUSED mod 3/3 ... prog=100%` | four-note rising jingle, **solid green** LED |
 
 After DEFUSED the console shows nothing new, and **30 s later** `[game] IDLE`. The LED goes dark
 (blue blink returns).

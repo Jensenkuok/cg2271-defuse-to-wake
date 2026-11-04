@@ -65,6 +65,8 @@
 #define APP_US_ECHO_CH              1u
 #define APP_BUZZER_PIN              2u      /* PTB2 TPM2_CH0 PWM */
 #define APP_BUZZER_CH               0u
+#define APP_LDR_PIN                 0u      /* PTB0 ADC0_SE8 = J4[2] (docs/pin_table.md) */
+#define APP_LDR_ADC_CH              8u      /* ADC0_SE8 is a plain channel: CFG2 MUXSEL = 0 still works */
 
 /* ---- NVIC priorities (Cortex-M0+: 2 bits -> 0/64/128/192, lower = more urgent) ---- */
 #define APP_NVIC_PRIO_UART2         64u     /* link bytes beat GPIO so RX never overruns */
@@ -112,7 +114,7 @@
 #define APP_COMM_RX_WAIT_MS         10u     /* max wait for a byte before polling timers */
 
 /* ---- Encoder + SW3 ---- */
-#define APP_ENC_TRANSITIONS_PER_STEP 4      /* valid quadrature transitions per detent */
+#define APP_ENC_TRANSITIONS_PER_STEP 2      /* 2 = measured on the team's kit encoder (one step per detent) */
 #define APP_ENC_INVERT              0       /* 1 = swap the CW/CCW sign */
 #define APP_SW3_RING_DELAY_S        3       /* SW3 bench trigger: CMD_RING_NOW value */
 
@@ -129,6 +131,14 @@
 #define APP_JOY_CENTER_LO           1500u   /* re-arm only after returning inside */
 #define APP_JOY_CENTER_HI           2600u
 #define APP_JOY_X_INVERT            0       /* 0: low raw X = LEFT; 1: low raw X = RIGHT */
+
+/* ---- Light sensor / LDR (ADC0, sampled inside the joystick task) ---- */
+#define APP_LDR_EVERY_N             5u      /* every 5th 20 ms joystick loop = 10 Hz; light changes slowly */
+#define APP_LDR_AVG_N               4u      /* running average of the last 4 samples (400 ms) */
+#define APP_LDR_SHIFT               4u      /* 12-bit raw >> 4 = level 0..255 */
+#define APP_LDR_LEVEL_MAX           255u    /* top of the level scale (used to invert) */
+/* Kit LDR modules differ. The KY-018 module used on the bench reads high in the dark (bench-confirmed 27 Oct 2026), so it is set to 1. */
+#define APP_LDR_INVERT              1
 #define APP_ADC_CAL_MAX_POLLS       200000u /* bound for the one-time calibration wait */
 #define APP_ADC_GAIN_MSB            0x8000u /* RM ADC "Calibration function" (p.392): set the MSB */
 
@@ -139,6 +149,7 @@
 #define APP_US_US_PER_CM            58u     /* round-trip microseconds per centimetre */
 #define APP_US_MAX_CM               400u    /* HC-SR04 range */
 #define APP_US_INVALID_CM           999     /* DISTANCE value for timeout / out of range */
+#define APP_US_MEDIAN_N             3u      /* median window: one stray ping or lost echo must not break the tripwire hold */
 #define APP_US_USE_PIN_LEVEL        1       /* 1 = classify edges by ECHO pin level (UNVERIFIED on HW) */
 
 /* ---- TPM clocks: MCGIRCLK = 8 MHz LIRC (BOARD_BootClockRUN), SOPT2 TPMSRC = 3 ---- */
@@ -165,6 +176,7 @@
 /* ---- Debug task ---- */
 #define APP_DEBUG_STATS_MS          10000u  /* normal mode stats period */
 #define APP_DEBUG_TEST_STATS_MS     5000u   /* driver-test mode stats period */
+#define APP_DEBUG_DIST_PRINT_DELTA_CM 2     /* driver-test mode: print DISTANCE only on a change this big */
 #define GAME_DEBUG_MASK_BITS        6u      /* wires cut-mask digits printed (max 6 wires) */
 #define APP_DEBUG_DEMO_STEP_MS      2000u   /* boot demo: one sound + one LED mode per step */
 

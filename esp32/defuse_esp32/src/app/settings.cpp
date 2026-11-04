@@ -6,9 +6,12 @@
 
 #include "../../secrets.h"
 #include "config.h"
+#include "difficulty.h"
 #include "flash_store.h"
 
 static volatile uint32_t s_version;   /* 32-bit reads/writes are atomic; only bumped under s_change */
+static volatile uint32_t s_diff_version;
+static volatile uint8_t s_diff_mode = DIFF_MODE_DEFAULT;   /* RAM copy of the flash value; 8-bit access is atomic */
 static portMUX_TYPE s_change = portMUX_INITIALIZER_UNLOCKED;
 
 static void bump_version(void)
@@ -79,4 +82,39 @@ int settings_set_lead_min(int minutes)
 uint32_t settings_version(void)
 {
     return s_version;
+}
+
+void settings_load_difficulty(void)
+{
+    const int stored = (int)flash_read_int(APP_KEY_DIFFICULTY, DIFF_MODE_DEFAULT);
+
+    s_diff_mode = (uint8_t)(difficulty_mode_valid(stored) ? stored : (int)DIFF_MODE_DEFAULT);   /* a broken value = Auto */
+}
+
+int settings_get_difficulty_mode(void)
+{
+    return s_diff_mode;
+}
+
+int settings_set_difficulty_mode(int mode)
+{
+    if (!difficulty_mode_valid(mode)) {
+        return s_diff_mode;
+    }
+    if (mode == (int)s_diff_mode) {
+        return mode;                                  /* unchanged: no flash wear, no refill */
+    }
+    if (!flash_write_int(APP_KEY_DIFFICULTY, mode)) {
+        return s_diff_mode;
+    }
+    s_diff_mode = (uint8_t)mode;
+    taskENTER_CRITICAL(&s_change);
+    s_diff_version = s_diff_version + 1u;
+    taskEXIT_CRITICAL(&s_change);
+    return mode;
+}
+
+uint32_t settings_difficulty_version(void)
+{
+    return s_diff_version;
 }

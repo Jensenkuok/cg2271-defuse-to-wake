@@ -28,6 +28,7 @@ static void load_default_config(proto_bomb_config_t *c)
     c->module_order[0] = PROTO_MODULE_DIAL;
     c->module_order[1] = PROTO_MODULE_WIRES;
     c->module_order[2] = PROTO_MODULE_TRIPWIRE;
+    c->module_order[3] = PROTO_MODULE_LIGHTS;
     c->time_limit_s = GAME_DEFAULT_TIME_LIMIT_S;
     c->dial_code[0] = GAME_DEFAULT_DIAL_CODE_0;
     c->dial_code[1] = GAME_DEFAULT_DIAL_CODE_1;
@@ -96,10 +97,15 @@ static int16_t module_value(const game_t *g, uint32_t now_ms)
         lo = g->trip_distance_cm;
         hi = hold_pct(g, now_ms);
         break;
+    case PROTO_MODULE_LIGHTS:
+        lo = g->light_have_baseline ? g->light_level : 0u;
+        hi = g->light_have_baseline ? g->light_target : 0u;
+        break;
     default:
         return 0;
     }
-    return (int16_t)(lo | (hi << GAME_VALUE_HI_SHIFT));
+    /* Two's-complement wrap is intended when hi >= 128 (lights target); receivers read it as u16. */
+    return (int16_t)(uint16_t)(lo | (hi << GAME_VALUE_HI_SHIFT));
 }
 
 static void compute_view(const game_t *g, uint32_t now_ms, proto_game_state_t *v)
@@ -169,6 +175,12 @@ static void init_module(game_t *g)
     g->wire_cut_mask = 0u;
     g->trip_distance_cm = 0u;
     g->trip_holding = false;
+    g->trip_out = false;
+    g->light_have_baseline = false;
+    g->light_level = 0u;
+    g->light_target = 0u;
+    g->light_holding = false;
+    g->light_below = false;
 }
 
 /* Start a fresh bomb from the current config plus one extra module per extra. */
@@ -259,7 +271,11 @@ static void dial_step(game_t *g, int32_t step)
 
 static void dial_press(game_t *g, uint32_t now_ms)
 {
-    if (g->dial_value != g->bomb_cfg.dial_code[g->dial_digit]) {
+    uint8_t code[PROTO_DIAL_DIGITS];
+
+    /* g->cleared is the current module index (same value as the view's module_idx). */
+    game_dial_code(g->bomb_cfg.dial_code, g->cleared, code);
+    if (g->dial_value != code[g->dial_digit]) {
         g->dial_value = 0u;
         add_strike(g, now_ms);
         return;
@@ -300,17 +316,69 @@ static void wire_press(game_t *g, uint32_t now_ms)
     }
 }
 
+/* Out of band for the whole grace period: the hold is lost. */
+static void trip_expire_grace(game_t *g, uint32_t now_ms)
+{
+    if (g->trip_out && (uint32_t)(now_ms - g->trip_out_since_ms) >= GAME_TRIP_GRACE_MS) {
+        g->trip_holding = false;
+        g->trip_out = false;
+    }
+}
+
 static void trip_distance(game_t *g, int32_t cm, uint32_t now_ms)
 {
     bool in_band = cm >= (int32_t)g->bomb_cfg.trip_min_cm && cm <= (int32_t)g->bomb_cfg.trip_max_cm &&
                    cm <= GAME_TRIP_MAX_VALID_CM;
 
     g->trip_distance_cm = (uint8_t)((cm < 0) ? 0 : ((cm > GAME_VIEW_MAX_DISTANCE_CM) ? GAME_VIEW_MAX_DISTANCE_CM : cm));
-    if (!in_band) {
-        g->trip_holding = false;
-    } else if (!g->trip_holding) {
-        g->trip_holding = true;
-        g->trip_hold_start_ms = now_ms;
+    trip_expire_grace(g, now_ms);
+    if (in_band) {
+        g->trip_out = false;
+        if (!g->trip_holding) {
+            g->trip_holding = true;
+            g->trip_hold_start_ms = now_ms;
+        }
+    } else if (g->trip_holding && !g->trip_out) {
+        g->trip_out = true;
+        g->trip_out_since_ms = now_ms;
+    }
+}
+
+/* Below target for the whole grace period: the hold is lost. */
+static void light_expire_grace(game_t *g, uint32_t now_ms)
+{
+    if (g->light_below && (uint32_t)(now_ms - g->light_below_since_ms) >= GAME_LIGHT_GRACE_MS) {
+        g->light_holding = false;
+        g->light_below = false;
+    }
+}
+
+static void light_level(game_t *g, int32_t level, uint32_t now_ms)
+{
+    uint32_t base;
+    uint32_t target;
+    bool reached;
+
+    level = (level < 0) ? 0 : ((level > (int32_t)GAME_LIGHT_LEVEL_MAX) ? (int32_t)GAME_LIGHT_LEVEL_MAX : level);
+    g->light_level = (uint8_t)level;
+    if (!g->light_have_baseline) {
+        base = (uint32_t)level;
+        target = base + GAME_LIGHT_DELTA;
+        target = (target < GAME_LIGHT_MIN_LEVEL) ? GAME_LIGHT_MIN_LEVEL : target;
+        g->light_target = (uint8_t)((target > GAME_LIGHT_TARGET_CAP) ? GAME_LIGHT_TARGET_CAP : target);
+        g->light_have_baseline = true;
+    }
+    light_expire_grace(g, now_ms);
+    reached = (uint32_t)level >= g->light_target;
+    if (reached) {
+        g->light_below = false;
+        if (!g->light_holding) {
+            g->light_holding = true;
+            g->light_hold_start_ms = now_ms;
+        }
+    } else if (g->light_holding && !g->light_below) {
+        g->light_below = true;
+        g->light_below_since_ms = now_ms;
     }
 }
 
@@ -374,6 +442,9 @@ static void module_event(game_t *g, const game_event_t *ev, uint32_t now_ms)
         break;
     case GAME_EVT_DISTANCE:
         if (type == PROTO_MODULE_TRIPWIRE) { trip_distance(g, ev->value, now_ms); }
+        break;
+    case GAME_EVT_LIGHT:
+        if (type == PROTO_MODULE_LIGHTS) { light_level(g, ev->value, now_ms); }
         break;
     case GAME_EVT_TAMPER:
         tamper(g, ev->value, now_ms);
@@ -511,8 +582,15 @@ void game_tick(game_t *g, uint32_t now_ms)
         break;
     case PROTO_STATE_BOMB_ACTIVE:
         /* Tripwire first, so a hold completing on the deadline tick still wins. */
-        if (g->modules[g->cleared] == PROTO_MODULE_TRIPWIRE && g->trip_holding &&
+        trip_expire_grace(g, now_ms);
+        if (g->modules[g->cleared] == PROTO_MODULE_TRIPWIRE && g->trip_holding && !g->trip_out &&
             (uint32_t)(now_ms - g->trip_hold_start_ms) >= GAME_TRIP_HOLD_MS) {
+            module_cleared(g, now_ms);
+        }
+        light_expire_grace(g, now_ms);
+        if (g->state == PROTO_STATE_BOMB_ACTIVE && g->modules[g->cleared] == PROTO_MODULE_LIGHTS &&
+            g->light_holding && !g->light_below &&
+            (uint32_t)(now_ms - g->light_hold_start_ms) >= GAME_LIGHT_HOLD_MS) {
             module_cleared(g, now_ms);
         }
         if (g->state == PROTO_STATE_BOMB_ACTIVE && time_reached(now_ms, g->bomb_end_ms)) {

@@ -23,6 +23,7 @@
 #include <stdint.h>
 
 #include "game_config.h"
+#include "game_dial.h"   /* game_dial_code(): shared with the ESP32 display */
 #include "protocol.h"
 
 #ifdef __cplusplus
@@ -40,7 +41,8 @@ typedef enum {
     GAME_EVT_TAMPER,           /* value = mg */
     GAME_EVT_CMD_RING_NOW,     /* value = delay in seconds, clamped 0..3600 */
     GAME_EVT_CMD_SNOOZE,
-    GAME_EVT_CMD_CANCEL
+    GAME_EVT_CMD_CANCEL,
+    GAME_EVT_LIGHT             /* value = light level 0..255; appended to keep earlier values */
 } game_event_type_t;
 
 typedef struct {
@@ -100,6 +102,16 @@ typedef struct {
     uint8_t trip_distance_cm;
     bool trip_holding;
     uint32_t trip_hold_start_ms;
+    bool trip_out;
+    uint32_t trip_out_since_ms;
+
+    bool light_have_baseline;
+    uint8_t light_level;
+    uint8_t light_target;
+    bool light_holding;
+    uint32_t light_hold_start_ms;
+    bool light_below;
+    uint32_t light_below_since_ms;
 
     bool tamper_cooling;
     uint32_t tamper_cooldown_end_ms;
@@ -121,7 +133,7 @@ void game_init(game_t *g, uint32_t now_ms);
 /*
  * Validate and store a bomb config for the NEXT bomb (a running bomb keeps its
  * snapshot). Rejected (false, previous config kept) if module_count is not 1..4,
- * a used module type is not 1..3, a dial digit > 9, trip_min >= trip_max, or a
+ * a used module type is not 1..4, a dial digit > 9, trip_min >= trip_max, or a
  * trip bound is outside 5..100. Otherwise clamps time_limit_s 30..600,
  * wire_count 3..6, max_strikes 1..5; correct_wire must be < clamped wire_count.
  */

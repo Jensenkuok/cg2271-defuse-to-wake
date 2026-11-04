@@ -21,14 +21,14 @@ Prerequisite: `docs/hw_test_esp32_basic.md` passes (link, OLED, NTP time sync).
 | Libraries (Library Manager) | Adafruit SSD1306, Adafruit GFX, Adafruit MPU6050, **ArduinoJson 7.x** |
 | Board | ESP32S2 Dev Module (`esp32:esp32:esp32s2`) |
 | **Partition Scheme** | **Huge APP (3MB No OTA/1MB SPIFFS)** (`PartitionScheme=huge_app`) |
-| FQBN for the command line | `esp32:esp32:esp32s2:PartitionScheme=huge_app` |
+| FQBN for the command line | `esp32:esp32:esp32s2:PartitionScheme=huge_app,PSRAM=enabled` |
 
 The online code grew the program to about 1.15 MB, which does not fit the default 1.2 MB app
 partition with room to spare, so the Huge APP scheme is used. Changing the partition table needs a
 full upload (the old NVS data is erased once).
 
 ```
-"C:\Program Files\Arduino IDE\resources\app\lib\backend\resources\arduino-cli.exe" --config-file "%USERPROFILE%\.arduinoIDE\arduino-cli.yaml" compile --fqbn esp32:esp32:esp32s2:PartitionScheme=huge_app --warnings all esp32/defuse_esp32
+"C:\Program Files\Arduino IDE\resources\app\lib\backend\resources\arduino-cli.exe" --config-file "%USERPROFILE%\.arduinoIDE\arduino-cli.yaml" compile --fqbn esp32:esp32:esp32s2:PartitionScheme=huge_app,PSRAM=enabled --warnings all esp32/defuse_esp32
 ```
 
 `secrets.h` needs `WIFI_*`, `FIREBASE_DB_URL`, `FIREBASE_AUTH` and `NUSMODS_SHARE_LINK`. Use a

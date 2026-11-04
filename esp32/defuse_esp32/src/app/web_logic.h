@@ -1,7 +1,7 @@
 /*
  * Defuse to Wake - pure helpers of the local web page (no Arduino headers, no heap, no globals;
  * compiled by the sketch and by the host tests, tools/test_web.cpp, C++11):
- *   - validation of the settings form (NUSMods link, wake-up lead),
+ *   - validation of the settings form (NUSMods link, wake-up lead, difficulty mode),
  *   - the "simulated internet outage" expiry rule,
  *   - a small bounded JSON writer + string escaper for /api/status (fixed buffer, no String),
  *   - whether the active puzzle's answer may be shown, and the bomb's module total.
@@ -25,7 +25,8 @@ enum SettingsErr {
     SETTINGS_ERR_LINK_NO_SLOTS,
     SETTINGS_ERR_LEAD_MISSING,
     SETTINGS_ERR_LEAD_NOT_NUMBER,
-    SETTINGS_ERR_LEAD_RANGE
+    SETTINGS_ERR_LEAD_RANGE,
+    SETTINGS_ERR_DIFFICULTY
 };
 
 /* link: at most APP_LINK_MAX_CHARS characters, starts with WEB_LINK_PREFIX, printable ASCII without
@@ -33,6 +34,11 @@ enum SettingsErr {
  * (surrounding blanks allowed) within APP_LEAD_MIN_LOW..APP_LEAD_MIN_HIGH; it is rejected, never
  * clamped. On SETTINGS_OK *lead_out holds the number (lead_out may be NULL). */
 SettingsErr web_validate_settings(const char *link, const char *lead_text, int *lead_out);
+
+/* The difficulty field: exactly one of "auto" "easy" "normal" "hard" (difficulty.h ids, lowercase, no
+ * blanks); anything else is SETTINGS_ERR_DIFFICULTY. On SETTINGS_OK *mode_out is the DiffMode number
+ * (mode_out may be NULL). The field is optional in the request: the caller validates it only when present. */
+SettingsErr web_validate_difficulty(const char *text, int *mode_out);
 
 /* Message for the 400 response, e.g. "lead_min must be between 15 and 180". */
 const char *web_settings_err_text(SettingsErr err);

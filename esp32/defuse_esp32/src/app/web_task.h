@@ -1,9 +1,10 @@
 /*
  * Defuse to Wake - local web page task (priority APP_PRIO_WEB = the network task's level, the lowest).
- * The built-in WebServer (no async library, no CDN) serves ONE page from flash plus a small JSON
+ * The built-in WebServer (no async library, no CDN) serves two pages from flash plus a small JSON
  * API; ESPmDNS announces it as http://defuse.local once Wi-Fi is up. CLAUDE.md "Local web page".
  *
- *   GET  /                  the page (web_page.h), two tabs: My mornings, Engineering
+ *   GET  /                  the settings page (web_page.h): next alarm, NUSMods link, lead slider
+ *   GET  /eng               the engineering / demo panel (web_eng_page.h), not linked from "/"
  *   GET  /api/status        everything the page shows, one JSON object (<= APP_WEB_STATUS_MAX bytes)
  *   POST /api/settings      nusmods_link + lead_min (validated, saved through settings.h, which makes
  *                           the network task refresh the timetable and reschedule the alarm)

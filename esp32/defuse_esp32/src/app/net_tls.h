@@ -10,9 +10,12 @@
 #ifndef NET_TLS_H
 #define NET_TLS_H
 
+#include <Arduino.h>
+#include <HTTPClient.h>
 #include <NetworkClientSecure.h>
 
 #include "config.h"
+#include "mem_big.h"
 
 static inline void net_tls_configure(NetworkClientSecure &client)
 {
@@ -22,6 +25,20 @@ static inline void net_tls_configure(NetworkClientSecure &client)
     client.useBuiltinCACertBundle();
 #endif
     client.setTimeout(APP_HTTP_TIMEOUT_S);   /* seconds */
+}
+
+/* One line for a failed HTTPS call, printed BEFORE http.end() (end() closes the client): the
+ * HTTP status or HTTPClient error text, the mbedTLS error of the TLS client and the internal
+ * heap right now. A handshake that cannot get ~32 KB of contiguous internal RAM shows up here
+ * as a small int_largest and a TLS allocation error. */
+static inline void net_tls_log_failure(const char *tag, int code, NetworkClientSecure &client)
+{
+    char tls_text[96] = "";
+    const int tls_err = client.lastError(tls_text, sizeof(tls_text));
+
+    Serial.printf("[%s] failure: code=%d (%s) tls_err=%d (%s) int_free=%u int_largest=%u\n", tag, code,
+                  code < 0 ? HTTPClient::errorToString(code).c_str() : "HTTP status", tls_err,
+                  tls_err != 0 ? tls_text : "none", (unsigned)mem_internal_free(), (unsigned)mem_internal_largest());
 }
 
 #endif /* NET_TLS_H */

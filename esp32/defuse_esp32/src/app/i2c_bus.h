@@ -21,4 +21,13 @@ void i2c_bus_unlock(void);
 /* Does anything ACK at this address? (takes the lock itself) */
 bool i2c_bus_probe(uint8_t addr);
 
+/* Probe 0x08-0x77 (takes the lock, bounded wait). Fills found[] with up to max addresses that
+ * ACK and returns how many; -1 if the bus lock timed out. */
+int i2c_bus_scan(uint8_t *found, int max);
+
+/* Print "[i2c] SDA=.. SCL=.. <hz> Hz found: ..." (the "i2c" command and the boot line). With
+ * allow_fallback, an empty scan is retried at APP_I2C_FALLBACK_HZ and that speed is kept if
+ * it finds devices. */
+void i2c_bus_report(bool allow_fallback);
+
 #endif /* I2C_BUS_H */

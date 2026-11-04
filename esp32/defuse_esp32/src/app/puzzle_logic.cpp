@@ -2,6 +2,7 @@
 #include "puzzle_logic.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define THINK_OPEN          "<think>"
@@ -17,7 +18,7 @@
 #define RENDER_PIECE_MAX    24u
 #define DIAL_BASE           10
 #define DIAL_CODE_SPACE     10000u
-#define DIFF_SHOWN_MAX      99u     /* snooze count printed in the explanation */
+#define TOKEN_VALUE_CAP     100000L /* number tokens saturate here (no overflow on long digit runs) */
 
 static const char *const k_ordinal[] = { "1st", "2nd", "3rd", "4th", "5th", "6th" };
 #define ORDINAL_COUNT 6u
@@ -25,11 +26,6 @@ static const char *const k_ordinal[] = { "1st", "2nd", "3rd", "4th", "5th", "6th
 static const char *ordinal(unsigned i)
 {
     return i < ORDINAL_COUNT ? k_ordinal[i] : "?";
-}
-
-static unsigned min_u(unsigned a, unsigned b)
-{
-    return a < b ? a : b;
 }
 
 static int clamp_i(int v, int lo, int hi)
@@ -321,7 +317,83 @@ bool json_get_string(const char *json, const char *key, char *out, size_t out_si
 }
 
 /* ================= validation ================= */
-bool validate_puzzle(const char *text, int kind, const char *answer)
+/* True when the text's digits alone, every other character removed, contain the answer. */
+static bool digits_spell(const char *text, const char *answer)
+{
+    char only[PUZZLE_DIAL_TEXT_MAX + 1];
+    size_t n = 0u;
+
+    for (; *text != '\0' && n < sizeof(only) - 1u; text++) {
+        if (*text >= '0' && *text <= '9') {
+            only[n++] = *text;
+        }
+    }
+    only[n] = '\0';
+    return strstr(only, answer) != NULL;
+}
+
+static bool is_alnum_char(char c)
+{
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+/* "st" "nd" "rd" "th" after a number, then not a letter or digit: an ordinal like 3rd. */
+static bool ordinal_suffix_at(const char *p)
+{
+    const bool suffix = (p[0] == 's' && p[1] == 't') || (p[0] == 'n' && p[1] == 'd') ||
+                        (p[0] == 'r' && p[1] == 'd') || (p[0] == 't' && p[1] == 'h');
+
+    return suffix && !is_alnum_char(p[2]);
+}
+
+bool puzzle_text_has_number(const char *text, int value)
+{
+    size_t i = 0u;
+    size_t j;
+    long number;
+
+    if (text == NULL) {
+        return false;
+    }
+    while (text[i] != '\0') {
+        if (text[i] < '0' || text[i] > '9') {
+            i++;
+            continue;
+        }
+        number = 0;
+        for (j = i; text[j] >= '0' && text[j] <= '9'; j++) {
+            number = number * DIAL_BASE + (text[j] - '0');
+            if (number > TOKEN_VALUE_CAP) {
+                number = TOKEN_VALUE_CAP;                   /* far above any answer: stays a non-match */
+            }
+        }
+        const bool glued_before = (i > 0u && is_alnum_char(text[i - 1u]));
+        const bool glued_after = is_alnum_char(text[j]) && !ordinal_suffix_at(text + j);
+
+        if (!glued_before && !glued_after && number == (long)value) {
+            return true;
+        }
+        i = j;
+    }
+    return false;
+}
+
+const char *puzzle_text_problem_name(int problem)
+{
+    switch (problem) {
+    case PTP_OK:            return "ok";
+    case PTP_ARGS:          return "bad arguments";
+    case PTP_TOO_SHORT:     return "too short";
+    case PTP_TOO_LONG:      return "too long";
+    case PTP_BAD_CHAR:      return "not plain ASCII";
+    case PTP_LEAKS_CODE:    return "prints the code";
+    case PTP_LEAKS_DIGITS:  return "spells the code in its digits";
+    case PTP_LEAKS_NUMBER:  return "states the wire number";
+    default:                return "?";
+    }
+}
+
+int puzzle_text_problem(const char *text, int kind, const char *answer)
 {
     size_t len;
     size_t i;
@@ -329,28 +401,42 @@ bool validate_puzzle(const char *text, int kind, const char *answer)
     unsigned char c;
 
     if (text == NULL || (kind != PUZZLE_DIAL && kind != PUZZLE_WIRE)) {
-        return false;
+        return PTP_ARGS;
     }
-    max_len = (kind == PUZZLE_WIRE) ? PUZZLE_WIRE_TEXT_MAX : PUZZLE_DIAL_TEXT_MAX;
+    max_len = (kind == PUZZLE_WIRE) ? PUZZLE_WIRE_TEXT_LIMIT : PUZZLE_DIAL_TEXT_LIMIT;
     len = strlen(text);
-    if (len < PUZZLE_TEXT_MIN || len > max_len) {
-        return false;
+    if (len < PUZZLE_TEXT_MIN) {
+        return PTP_TOO_SHORT;
+    }
+    if (len > max_len) {
+        return PTP_TOO_LONG;
     }
     for (i = 0u; i < len; i++) {
         c = (unsigned char)text[i];
         if (c < ASCII_PRINT_FIRST || c > ASCII_PRINT_LAST) {
-            return false;
+            return PTP_BAD_CHAR;
         }
     }
     if (kind == PUZZLE_DIAL) {
         if (answer == NULL || strlen(answer) != PROTO_DIAL_DIGITS) {
-            return false;
+            return PTP_ARGS;
         }
         if (strstr(text, answer) != NULL) {
-            return false;                           /* the riddle must not just print the code */
+            return PTP_LEAKS_CODE;                  /* the riddle must not just print the code */
         }
+        if (digits_spell(text, answer)) {
+            return PTP_LEAKS_DIGITS;                /* nor list its digits: "2,5,8,7" or "2 5 8 7" */
+        }
+    } else if (answer != NULL && answer[0] >= '0' && answer[0] <= '9' &&
+               puzzle_text_has_number(text, atoi(answer))) {
+        return PTP_LEAKS_NUMBER;                    /* O4: "wire 3", "the 3rd", "n-3"... when 3 is the answer */
     }
-    return true;
+    return PTP_OK;
+}
+
+bool validate_puzzle(const char *text, int kind, const char *answer)
+{
+    return puzzle_text_problem(text, kind, answer) == PTP_OK;
 }
 
 bool parse_checker_answer(const char *json, int kind, int wire_count, char *out, size_t out_size)
@@ -437,13 +523,22 @@ void dial_code_from_random(uint32_t r, uint8_t code[PROTO_DIAL_DIGITS])
     }
 }
 
-void wire_pick_from_random(uint32_t r, int *wire_count, int *k)
+void wire_pick_from_random(int level, uint32_t r, int *wire_count, int *k)
 {
-    const unsigned span = GAME_MAX_WIRES - GAME_MIN_WIRES + 1u;
-    const int n = (int)(GAME_MIN_WIRES + (r & 0xFFFFu) % span);
+    const LevelSpec spec = difficulty_level_spec(level);
+    const unsigned span = (unsigned)spec.wire_max - spec.wire_min + 1u;
+    const int n = (int)(spec.wire_min + (r & 0xFFFFu) % span);
 
     *wire_count = n;
     *k = 1 + (int)((r >> 16) % (uint32_t)n);
+}
+
+void trip_band_from_random(uint32_t r, uint8_t *min_cm, uint8_t *max_cm)
+{
+    const uint8_t lo = (uint8_t)(PUZZLE_TRIP_MIN_BASE_CM + r % PUZZLE_TRIP_START_VALUES);
+
+    *min_cm = lo;
+    *max_cm = (uint8_t)(lo + PUZZLE_TRIP_WIDTH_CM);
 }
 
 /* ================= dial templates ================= */
@@ -533,7 +628,7 @@ static void build_pairs(DialClue *cl, const uint8_t d[PROTO_DIAL_DIGITS], unsign
     cl->n = (uint8_t)n;
 }
 
-DialClue dial_clue_build(const uint8_t code[PROTO_DIAL_DIGITS], unsigned variant)
+static DialClue build_variant(const uint8_t code[PROTO_DIAL_DIGITS], unsigned variant)
 {
     DialClue cl;
     uint8_t d[PROTO_DIAL_DIGITS];
@@ -561,6 +656,32 @@ DialClue dial_clue_build(const uint8_t code[PROTO_DIAL_DIGITS], unsigned variant
         break;
     }
     return cl;
+}
+
+/* Some codes make a clue's digits-only form spell the code by coincidence (the constants happen to
+ * line up, e.g. 0000 in the pair family). Those are skipped: the other details of the same family
+ * come first, then the other families, so the result is still a true unique-solution clue. */
+DialClue dial_clue_build(const uint8_t code[PROTO_DIAL_DIGITS], unsigned variant)
+{
+    char text[PUZZLE_TEXT_BUF];
+    char answer[PROTO_DIAL_DIGITS + 1];
+    unsigned fam;
+    unsigned sub;
+    DialClue cl;
+
+    dial_code_text(code, answer);
+    for (fam = 0u; fam < DIAL_FAMILIES; fam++) {
+        for (sub = 0u; sub < PUZZLE_VARIANTS / DIAL_FAMILIES; sub++) {
+            const unsigned v = (variant + fam) % DIAL_FAMILIES +
+                               DIAL_FAMILIES * ((variant / DIAL_FAMILIES + sub) % (PUZZLE_VARIANTS / DIAL_FAMILIES));
+
+            cl = build_variant(code, v);
+            if (dial_clue_render(cl, text, sizeof(text)) > 0u && validate_puzzle(text, PUZZLE_DIAL, answer)) {
+                return cl;
+            }
+        }
+    }
+    return build_variant(code, variant);
 }
 
 static void render_rule(const DialRule &r, char *piece, size_t size)
@@ -696,7 +817,7 @@ size_t wire_clue_render(const WireClue &w, char *out, size_t out_size)
                        w.op == WOP_ADD ? '+' : (w.op == WOP_MUL ? '*' : '-'), (unsigned)w.b);
         break;
     default:
-        len = snprintf(out, out_size, "%u wires. Skip %u from the %s, cut the next", (unsigned)w.n, (unsigned)w.a,
+        len = snprintf(out, out_size, "%u wires. Skip %u from %s, cut next", (unsigned)w.n, (unsigned)w.a,
                        w.from_right ? "right" : "left");
         break;
     }
@@ -747,7 +868,7 @@ void puzzle_set_fill_bank(PuzzleSet *s, const uint32_t rnd[PUZZLE_BANK_WORDS])
     for (i = 0u; i < PUZZLE_PAIRS; i++) {
         dial_code_from_random(rnd[3u * i], code);
         puzzle_fill_bank_dial(&s->dial[i], code, rnd[3u * i + 2u] % PUZZLE_VARIANTS);
-        wire_pick_from_random(rnd[3u * i + 1u], &n, &k);
+        wire_pick_from_random(PR_NORMAL, rnd[3u * i + 1u], &n, &k);
         puzzle_fill_bank_wire(&s->wire[i], n, k, (rnd[3u * i + 2u] >> 8) % PUZZLE_VARIANTS);
     }
 }
@@ -769,6 +890,9 @@ bool puzzle_set_valid(const PuzzleSet &s)
         const Puzzle &dp = s.dial[i];
         const Puzzle &wp = s.wire[i];
 
+        if (dp.level > PUZZLE_LEVEL_MAX || wp.level > PUZZLE_LEVEL_MAX) {
+            return false;
+        }
         if (dp.kind != PUZZLE_DIAL || wp.kind != PUZZLE_WIRE || dp.source > PUZZLE_SRC_AI || wp.source > PUZZLE_SRC_AI) {
             return false;
         }
@@ -791,74 +915,9 @@ bool puzzle_set_valid(const PuzzleSet &s)
     return true;
 }
 
-/* ================= difficulty ================= */
-static void explain_add(Difficulty *d, size_t *len, const char *piece)
-{
-    if (*len > 0u) {
-        snprintf(d->explanation + *len, sizeof(d->explanation) - *len, "; ");
-        *len = strlen(d->explanation);
-    }
-    snprintf(d->explanation + *len, sizeof(d->explanation) - *len, "%s", piece);
-    *len = strlen(d->explanation);
-}
-
-Difficulty difficulty(const HistRecord *recent, int n)
-{
-    Difficulty d;
-    unsigned w = (recent != NULL && n > 0) ? min_u((unsigned)n, DIFF_WINDOW) : 0u;
-    unsigned snoozes = 0u;
-    unsigned strikes = 0u;
-    bool clean = (w >= DIFF_CLEAN_RUN);
-    bool more_modules;
-    bool pressure;
-    int time_s = DIFF_BASE_TIME_S;
-    char piece[PUZZLE_EXPLAIN_MAX + 1];
-    size_t len = 0u;
-    unsigned i;
-
-    memset(&d, 0, sizeof(d));
-    for (i = 0u; i < w; i++) {
-        snoozes += recent[i].snoozes;
-        strikes += recent[i].strikes;
-        if (i < DIFF_CLEAN_RUN && recent[i].snoozes != 0u) {
-            clean = false;
-        }
-    }
-    more_modules = (snoozes >= DIFF_SNOOZE_LIMIT);
-    pressure = (w > 0u && strikes >= DIFF_STRIKE_AVG * w);       /* average strikes >= 2 */
-    d.module_count = (uint8_t)(more_modules ? DIFF_BASE_MODULES + 1 : DIFF_BASE_MODULES);
-    if (d.module_count > DIFF_MODULES_MAX) {
-        d.module_count = DIFF_MODULES_MAX;
-    }
-    if (pressure) {
-        time_s += DIFF_TIME_STEP_S;
-    }
-    if (clean) {
-        time_s -= DIFF_TIME_STEP_S;
-    }
-    d.time_limit_s = (uint16_t)clamp_i(time_s, DIFF_TIME_MIN_S, DIFF_TIME_MAX_S);
-
-    if (more_modules) {
-        snprintf(piece, sizeof(piece), "4 mod: %u snoozes/7d", min_u(snoozes, DIFF_SHOWN_MAX));
-        explain_add(&d, &len, piece);
-    }
-    if (pressure) {
-        snprintf(piece, sizeof(piece), "+30s: avg strikes>=%u", (unsigned)DIFF_STRIKE_AVG);
-        explain_add(&d, &len, piece);
-    }
-    if (clean) {
-        snprintf(piece, sizeof(piece), "-30s: %u clean", (unsigned)DIFF_CLEAN_RUN);
-        explain_add(&d, &len, piece);
-    }
-    if (len == 0u) {
-        snprintf(d.explanation, sizeof(d.explanation), "%s",
-                 w == 0u ? "No history yet: standard bomb" : "Steady mornings: standard bomb");
-    }
-    return d;
-}
-
 /* ================= BOMB_CONFIG ================= */
-void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &wire, proto_bomb_config_t *out)
+void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &wire, uint32_t trip_rnd,
+                         proto_bomb_config_t *out)
 {
     unsigned i;
 
@@ -867,15 +926,14 @@ void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &
     out->module_order[0] = PROTO_MODULE_DIAL;
     out->module_order[1] = PROTO_MODULE_WIRES;
     out->module_order[2] = PROTO_MODULE_TRIPWIRE;
-    out->module_order[3] = PROTO_MODULE_DIAL;
-    out->time_limit_s = d.time_limit_s;
+    out->module_order[3] = PROTO_MODULE_LIGHTS;   /* the wake-up module: every bomb has all four sensors */
+    out->time_limit_s = (uint16_t)clamp_i(d.time_limit_s, (int)GAME_MIN_TIME_LIMIT_S, (int)GAME_MAX_TIME_LIMIT_S);
     for (i = 0u; i < PROTO_DIAL_DIGITS; i++) {
         out->dial_code[i] = (uint8_t)(dial.dial_code[i] % DIAL_BASE);
     }
     out->wire_count = (uint8_t)clamp_i(wire.wire_count, (int)GAME_MIN_WIRES, (int)GAME_MAX_WIRES);
     out->correct_wire = (uint8_t)clamp_i((int)wire.wire_k - 1, 0, (int)out->wire_count - 1);
-    out->trip_min_cm = GAME_DEFAULT_TRIP_MIN_CM;
-    out->trip_max_cm = GAME_DEFAULT_TRIP_MAX_CM;
+    trip_band_from_random(trip_rnd, &out->trip_min_cm, &out->trip_max_cm);
     out->max_strikes = GAME_DEFAULT_MAX_STRIKES;
 }
 
@@ -916,18 +974,12 @@ uint8_t pair_mark_used(uint8_t used_mask, int idx, int count, bool *cycled)
 int checker_order(const char *const *chain, int n, const char *setter, int *order_out)
 {
     int count = 0;
-    int own = -1;
     int i;
 
     for (i = 0; i < n; i++) {
-        if (setter != NULL && strcmp(chain[i], setter) == 0) {
-            own = i;
-        } else {
-            order_out[count++] = i;
+        if (setter == NULL || strcmp(chain[i], setter) != 0) {
+            order_out[count++] = i;                 /* O5: the setter's own model is never a checker */
         }
-    }
-    if (own >= 0) {
-        order_out[count++] = own;
     }
     return count;
 }

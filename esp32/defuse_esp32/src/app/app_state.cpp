@@ -4,17 +4,22 @@
 #include <Arduino.h>
 #include <string.h>
 
+#include "mem_big.h"
+
 static SemaphoreHandle_t s_mutex;
-static AppState s_state;
+static AppState *s_state;       /* PSRAM (mem_big.h): ~1.3 KB, allocated once in app_state_init */
 static uint32_t s_lock_timeouts; /* diagnostic counter; 32-bit reads/writes are atomic */
 
 bool app_state_init(void)
 {
-    memset(&s_state, 0, sizeof(s_state));
-    s_state.wire_count = APP_DEFAULT_WIRE_COUNT;
-    s_state.trip_min_cm = APP_DEFAULT_TRIP_MIN_CM;
-    s_state.trip_max_cm = APP_DEFAULT_TRIP_MAX_CM;
-    s_state.max_strikes = APP_DEFAULT_MAX_STRIKES;
+    s_state = mem_big_new<AppState>(1u, "app state");   /* zeroed */
+    if (s_state == NULL) {
+        return false;
+    }
+    s_state->wire_count = APP_DEFAULT_WIRE_COUNT;
+    s_state->trip_min_cm = APP_DEFAULT_TRIP_MIN_CM;
+    s_state->trip_max_cm = APP_DEFAULT_TRIP_MAX_CM;
+    s_state->max_strikes = APP_DEFAULT_MAX_STRIKES;
     /* A mutex (not a critical section): the struct is copied by several tasks, and a
      * FreeRTOS mutex adds priority inheritance so the prio-4 link task is never stuck
      * behind a low-priority reader that holds the lock. */
@@ -37,106 +42,106 @@ static bool with_lock(Fn fn)
 
 bool app_state_read(AppState *out)
 {
-    return with_lock([&]() { memcpy(out, &s_state, sizeof(s_state)); });
+    return with_lock([&]() { memcpy(out, s_state, sizeof(AppState)); });
 }
 
 void app_state_set_game(const proto_game_state_t &g)
 {
     with_lock([&]() {
-        s_state.game = g;
-        s_state.game_valid = true;
-        s_state.game_version++;
+        s_state->game = g;
+        s_state->game_valid = true;
+        s_state->game_version++;
         /* Session tracking lives here so it is updated in the same locked step as the state it
          * derives from; the network task only reads the flag and the two counters. */
-        const bool was_active = s_state.session_active;
-        s_state.session_active = session_next(was_active, g.state);
-        if (s_state.session_active && !was_active) {
-            s_state.session_starts++;
-        } else if (!s_state.session_active && was_active) {
-            s_state.session_ends++;
+        const bool was_active = s_state->session_active;
+        s_state->session_active = session_next(was_active, g.state);
+        if (s_state->session_active && !was_active) {
+            s_state->session_starts++;
+        } else if (!s_state->session_active && was_active) {
+            s_state->session_ends++;
         }
     });
 }
 
 void app_state_set_telemetry(const proto_telemetry_t &t)
 {
-    with_lock([&]() { s_state.telem = t; s_state.telem_valid = true; });
+    with_lock([&]() { s_state->telem = t; s_state->telem_valid = true; });
 }
 
 void app_state_set_result(const proto_result_msg_t &r)
 {
-    with_lock([&]() { s_state.last_result = r; s_state.result_valid = true; });
+    with_lock([&]() { s_state->last_result = r; s_state->result_valid = true; });
 }
 
 void app_state_set_link(bool up)
 {
     with_lock([&]() {
-        if (up && !s_state.link_up) {
-            s_state.link_up_count++;
+        if (up && !s_state->link_up) {
+            s_state->link_up_count++;
         }
-        s_state.link_up = up;
+        s_state->link_up = up;
     });
 }
 
 void app_state_set_link_stats(const proto_link_stats_t &s, uint32_t tx_backpressure)
 {
-    with_lock([&]() { s_state.link_stats = s; s_state.tx_backpressure = tx_backpressure; });
+    with_lock([&]() { s_state->link_stats = s; s_state->tx_backpressure = tx_backpressure; });
 }
 
 void app_state_set_wifi(bool up)
 {
-    with_lock([&]() { s_state.wifi_up = up; });
+    with_lock([&]() { s_state->wifi_up = up; });
 }
 
 void app_state_set_ip(const char *ip)
 {
-    with_lock([&]() { snprintf(s_state.ip, sizeof(s_state.ip), "%s", ip != NULL ? ip : ""); });
+    with_lock([&]() { snprintf(s_state->ip, sizeof(s_state->ip), "%s", ip != NULL ? ip : ""); });
 }
 
 void app_state_set_time_valid(bool valid)
 {
-    with_lock([&]() { s_state.time_valid = valid; });
+    with_lock([&]() { s_state->time_valid = valid; });
 }
 
 void app_state_set_alarm(uint32_t alarm_unix)
 {
-    with_lock([&]() { s_state.alarm_unix = alarm_unix; });
+    with_lock([&]() { s_state->alarm_unix = alarm_unix; });
 }
 
 void app_state_set_schedule(uint32_t alarm_unix, uint32_t class_start_unix, const Lesson *lesson)
 {
     with_lock([&]() {
-        s_state.alarm_unix = alarm_unix;
-        s_state.next_valid = (alarm_unix != 0u) && (lesson != NULL);
-        s_state.next_start_unix = s_state.next_valid ? class_start_unix : 0u;
-        memset(s_state.next_module, 0, sizeof(s_state.next_module));
-        memset(s_state.next_type, 0, sizeof(s_state.next_type));
-        memset(s_state.next_venue, 0, sizeof(s_state.next_venue));
-        if (s_state.next_valid) {
-            memcpy(s_state.next_module, lesson->module, sizeof(s_state.next_module) - 1u);
-            memcpy(s_state.next_type, lesson->type, sizeof(s_state.next_type) - 1u);
-            memcpy(s_state.next_venue, lesson->venue, sizeof(s_state.next_venue) - 1u);
+        s_state->alarm_unix = alarm_unix;
+        s_state->next_valid = (alarm_unix != 0u) && (lesson != NULL);
+        s_state->next_start_unix = s_state->next_valid ? class_start_unix : 0u;
+        memset(s_state->next_module, 0, sizeof(s_state->next_module));
+        memset(s_state->next_type, 0, sizeof(s_state->next_type));
+        memset(s_state->next_venue, 0, sizeof(s_state->next_venue));
+        if (s_state->next_valid) {
+            memcpy(s_state->next_module, lesson->module, sizeof(s_state->next_module) - 1u);
+            memcpy(s_state->next_type, lesson->type, sizeof(s_state->next_type) - 1u);
+            memcpy(s_state->next_venue, lesson->venue, sizeof(s_state->next_venue) - 1u);
         }
     });
 }
 
 void app_state_set_timetable_info(uint8_t lessons, uint32_t fetched_unix)
 {
-    with_lock([&]() { s_state.tt_lessons = lessons; s_state.tt_fetched_unix = fetched_unix; });
+    with_lock([&]() { s_state->tt_lessons = lessons; s_state->tt_fetched_unix = fetched_unix; });
 }
 
 void app_state_set_mirror_pending(uint8_t pending)
 {
-    with_lock([&]() { s_state.mirror_pending = pending; });
+    with_lock([&]() { s_state->mirror_pending = pending; });
 }
 
 void app_state_set_bomb_config(uint8_t wires, uint8_t trip_min, uint8_t trip_max, uint8_t max_strikes)
 {
     with_lock([&]() {
-        s_state.wire_count = wires;
-        s_state.trip_min_cm = trip_min;
-        s_state.trip_max_cm = trip_max;
-        s_state.max_strikes = max_strikes;
+        s_state->wire_count = wires;
+        s_state->trip_min_cm = trip_min;
+        s_state->trip_max_cm = trip_max;
+        s_state->max_strikes = max_strikes;
     });
 }
 
@@ -144,26 +149,26 @@ void app_state_note_config_result(bool acked)
 {
     with_lock([&]() {
         if (acked) {
-            s_state.cfg_acks++;
+            s_state->cfg_acks++;
         } else {
-            s_state.cfg_fails++;
+            s_state->cfg_fails++;
         }
     });
 }
 
 void app_state_set_active_puzzle(const ActivePuzzle &p)
 {
-    with_lock([&]() { s_state.active = p; });
+    with_lock([&]() { s_state->active = p; });
 }
 
 void app_state_set_brief(const BriefText &b)
 {
-    with_lock([&]() { s_state.brief = b; });
+    with_lock([&]() { s_state->brief = b; });
 }
 
 void app_state_set_brief_today(const BriefText &b)
 {
-    with_lock([&]() { s_state.brief_today = b; });
+    with_lock([&]() { s_state->brief_today = b; });
 }
 
 uint32_t app_state_lock_timeouts(void)

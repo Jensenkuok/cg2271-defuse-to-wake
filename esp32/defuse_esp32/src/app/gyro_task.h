@@ -16,4 +16,8 @@ bool gyro_task_start(void);
 
 TaskHandle_t gyro_task_handle(void);
 
+/* Serial "mpu" command: read-only dump of WHO_AM_I, PWR_MGMT_1, ACCEL_CONFIG and one accel
+ * sample at 0x68 and 0x69 under the I2C bus lock, with the Wire result codes. */
+void gyro_task_dump_regs(void);
+
 #endif /* GYRO_TASK_H */

@@ -8,6 +8,10 @@
 #include "config.h"
 #include "flash_store.h"
 #include "llm_client.h"
+#include "mem_big.h"
+#include "puzzle_bank.h"
+#include "puzzle_gate.h"
+#include "puzzle_rules.h"
 
 namespace {
 
@@ -15,26 +19,48 @@ namespace {
 #define SEC_PER_DAY_PZ      86400u
 #define USED_MASK_ALL       ((1u << PUZZLE_PAIRS) - 1u)
 #define SET_LOCK_WAIT_MS    100u
-#define SYS_PROMPT_MAX      256
-#define USER_PROMPT_MAX     48
+#define SYS_PROMPT_MAX      1600        /* the setter prompts (grammar + examples) are ~1.1 KB; PSRAM, see puzzle_gen_init */
+#define USER_PROMPT_MAX     96
 #define LATENCY_MAX_MS      65535u
+#define BANK_SLOW_LOG_MS    1000u       /* a bank puzzle slower than this is worth a log line */
 
-/* ---- Prompts. The riddle answer is given by the ESP32; the checker never sees it. ---- */
-const char kSetterDialSys[] =
-    "You write one short logic puzzle for a bomb-defusal game. The user gives a secret 4-digit code. "
-    "Write ONE puzzle of at most 80 characters, plain ASCII only, whose only solution is exactly that code "
-    "and which pins down all four digits. Never write the code itself. "
-    "Reply ONLY with JSON: {\"puzzle\":\"...\"}";
-const char kSetterWireSys[] =
-    "You write one short riddle for a bomb-defusal game. The user gives the number of wires (numbered 1..N "
-    "from the left) and the wire to cut. Write ONE riddle of at most 60 characters, plain ASCII only, whose "
-    "only solution is that wire number. Never state the number directly. "
-    "Reply ONLY with JSON: {\"puzzle\":\"...\"}";
+/* ---- Prompts. The riddle answer is given by the ESP32; the checker never sees it. The setter writes
+ * the riddle AND the same facts as rules in the puzzle_rules.h language; the ESP32 proves the rules
+ * (one solution = our answer) and rates them, so the level is computed, never taken from the LLM. ---- */
+const char kSetterDialFmt[] =
+    "You write one logic puzzle for a bomb-defusal game. The user gives a secret 4-digit code (d1 is the first digit). "
+    "Requested level: %s. "
+    "Reply ONLY with JSON: {\"puzzle\":\"<riddle>\",\"rules\":\"<rules>\"}. "
+    "RULES use this language, rules separated by ';' (at most 6): terms d1 d2 d3 d4 (digits 0-9), sum (= d1+d2+d3+d4), "
+    "whole numbers 0-99; operators + - *; relations = != < > <= >=; odd(x) even(x); alldiff (all four digits differ). "
+    "The rules must have exactly ONE solution: the secret code. "
+    "PUZZLE: the same facts as the rules, in words or short notation, at most 63 plain ASCII characters; write 1st 2nd 3rd 4th "
+    "for d1 d2 d3 d4. Never write the code or list its digits. "
+    "Levels: EASY = a chain, every rule has one unknown once the earlier digits are known, e.g. "
+    "d1=3;d2=d1+4;d3=d2-5;d4=d1*3 . "
+    "NORMAL = rules that must be solved in pairs, e.g. d1+d2=9;d1-d2=1;d3=2*d4;d3+d4=12 . "
+    "HARD = needs case elimination (trying cases), e.g. sum=17;d4-d1=1;alldiff;d1-d2=4 . "
+    "Write exactly the requested level.";
+const char kSetterWireFmt[] =
+    "You write one riddle for a bomb-defusal game. The user gives the number of wires n (numbered 1..n from the left), "
+    "the wire w to cut and the requested level. Requested level: %s. "
+    "Reply ONLY with JSON: {\"puzzle\":\"<riddle>\",\"rules\":\"<rules>\"}. "
+    "RULES use this language, rules separated by ';' (at most 6): terms w (the wire), n (the wire count), "
+    "whole numbers 0-99; operators + - *; relations = != < > <= >=; odd(x) even(x). "
+    "The rules must have exactly ONE solution w in 1..n: the wire to cut. "
+    "PUZZLE: the same facts as the rules, in words or short notation (w = wire number from the left, n = number of wires), "
+    "at most 42 plain ASCII characters. Never write the wire number itself (no 3, no 3rd). "
+    "Levels: EASY = one rule is enough, e.g. w=n-2 . "
+    "NORMAL = two rules are needed together, neither is enough alone, e.g. odd(w);w>3 for n=5 . "
+    "HARD = three rules are needed, no two are enough, e.g. even(w);w>3;w<6 for n=6 . "
+    "Write exactly the requested level.";
 const char kCheckerDialSys[] =
-    "Solve the puzzle. The answer is a 4-digit code (digits 0-9, leading zeros allowed). "
+    "Solve the puzzle. The answer is a 4-digit code (digits 0-9, leading zeros allowed); 1st 2nd 3rd 4th are its digits "
+    "from the left. "
     "Reply ONLY with JSON: {\"answer\":\"1234\"}";
 const char kCheckerWireFmt[] =
-    "Solve the puzzle. There are %d wires numbered 1..%d from the left. The answer is one wire number. "
+    "Solve the puzzle. There are %d wires numbered 1..%d from the left; w is the wire to cut, n the number of wires. "
+    "The answer is one wire number. "
     "Reply ONLY with JSON: {\"answer\":\"2\"}";
 
 const char *const k_setter_chain[APP_LLM_CHAIN_LEN] = APP_LLM_SETTER_CHAIN;
@@ -49,6 +75,8 @@ struct Gen {
     uint32_t started_unix;
     uint8_t idx;                        /* 0..PAIRS-1 dial, PAIRS..2*PAIRS-1 wire */
     uint8_t attempt;                    /* 1..APP_PUZZLE_ATTEMPTS */
+    uint8_t level;                      /* requested level of this run (PrLevel), fixed when the run starts */
+    bool bank_only;                     /* O10 refill after a level change: bank puzzles only, installed even with no AI puzzle */
     uint8_t code[PROTO_DIAL_DIGITS];    /* the answer being worked on */
     int wire_n;
     int wire_k;
@@ -69,8 +97,9 @@ struct Gen {
     char last_said[PUZZLE_ANSWER_LEN];
 };
 
+uint8_t s_target_level = APP_PUZZLE_DEFAULT_LEVEL;  /* the level new runs ask for (network task only) */
 SemaphoreHandle_t s_mutex;
-PuzzleSet s_set;                        /* the active set; guarded by s_mutex */
+PuzzleSet *s_set;                       /* the active set (PSRAM); guarded by s_mutex */
 uint32_t s_set_gen;                     /* guarded */
 uint8_t s_used;                         /* used-pair bit mask; guarded */
 bool s_used_dirty;                      /* s_used changed in RAM and is not in flash yet; guarded */
@@ -80,10 +109,11 @@ uint8_t s_last_run_ai;
 bool s_last_run_installed;
 PuzzleSet s_blob;                       /* flash buffer */
 
-Gen s_gen;
-char s_reply[APP_LLM_REPLY_MAX];
-char s_json[APP_LLM_REPLY_MAX];
-char s_sys[SYS_PROMPT_MAX];
+Gen *s_gen;                             /* PSRAM */
+PuzzleSet *s_snap;                      /* PSRAM: scratch copy for puzzle_print_set (~1.1 KB, off the stack) */
+char *s_reply;                          /* PSRAM, APP_LLM_REPLY_MAX bytes */
+char *s_json;                           /* PSRAM, APP_LLM_REPLY_MAX bytes */
+char *s_sys;                            /* PSRAM, SYS_PROMPT_MAX bytes */
 char s_user[USER_PROMPT_MAX];
 
 bool s_requested;
@@ -121,8 +151,9 @@ void print_puzzle(char tag, unsigned i, const Puzzle &p)
     if (!puzzle_answer_text(p, ans, sizeof(ans))) {
         copy_str(ans, sizeof(ans), "?");
     }
-    Serial.printf("[ai] %c%u %-4s %-10s setter=%s checker=%s said=%s tries=%u %ums/%ums ans=%s", tag, i,
+    Serial.printf("[ai] %c%u %-4s %-6s %-10s setter=%s checker=%s said=%s tries=%u %ums/%ums ans=%s", tag, i,
                   p.source == PUZZLE_SRC_AI ? "AI" : "BANK",
+                  p.level != 0u ? pr_level_name(p.level) : "-",
                   p.verified ? "verified" : (p.setter[0] != '\0' ? "rejected" : "unverified"),
                   p.setter[0] != '\0' ? p.setter : "-", p.checker[0] != '\0' ? p.checker : "-",
                   p.checker_answer[0] != '\0' ? p.checker_answer : "-", (unsigned)p.attempts, (unsigned)p.setter_ms,
@@ -158,13 +189,13 @@ void save_used(uint8_t used)
 void save_set(void)
 {
     memset(static_cast<void *>(&s_blob), 0, sizeof(s_blob));   /* no uninitialised padding in flash */
-    s_blob = s_set;
+    s_blob = *s_set;
     if (!flash_write_blob(APP_KEY_PUZZLES, &s_blob, sizeof(s_blob))) {
         Serial.println("[ai] could not write the puzzle set to flash");
     }
 }
 
-/* Replace the active set (network task). The new set was built in s_gen.work, a buffer no other
+/* Replace the active set (network task). The new set was built in s_gen->work, a buffer no other
  * task reads, so the lock is held only for one struct copy (~1.1 KB, microseconds): the link task,
  * which reads the set to build a BOMB_CONFIG, never waits for a flash write or an LLM call. */
 void install_set(const PuzzleSet &work)
@@ -173,7 +204,7 @@ void install_set(const PuzzleSet &work)
         Serial.println("[ai] could not lock the puzzle set: keeping the previous one");
         return;
     }
-    s_set = work;
+    *s_set = work;
     s_set_gen++;
     s_used = 0u;
     s_used_dirty = false;               /* save_used(0) below covers it */
@@ -185,18 +216,18 @@ void install_set(const PuzzleSet &work)
 /* ================= generation state machine ================= */
 Puzzle &slot(uint8_t idx)
 {
-    return idx < PUZZLE_PAIRS ? s_gen.work.dial[idx] : s_gen.work.wire[idx - PUZZLE_PAIRS];
+    return idx < PUZZLE_PAIRS ? s_gen->work.dial[idx] : s_gen->work.wire[idx - PUZZLE_PAIRS];
 }
 
 bool cur_is_dial(void)
 {
-    return s_gen.idx < PUZZLE_PAIRS;
+    return s_gen->idx < PUZZLE_PAIRS;
 }
 
 void cur_tag(char *buf, size_t size)
 {
     snprintf(buf, size, "%c%u", cur_is_dial() ? 'D' : 'W',
-             (unsigned)(cur_is_dial() ? s_gen.idx : s_gen.idx - PUZZLE_PAIRS));
+             (unsigned)(cur_is_dial() ? s_gen->idx : s_gen->idx - PUZZLE_PAIRS));
 }
 
 void fill_target(Puzzle *p)
@@ -204,72 +235,119 @@ void fill_target(Puzzle *p)
     memset(p, 0, sizeof(*p));
     p->kind = (uint8_t)(cur_is_dial() ? PUZZLE_DIAL : PUZZLE_WIRE);
     if (cur_is_dial()) {
-        memcpy(p->dial_code, s_gen.code, sizeof(p->dial_code));
+        memcpy(p->dial_code, s_gen->code, sizeof(p->dial_code));
     } else {
-        p->wire_count = (uint8_t)s_gen.wire_n;
-        p->wire_k = (uint8_t)s_gen.wire_k;
+        p->wire_count = (uint8_t)s_gen->wire_n;
+        p->wire_k = (uint8_t)s_gen->wire_k;
     }
 }
 
-void gen_begin(uint32_t unix_now)
+/* level: what this run asks for (the whole set, one level). bank_only: no LLM at all (O10 refill). */
+void gen_begin(uint32_t unix_now, uint8_t level, bool bank_only)
 {
-    memset(&s_gen, 0, sizeof(s_gen));
-    s_gen.work.magic = PUZZLE_MAGIC;
-    s_gen.started_unix = unix_now;
-    s_gen.phase = PH_NEXT;
-    Serial.printf("[ai] generating %u dial + %u wire puzzles (setter %s, checker %s first)\n",
-                  (unsigned)PUZZLE_PAIRS, (unsigned)PUZZLE_PAIRS, k_setter_chain[0], k_checker_chain[0]);
+    memset(s_gen, 0, sizeof(Gen));
+    s_gen->work.magic = PUZZLE_MAGIC;
+    s_gen->work.level = level;
+    s_gen->level = level;
+    s_gen->started_unix = unix_now;
+    s_gen->phase = PH_NEXT;
+    if (bank_only) {
+        s_gen->bank_only = true;
+        s_gen->abort_ai = true;         /* step_next stores bank puzzles only */
+        Serial.printf("[ai] refilling the set from the bank at level %s\n", pr_level_name(level));
+        return;
+    }
+    Serial.printf("[ai] generating %u dial + %u wire puzzles at level %s (setter %s, checker %s first)\n",
+                  (unsigned)PUZZLE_PAIRS, (unsigned)PUZZLE_PAIRS, pr_level_name(level), k_setter_chain[0],
+                  k_checker_chain[0]);
 }
 
-/* The bank fills the slot: the answer was already picked, only the text comes from a template.
+/* Lets the idle task (and its watchdog) run during the bank's compute loop: one tick every few tries. */
+void bank_yield(void)
+{
+    vTaskDelay(1);
+}
+
+/* The bank fills the slot: the answer was already picked, the rule set and its text are generated
+ * at the run's level (proven unique and rated by puzzle_bank.cpp, or an old template, logged).
  * What the LLM did before giving up is kept for the listing. */
 void gen_store_bank(void)
 {
-    Puzzle *p = &slot(s_gen.idx);
+    Puzzle *p = &slot(s_gen->idx);
+    BankRequest req;
+    BankResult res;
+    char tag[8];
+    const uint32_t t0 = millis();
 
-    if (cur_is_dial()) {
-        puzzle_fill_bank_dial(p, s_gen.code, esp_random() % PUZZLE_VARIANTS);
-    } else {
-        puzzle_fill_bank_wire(p, s_gen.wire_n, s_gen.wire_k, esp_random() % PUZZLE_VARIANTS);
+    memset(&req, 0, sizeof(req));
+    req.kind = cur_is_dial() ? PUZZLE_DIAL : PUZZLE_WIRE;
+    memcpy(req.code, s_gen->code, sizeof(req.code));
+    req.wire_count = s_gen->wire_n;
+    req.wire_k = s_gen->wire_k;
+    req.level = s_gen->level;
+    req.seed = esp_random();
+    req.yield = bank_yield;
+    bank_generate(req, &res);
+    fill_target(p);
+    copy_str(p->text, sizeof(p->text), res.text);
+    p->source = PUZZLE_SRC_BANK;
+    p->level = res.level;
+    if (res.fallback != 0u) {
+        cur_tag(tag, sizeof(tag));
+        Serial.printf("[ai] %s: no %s rule set found in %u tries: old template used (rated %s)\n", tag,
+                      pr_level_name(s_gen->level), (unsigned)res.tries, pr_level_name(res.level));
     }
-    p->attempts = s_gen.attempt;
-    copy_str(p->setter, sizeof(p->setter), s_gen.last_setter);
-    copy_str(p->checker, sizeof(p->checker), s_gen.last_checker);
-    copy_str(p->checker_answer, sizeof(p->checker_answer), s_gen.last_said);
-    s_gen.last_setter[0] = '\0';
-    s_gen.last_checker[0] = '\0';
-    s_gen.last_said[0] = '\0';
+    if (millis() - t0 > BANK_SLOW_LOG_MS) {
+        Serial.printf("[ai] bank puzzle took %u ms (%u tries)\n", (unsigned)(millis() - t0), (unsigned)res.tries);
+    }
+    p->attempts = s_gen->attempt;
+    copy_str(p->setter, sizeof(p->setter), s_gen->last_setter);
+    copy_str(p->checker, sizeof(p->checker), s_gen->last_checker);
+    copy_str(p->checker_answer, sizeof(p->checker_answer), s_gen->last_said);
+    s_gen->last_setter[0] = '\0';
+    s_gen->last_checker[0] = '\0';
+    s_gen->last_said[0] = '\0';
 }
 
 void gen_store_ai(const char *checker_model, uint32_t checker_ms)
 {
-    Puzzle *p = &slot(s_gen.idx);
+    Puzzle *p = &slot(s_gen->idx);
 
     fill_target(p);
-    copy_str(p->text, sizeof(p->text), s_gen.text);
+    copy_str(p->text, sizeof(p->text), s_gen->text);
     p->source = PUZZLE_SRC_AI;
     p->verified = 1u;
-    p->attempts = s_gen.attempt;
-    copy_str(p->setter, sizeof(p->setter), s_gen.setter);
+    p->level = s_gen->level;            /* the solver's rating of the rules equals the requested level (gate) */
+    p->attempts = s_gen->attempt;
+    copy_str(p->setter, sizeof(p->setter), s_gen->setter);
     copy_str(p->checker, sizeof(p->checker), checker_model);
-    copy_str(p->checker_answer, sizeof(p->checker_answer), s_gen.answer);
-    p->setter_ms = s_gen.setter_ms;
+    copy_str(p->checker_answer, sizeof(p->checker_answer), s_gen->answer);
+    p->setter_ms = s_gen->setter_ms;
     p->checker_ms = clamp_ms(checker_ms);
-    s_gen.ai_count++;
-    s_gen.last_setter[0] = '\0';
-    s_gen.last_checker[0] = '\0';
-    s_gen.last_said[0] = '\0';
+    s_gen->ai_count++;
+    s_gen->last_setter[0] = '\0';
+    s_gen->last_checker[0] = '\0';
+    s_gen->last_said[0] = '\0';
 }
 
 void gen_finish(void)
 {
-    s_gen.work.generated_unix = s_gen.started_unix;
-    s_gen.work.ai_count = s_gen.ai_count;
-    print_set(s_gen.work, s_set_gen + (s_gen.ai_count > 0u ? 1u : 0u));
-    if (s_gen.ai_count > 0u) {
-        install_set(s_gen.work);
-        Serial.printf("[ai] new set stored in flash (%u AI + %u bank puzzles)\n", (unsigned)s_gen.ai_count,
-                      (unsigned)(2u * PUZZLE_PAIRS - s_gen.ai_count));
+    s_gen->work.generated_unix = s_gen->started_unix;
+    s_gen->work.ai_count = s_gen->ai_count;
+    print_set(s_gen->work, s_set_gen + ((s_gen->ai_count > 0u || s_gen->bank_only) ? 1u : 0u));
+    if (s_gen->bank_only) {
+        /* O10: the cached set was built for another level, so it is replaced by the proven offline bank
+         * set at once. generated_unix stays 0 and ai_count 0: puzzle_set_fresh() says "not fresh" and the
+         * normal AI run (requested by puzzle_gen_apply_level) replaces it as soon as the network allows. */
+        install_set(s_gen->work);
+        Serial.printf("[ai] bank set at level %s installed\n", pr_level_name(s_gen->work.level));
+        s_gen->phase = PH_IDLE;
+        return;                         /* not a generation run: no retry logic, no briefing trigger */
+    }
+    if (s_gen->ai_count > 0u) {
+        install_set(s_gen->work);
+        Serial.printf("[ai] new set stored in flash (%u AI + %u bank puzzles)\n", (unsigned)s_gen->ai_count,
+                      (unsigned)(2u * PUZZLE_PAIRS - s_gen->ai_count));
     } else {
         Serial.println("[ai] no puzzle was verified by the models: the previous set stays active");
         if (s_retries_left > 0u) {
@@ -279,10 +357,10 @@ void gen_finish(void)
             Serial.printf("[ai] will retry in %u min\n", (unsigned)(APP_PUZZLE_RETRY_MS / 60000u));
         }
     }
-    s_gen.phase = PH_IDLE;
-    s_last_run_unix = s_gen.started_unix;
-    s_last_run_ai = s_gen.ai_count;
-    s_last_run_installed = (s_gen.ai_count > 0u);
+    s_gen->phase = PH_IDLE;
+    s_last_run_unix = s_gen->started_unix;
+    s_last_run_ai = s_gen->ai_count;
+    s_last_run_installed = (s_gen->ai_count > 0u);
     s_runs_done++;                      /* the briefing generator starts after every finished run */
 }
 
@@ -291,24 +369,24 @@ void gen_fail_attempt(void)
 {
     char tag[8];
 
-    if (s_gen.attempt < APP_PUZZLE_ATTEMPTS && !s_gen.abort_ai) {
-        s_gen.phase = PH_ATTEMPT;
+    if (s_gen->attempt < APP_PUZZLE_ATTEMPTS && !s_gen->abort_ai) {
+        s_gen->phase = PH_ATTEMPT;
         return;
     }
     cur_tag(tag, sizeof(tag));
     gen_store_bank();
-    Serial.printf("[ai] %s: using a bank template after %u attempt(s)\n", tag, (unsigned)s_gen.attempt);
-    s_gen.idx++;
-    s_gen.phase = PH_NEXT;
+    Serial.printf("[ai] %s: using a bank template after %u attempt(s)\n", tag, (unsigned)s_gen->attempt);
+    s_gen->idx++;
+    s_gen->phase = PH_NEXT;
 }
 
 /* Every model of a chain failed without a single reply. Twice in a row = the LLM is unreachable. */
 void gen_chain_exhausted(void)
 {
-    if (!s_gen.chain_replied) {
-        s_gen.dead_chains++;
-        if (s_gen.dead_chains >= APP_PUZZLE_DEAD_CHAINS && !s_gen.abort_ai) {
-            s_gen.abort_ai = true;
+    if (!s_gen->chain_replied) {
+        s_gen->dead_chains++;
+        if (s_gen->dead_chains >= APP_PUZZLE_DEAD_CHAINS && !s_gen->abort_ai) {
+            s_gen->abort_ai = true;
             Serial.println("[ai] models unreachable: the rest of the set comes from the bank");
         }
     }
@@ -317,136 +395,153 @@ void gen_chain_exhausted(void)
 
 void step_next(void)
 {
-    if (s_gen.idx >= 2u * PUZZLE_PAIRS) {
+    if (s_gen->idx >= 2u * PUZZLE_PAIRS) {
         gen_finish();
         return;
     }
     if (cur_is_dial()) {
-        dial_code_from_random(esp_random(), s_gen.code);
-        dial_code_text(s_gen.code, s_gen.answer);
+        dial_code_from_random(esp_random(), s_gen->code);
+        dial_code_text(s_gen->code, s_gen->answer);
     } else {
-        wire_pick_from_random(esp_random(), &s_gen.wire_n, &s_gen.wire_k);
-        snprintf(s_gen.answer, sizeof(s_gen.answer), "%d", s_gen.wire_k);
+        wire_pick_from_random(s_gen->level, esp_random(), &s_gen->wire_n, &s_gen->wire_k);   /* wire count of the level */
+        snprintf(s_gen->answer, sizeof(s_gen->answer), "%d", s_gen->wire_k);
     }
-    s_gen.attempt = 0u;
-    s_gen.last_setter[0] = '\0';
-    s_gen.last_checker[0] = '\0';
-    s_gen.last_said[0] = '\0';
-    if (s_gen.abort_ai) {
+    s_gen->attempt = 0u;
+    s_gen->last_setter[0] = '\0';
+    s_gen->last_checker[0] = '\0';
+    s_gen->last_said[0] = '\0';
+    if (s_gen->abort_ai) {
         gen_store_bank();
-        s_gen.idx++;                    /* stay in PH_NEXT: the bank fills the rest at once */
+        s_gen->idx++;                    /* stay in PH_NEXT: the bank fills the rest at once */
         return;
     }
-    s_gen.phase = PH_ATTEMPT;
+    s_gen->phase = PH_ATTEMPT;
+}
+
+/* What the ESP32 asked this attempt for; the gate checks the setter's reply against it. */
+GateTarget cur_target(void)
+{
+    GateTarget t;
+
+    t.kind = cur_is_dial() ? PUZZLE_DIAL : PUZZLE_WIRE;
+    t.wire_count = s_gen->wire_n;
+    t.answer = cur_is_dial() ? (s_gen->code[0] * 1000 + s_gen->code[1] * 100 + s_gen->code[2] * 10 + s_gen->code[3])
+                             : s_gen->wire_k;
+    t.level = s_gen->level;
+    return t;
 }
 
 /* The setter chain: one model per pass; a failing model moves on to the next one. */
 void step_setter(void)
 {
-    const char *model = k_setter_chain[s_gen.setter_pos];
-    const char *sys;
+    const char *model = k_setter_chain[s_gen->setter_pos];
     char tag[8];
+    char why[GATE_WHY_MAX];
     LlmReply r;
-    const int kind = cur_is_dial() ? PUZZLE_DIAL : PUZZLE_WIRE;
 
     if (cur_is_dial()) {
-        sys = kSetterDialSys;
-        snprintf(s_user, sizeof(s_user), "Code: %s", s_gen.answer);
+        snprintf(s_sys, SYS_PROMPT_MAX, kSetterDialFmt, pr_level_name(s_gen->level));
+        snprintf(s_user, sizeof(s_user), "Level: %s. Code: %s", pr_level_name(s_gen->level), s_gen->answer);
     } else {
-        sys = kSetterWireSys;
-        snprintf(s_user, sizeof(s_user), "Wires: %d. Cut wire: %d", s_gen.wire_n, s_gen.wire_k);
+        snprintf(s_sys, SYS_PROMPT_MAX, kSetterWireFmt, pr_level_name(s_gen->level));
+        snprintf(s_user, sizeof(s_user), "Level: %s. Wires: %d. Cut wire: %d", pr_level_name(s_gen->level),
+                 s_gen->wire_n, s_gen->wire_k);
     }
     cur_tag(tag, sizeof(tag));
-    r = llm_chat(model, sys, s_user, APP_LLM_MAX_TOKENS, APP_LLM_SETTER_TEMP, s_reply, sizeof(s_reply));
+    r = llm_chat(model, s_sys, s_user, APP_LLM_MAX_TOKENS, APP_LLM_SETTER_TEMP, s_reply, APP_LLM_REPLY_MAX);
     if (r.status != LLM_OK) {
-        s_gen.setter_pos++;
-        if (s_gen.setter_pos >= APP_LLM_CHAIN_LEN) {
+        s_gen->setter_pos++;
+        if (s_gen->setter_pos >= APP_LLM_CHAIN_LEN) {
             gen_chain_exhausted();
         }
         return;
     }
-    s_gen.chain_replied = true;
-    s_gen.dead_chains = 0u;
-    if (!extract_json_object(s_reply, s_json, sizeof(s_json)) ||
-        !json_get_string(s_json, "puzzle", s_gen.text, sizeof(s_gen.text))) {
-        Serial.printf("[ai] %s attempt %u: %s did not return a usable {\"puzzle\"} (too long or not JSON)\n", tag,
-                      (unsigned)s_gen.attempt, model);
+    s_gen->chain_replied = true;
+    s_gen->dead_chains = 0u;
+    /* The gate (puzzle_gate.cpp, host-tested): JSON fields, text validation, rules parse + exactly one
+     * solution = our answer + rating = requested level. Cheapest check first; the reason is logged. */
+    if (gate_check_setter(s_reply, cur_target(), s_json, APP_LLM_REPLY_MAX, s_gen->text, sizeof(s_gen->text), why,
+                          sizeof(why)) != GATE_OK) {
+        Serial.printf("[ai] %s attempt %u: %s: %s rejected: %s\n", tag, (unsigned)s_gen->attempt, model,
+                      cur_is_dial() ? "dial" : "wire", why);
         gen_fail_attempt();
         return;
     }
-    if (!validate_puzzle(s_gen.text, kind, s_gen.answer)) {
-        Serial.printf("[ai] %s attempt %u: %s riddle rejected by validation: \"%s\"\n", tag, (unsigned)s_gen.attempt,
-                      model, s_gen.text);
+    copy_str(s_gen->setter, sizeof(s_gen->setter), model);
+    copy_str(s_gen->last_setter, sizeof(s_gen->last_setter), model);
+    s_gen->setter_ms = clamp_ms(r.latency_ms);
+    /* O5: the checker is never the setter's own model. If the chain holds no other model the
+     * attempt fails here and the puzzle falls back to the bank, it is not self-checked. */
+    s_gen->order_n = checker_order(k_checker_chain, APP_LLM_CHAIN_LEN, model, s_gen->order);
+    s_gen->checker_pos = 0;
+    s_gen->chain_replied = false;
+    if (s_gen->order_n == 0) {
+        Serial.printf("[ai] %s attempt %u: no checker model differs from the setter %s: rejected\n", tag,
+                      (unsigned)s_gen->attempt, model);
         gen_fail_attempt();
         return;
     }
-    copy_str(s_gen.setter, sizeof(s_gen.setter), model);
-    copy_str(s_gen.last_setter, sizeof(s_gen.last_setter), model);
-    s_gen.setter_ms = clamp_ms(r.latency_ms);
-    /* The checker must be a different model whenever another one of its chain answers. */
-    s_gen.order_n = checker_order(k_checker_chain, APP_LLM_CHAIN_LEN, model, s_gen.order);
-    s_gen.checker_pos = 0;
-    s_gen.chain_replied = false;
-    s_gen.phase = PH_CHECKER;
+    s_gen->phase = PH_CHECKER;
 }
 
 void step_checker(void)
 {
-    const char *model = k_checker_chain[s_gen.order[s_gen.checker_pos]];
-    const int kind = cur_is_dial() ? PUZZLE_DIAL : PUZZLE_WIRE;
-    char got[PUZZLE_ANSWER_LEN];
+    const char *model = k_checker_chain[s_gen->order[s_gen->checker_pos]];
+    char got[PUZZLE_ANSWER_LEN] = "";
+    char why[GATE_WHY_MAX] = "";
     char tag[8];
     LlmReply r;
+    int verdict = GATE_CHECKER_UNUSABLE;
 
     if (cur_is_dial()) {
-        copy_str(s_sys, sizeof(s_sys), kCheckerDialSys);
+        copy_str(s_sys, SYS_PROMPT_MAX, kCheckerDialSys);
     } else {
-        snprintf(s_sys, sizeof(s_sys), kCheckerWireFmt, s_gen.wire_n, s_gen.wire_n);
+        snprintf(s_sys, SYS_PROMPT_MAX, kCheckerWireFmt, s_gen->wire_n, s_gen->wire_n);
     }
     cur_tag(tag, sizeof(tag));
-    r = llm_chat(model, s_sys, s_gen.text, APP_LLM_MAX_TOKENS, APP_LLM_CHECKER_TEMP, s_reply, sizeof(s_reply));
+    /* The checker gets only the riddle TEXT: never the rules, never the answer. */
+    r = llm_chat(model, s_sys, s_gen->text, APP_LLM_MAX_TOKENS, APP_LLM_CHECKER_TEMP, s_reply, APP_LLM_REPLY_MAX);
     if (r.status == LLM_OK) {
-        s_gen.chain_replied = true;
-        s_gen.dead_chains = 0u;
+        s_gen->chain_replied = true;
+        s_gen->dead_chains = 0u;
+        verdict = gate_check_checker(s_reply, cur_target(), s_gen->setter, model, s_json, APP_LLM_REPLY_MAX, got,
+                                     sizeof(got), why, sizeof(why));
     }
-    if (r.status != LLM_OK ||
-        !extract_json_object(s_reply, s_json, sizeof(s_json)) ||
-        !parse_checker_answer(s_json, kind, s_gen.wire_n, got, sizeof(got))) {
+    if (verdict == GATE_CHECKER_UNUSABLE || verdict == GATE_CHECKER_SAME_MODEL) {
         if (r.status == LLM_OK) {
-            Serial.printf("[ai] %s attempt %u: %s gave no usable answer\n", tag, (unsigned)s_gen.attempt, model);
+            Serial.printf("[ai] %s attempt %u: %s\n", tag, (unsigned)s_gen->attempt, why);
         }
-        s_gen.checker_pos++;
-        if (s_gen.checker_pos >= s_gen.order_n) {
+        s_gen->checker_pos++;
+        if (s_gen->checker_pos >= s_gen->order_n) {
             gen_chain_exhausted();
         }
         return;
     }
-    copy_str(s_gen.last_checker, sizeof(s_gen.last_checker), model);
-    copy_str(s_gen.last_said, sizeof(s_gen.last_said), got);
-    if (strcmp(got, s_gen.answer) == 0) {
+    copy_str(s_gen->last_checker, sizeof(s_gen->last_checker), model);
+    copy_str(s_gen->last_said, sizeof(s_gen->last_said), got);
+    if (verdict == GATE_OK) {
         gen_store_ai(model, r.latency_ms);
-        Serial.printf("[ai] %s verified: %s wrote it, %s solved it (attempt %u)\n", tag, s_gen.setter, model,
-                      (unsigned)s_gen.attempt);
-        s_gen.idx++;
-        s_gen.phase = PH_NEXT;
+        Serial.printf("[ai] %s verified (%s): %s wrote it, %s solved it (attempt %u)\n", tag,
+                      pr_level_name(s_gen->level), s_gen->setter, model, (unsigned)s_gen->attempt);
+        s_gen->idx++;
+        s_gen->phase = PH_NEXT;
         return;
     }
-    Serial.printf("[ai] %s attempt %u: %s answered %s, expected %s: rejected\n", tag, (unsigned)s_gen.attempt, model,
-                  got, s_gen.answer);
+    Serial.printf("[ai] %s attempt %u: %s: rejected\n", tag, (unsigned)s_gen->attempt, why);
     gen_fail_attempt();
 }
 
 void gen_step(void)
 {
-    switch (s_gen.phase) {
+    switch (s_gen->phase) {
     case PH_NEXT:
         step_next();
         break;
     case PH_ATTEMPT:
-        s_gen.attempt++;
-        s_gen.setter_pos = 0;
-        s_gen.chain_replied = false;
-        s_gen.phase = PH_SETTER;
+        s_gen->attempt++;
+        s_gen->setter_pos = 0;
+        s_gen->chain_replied = false;
+        s_gen->phase = PH_SETTER;
         break;
     case PH_SETTER:
         step_setter();
@@ -462,27 +557,35 @@ void gen_step(void)
 }  // namespace
 
 /* ================= public ================= */
-bool puzzle_gen_init(void)
+bool puzzle_gen_init(int level)
 {
     uint32_t rnd[PUZZLE_BANK_WORDS];
 
     s_mutex = xSemaphoreCreateMutex();
-    if (s_mutex == NULL) {
+    s_set = mem_big_new<PuzzleSet>(1u, "puzzle set");
+    s_gen = mem_big_new<Gen>(1u, "puzzle generator");
+    s_snap = mem_big_new<PuzzleSet>(1u, "puzzle snapshot");
+    s_reply = mem_big_new<char>(APP_LLM_REPLY_MAX, "puzzle LLM reply");
+    s_json = mem_big_new<char>(APP_LLM_REPLY_MAX, "puzzle LLM json");
+    s_sys = mem_big_new<char>(SYS_PROMPT_MAX, "puzzle LLM prompt");
+    if (s_mutex == NULL || s_set == NULL || s_gen == NULL || s_snap == NULL || s_reply == NULL || s_json == NULL ||
+        s_sys == NULL) {
         return false;
     }
-    memset(&s_gen, 0, sizeof(s_gen));
-    memset(static_cast<void *>(&s_set), 0, sizeof(s_set));
+    memset(s_gen, 0, sizeof(Gen));
+    memset(static_cast<void *>(s_set), 0, sizeof(PuzzleSet));
     if (flash_read_blob(APP_KEY_PUZZLES, &s_blob, sizeof(s_blob)) && puzzle_set_valid(s_blob)) {
-        s_set = s_blob;
+        *s_set = s_blob;
         s_used = (uint8_t)((uint32_t)flash_read_int(APP_KEY_PUZZLE_USED, 0) & USED_MASK_ALL);
         Serial.printf("[ai] puzzle set loaded from flash: %u AI-verified puzzles, generated at unix %u, used mask 0x%x\n",
-                      (unsigned)s_set.ai_count, (unsigned)s_set.generated_unix, (unsigned)s_used);
+                      (unsigned)s_set->ai_count, (unsigned)s_set->generated_unix, (unsigned)s_used);
     } else {
         random_words(rnd, PUZZLE_BANK_WORDS);
-        puzzle_set_fill_bank(&s_set, rnd);
+        bank_fill_set(s_set, rnd, level);
         s_used = 0u;
         Serial.println("[ai] no stored puzzle set: using template-bank puzzles until the first run");
     }
+    s_target_level = (uint8_t)level;
     s_set_gen = 1u;
     return true;
 }
@@ -496,7 +599,7 @@ void puzzle_gen_request(void)
 
 bool puzzle_gen_busy(void)
 {
-    return s_gen.phase != PH_IDLE;
+    return s_gen->phase != PH_IDLE;
 }
 
 static void request_auto(const char *why)
@@ -511,12 +614,12 @@ static void request_auto(const char *why)
 void puzzle_gen_service(uint32_t now_ms, uint32_t unix_now, bool net_ok, bool gen_ok)
 {
     s_now_ms = now_ms;
-    if (s_gen.phase != PH_IDLE) {
+    if (s_gen->phase != PH_IDLE) {
         if (!gen_ok) {
             return;                                     /* paused: a bomb session or the alarm comes first */
         }
         if (!net_ok) {
-            s_gen.abort_ai = true;                      /* Wi-Fi or clock lost: finish with the bank */
+            s_gen->abort_ai = true;                      /* Wi-Fi or clock lost: finish with the bank */
         }
         gen_step();
         return;
@@ -527,7 +630,7 @@ void puzzle_gen_service(uint32_t now_ms, uint32_t unix_now, bool net_ok, bool ge
 
         if (!s_boot_checked) {
             s_boot_checked = true;
-            if (!puzzle_set_fresh(s_set.generated_unix, s_set.ai_count, unix_now, APP_PUZZLE_FRESH_S)) {
+            if (!puzzle_set_fresh(s_set->generated_unix, s_set->ai_count, unix_now, APP_PUZZLE_FRESH_S)) {
                 request_auto("boot: no fresh set");
             }
         }
@@ -544,7 +647,7 @@ void puzzle_gen_service(uint32_t now_ms, uint32_t unix_now, bool net_ok, bool ge
             s_requested = false;
             s_manual = false;
             Serial.printf("[ai] no Wi-Fi or clock: the cached set stays active (%u AI-verified puzzles)\n",
-                          (unsigned)s_set.ai_count);
+                          (unsigned)s_set->ai_count);
         }
         return;                                         /* automatic runs wait for the network */
     }
@@ -553,7 +656,39 @@ void puzzle_gen_service(uint32_t now_ms, uint32_t unix_now, bool net_ok, bool ge
     }
     s_requested = false;
     s_manual = false;
-    gen_begin(unix_now);
+    gen_begin(unix_now, s_target_level, false);
+}
+
+/* Level of the active set. A set stored before PZL2 got its level byte has 0: it was built for NORMAL. */
+static uint8_t set_level(void)
+{
+    return s_set->level != 0u ? s_set->level : (uint8_t)PR_NORMAL;
+}
+
+bool puzzle_gen_apply_level(int level, bool session_active)
+{
+    if (level < PR_EASY || level > PR_HARD) {
+        return false;
+    }
+    s_target_level = (uint8_t)level;                    /* every later run asks for it */
+    if (session_active) {
+        return false;                                   /* CLAUDE.md session guard: refill after DEFUSED -> IDLE */
+    }
+    if (s_gen->phase != PH_IDLE) {
+        if (s_gen->level == s_target_level) {
+            return false;                               /* the run in progress already builds the right level */
+        }
+        s_gen->phase = PH_IDLE;                         /* its puzzles are for the old level: drop the work buffer */
+        Serial.printf("[ai] level changed to %s: the running puzzle run is cancelled\n", pr_level_name(level));
+    }
+    if (set_level() == s_target_level) {
+        return false;
+    }
+    Serial.printf("[ai] level changed (set was built for %s, now %s)\n", pr_level_name(set_level()),
+                  pr_level_name(level));
+    gen_begin(0u, s_target_level, true);
+    request_auto("level changed");                      /* then the normal AI run replaces the bank set */
+    return true;
 }
 
 bool puzzle_set_snapshot(PuzzleSet *out, uint32_t *gen)
@@ -561,7 +696,7 @@ bool puzzle_set_snapshot(PuzzleSet *out, uint32_t *gen)
     if (out == NULL || s_mutex == NULL || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(SET_LOCK_WAIT_MS)) != pdTRUE) {
         return false;
     }
-    *out = s_set;
+    *out = *s_set;
     if (gen != NULL) {
         *gen = s_set_gen;
     }
@@ -595,8 +730,8 @@ bool puzzle_take_next_pair(Puzzle *dial, Puzzle *wire, int *pair, uint32_t *gen)
     }
     p = pair_next_unused(s_used, PUZZLE_PAIRS);
     p = (p < 0) ? 0 : p;
-    *dial = s_set.dial[p];                              /* ~120 bytes each: not the whole 1.1 KB set */
-    *wire = s_set.wire[p];
+    *dial = s_set->dial[p];                              /* ~120 bytes each: not the whole 1.1 KB set */
+    *wire = s_set->wire[p];
     *pair = p;
     *gen = s_set_gen;
     xSemaphoreGive(s_mutex);
@@ -658,9 +793,9 @@ void puzzle_gen_info(PuzzleRunInfo *out)
     if (out == NULL) {
         return;
     }
-    out->busy = (s_gen.phase != PH_IDLE);
+    out->busy = (s_gen->phase != PH_IDLE);
     out->queued = s_requested;
-    out->progress = out->busy ? (uint8_t)(s_gen.idx < 2u * PUZZLE_PAIRS ? s_gen.idx : 2u * PUZZLE_PAIRS) : 0u;
+    out->progress = out->busy ? (uint8_t)(s_gen->idx < 2u * PUZZLE_PAIRS ? s_gen->idx : 2u * PUZZLE_PAIRS) : 0u;
     out->runs_done = s_runs_done;
     out->last_unix = s_last_run_unix;
     out->last_ai = s_last_run_ai;
@@ -669,14 +804,13 @@ void puzzle_gen_info(PuzzleRunInfo *out)
 
 void puzzle_print_set(void)
 {
-    static PuzzleSet snap;                              /* ~1.1 KB: off the stack */
     uint32_t gen = 0u;
 
-    if (!puzzle_set_snapshot(&snap, &gen)) {
+    if (!puzzle_set_snapshot(s_snap, &gen)) {
         Serial.println("[ai] puzzle set busy, try again");
         return;
     }
-    print_set(snap, gen);
+    print_set(*s_snap, gen);
     Serial.printf("[ai] used mask 0x%x, next pair %d%s\n", (unsigned)s_used, puzzle_next_pair(),
                   puzzle_gen_busy() ? ", a run is in progress" : "");
 }

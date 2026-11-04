@@ -40,14 +40,14 @@ one tick old).
 
 Modules = the first `module_count` entries of `module_order`, then one extra module per snooze and
 per explosion so far this session, capped at 4 in total. An extra's type is
-`(previous module type % 3) + 1` (DIAL -> WIRES -> TRIPWIRE -> DIAL). Each new bomb takes a
+`(previous module type % 4) + 1` (DIAL -> WIRES -> TRIPWIRE -> LIGHTS -> DIAL). Each new bomb takes a
 snapshot of the config, so `game_set_config` while a bomb runs only affects the next bomb.
-The default offline bomb: DIAL, WIRES, TRIPWIRE, 180 s, code 4-2-7-1, 4 wires (correct = index 2),
-band 18..22 cm, 3 strikes.
+The default offline bomb: DIAL, WIRES, TRIPWIRE, LIGHTS (4 modules, so no extras fit), 180 s, code 4-2-7-1, 4 wires (correct = index 2),
+band 15..25 cm, 3 strikes.
 
 ## Config validation (`game_set_config`)
 
-Rejected (previous config kept): `module_count` not 1..4; a used `module_order` entry not 1..3; a
+Rejected (previous config kept): `module_count` not 1..4; a used `module_order` entry not 1..4; a
 dial digit > 9; `trip_min >= trip_max`; a trip bound outside 5..100; `correct_wire` >= the
 clamped `wire_count`. Clamped: `time_limit_s` 30..600, `wire_count` 3..6, `max_strikes` 1..5.
 
@@ -59,11 +59,14 @@ clamped `wire_count`. Clamped: `time_limit_s` 30..600, `wire_count` 3..6, `max_s
 | DIAL | `ENC_PRESS` | right digit: DIGIT_OK, next digit (value back to 0); 4th right digit clears the module. Wrong: STRIKE, value reset to 0 |
 | WIRES | `JOY_LEFT/RIGHT` | cursor moves, clamped (no wrap), CLICK only if it moved |
 | WIRES | `JOY_PRESS` | uncut wire: cut it; correct clears the module, wrong = STRIKE (stays cut). Already cut: DENIED |
-| TRIPWIRE | `DISTANCE` | inside `[min,max]` starts the hold timer if idle; outside, or > 400, resets it (no strike) |
-| any | `TAMPER` | >= 1500 mg in BOMB_ACTIVE = STRIKE, then 2000 ms with tamper ignored |
+| TRIPWIRE | `DISTANCE` | inside `[min,max]` starts the hold timer if idle; outside, or > 400, starts a 300 ms grace (`GAME_TRIP_GRACE_MS`) and resets the hold only if the reading stays out that long (no strike) |
+| LIGHTS | `LIGHT` | level 0..255 (clamped). The first reading after the module becomes current is the baseline; target = `min(max(baseline + 40, 120), 240)` (`GAME_LIGHT_DELTA`, `GAME_LIGHT_MIN_LEVEL`, `GAME_LIGHT_TARGET_CAP`). Level >= target starts the hold; below target starts a 300 ms grace (`GAME_LIGHT_GRACE_MS`) and resets the hold only if the reading stays below that long (no strike) |
+| any | `TAMPER` | inert: kept in the engine and tests, but the gyro is disabled so nothing sends it. >= 1500 mg in BOMB_ACTIVE = STRIKE, then 2000 ms with tamper ignored |
 
-TRIPWIRE: holding for 3000 ms (checked in `game_tick`) clears the module. No strikes. Inputs for a
+TRIPWIRE: holding for 3000 ms (checked in `game_tick`) clears the module, but only while the latest reading is in band. A blip out of band shorter than 300 ms is forgiven and the hold continues from its original start. The MCX ultrasonic task posts the median of its last 3 pings (`APP_US_MEDIAN_N`), so one stray or lost echo (999) does not count as a reading; 999 is posted only when at least 2 of the 3 are 999. No strikes. Inputs for a
 module other than the current one are ignored; `TAMPER` counts for any module.
+
+LIGHTS: the room light or a phone torch clears it. Holding level >= target for 2000 ms (`GAME_LIGHT_HOLD_MS`, checked in `game_tick`) clears the module, but only while the latest reading is at or above the target. A dip shorter than 300 ms is forgiven and the hold continues from its original start. The target is relative to the room (baseline + 40, never below 120, never above 240) so a dark room still needs real light and a very bright room stays reachable. The module never adds a strike, and `LIGHT` events while another module is current are ignored (no baseline is stored).
 
 Terminal sounds replace the ordinary one: the fatal strike plays only EXPLODED, the last module
 plays only DEFUSED.
@@ -77,6 +80,7 @@ plays only DEFUSED.
 | `ENC_LONG_PRESS` | - | snooze (BOMB_ACTIVE) |
 | `JOY_LEFT`, `JOY_RIGHT`, `JOY_PRESS` | - | wires |
 | `DISTANCE` | cm | tripwire |
+| `LIGHT` | level 0..255 | lights (appended after `CMD_CANCEL`, so earlier event values did not move) |
 | `TAMPER` | mg | strike if >= 1500 |
 | `CMD_RING_NOW` | delay s, clamped 0..3600 | IDLE/ARMED -> ARMED, deadline = now + delay |
 | `CMD_SNOOZE` | - | snooze (BOMB_ACTIVE) |
@@ -91,7 +95,7 @@ and one more extra module; otherwise DENIED and nothing changes.
   session strikes, snoozes}, play EXPLODED, extras + 1; after 3 s a fresh bomb starts (timer and
   strikes reset, session strike total keeps counting).
 - Defuse: push RESULT{DEFUSED, ...}, play DEFUSED; after 30 s back to IDLE and the session is reset.
-- In one tick the tripwire hold is checked before the timer, so a hold finishing on the deadline wins.
+- In one tick the tripwire and lights holds are checked before the timer, so a hold finishing on the deadline wins.
 
 ## Output API
 
@@ -107,7 +111,7 @@ and one more extra module; otherwise DENIED and nothing changes.
 ### View fields
 
 `state`, `module_idx`, `module_type`, `strikes` (current bomb), `progress_pct` = cleared modules * 100 /
-module count, `time_left_s` (BOMB_ACTIVE only, rounded up, 0 elsewhere). Outside
+module count (for every module, LIGHTS included; the LIGHTS hold progress is not reported, the ESP32 estimates its hold bar locally), `time_left_s` (BOMB_ACTIVE only, rounded up, 0 elsewhere). Outside
 BOMB_ACTIVE/DEFUSED/EXPLODED the module fields and progress are 0.
 
 ### `module_value` encoding
@@ -117,5 +121,6 @@ BOMB_ACTIVE/DEFUSED/EXPLODED the module fields and progress are 0.
 | DIAL | `current_value \| (digit_index << 8)` |
 | WIRES | `cursor \| (cut_mask << 8)` (bit n = wire n cut) |
 | TRIPWIRE | `min(distance_cm, 255) \| (hold_pct << 8)`, hold_pct 0..100 |
+| LIGHTS | `level \| (target << 8)`, both 0..255; 0 until the baseline reading arrives. Target >= 128 sets the sign bit, so the engine stores `(int16_t)(uint16_t)(...)` and receivers must read it as u16 |
 
-`module_value` is 0 outside BOMB_ACTIVE. The largest value (tripwire, 255 | 100 << 8 = 25855) fits `int16_t`.
+`module_value` is 0 outside BOMB_ACTIVE. Dial, wires and tripwire values fit `int16_t` (largest 255 | 100 << 8 = 25855); a LIGHTS value can exceed it, so read `module_value` as u16 for that module.

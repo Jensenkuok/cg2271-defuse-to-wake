@@ -119,7 +119,10 @@ static void test_validate_puzzle(void)
 
     CHECK(validate_puzzle("1st=4; 2nd=1st-2; sum is nine", PUZZLE_DIAL, "4271"));
     CHECK(!validate_puzzle("The code is 4271 exactly", PUZZLE_DIAL, "4271"));         /* literal answer */
-    CHECK(validate_puzzle("Digits 4 2 7 1 in that order, ok", PUZZLE_DIAL, "4271"));  /* spec: substring only */
+    CHECK(!validate_puzzle("Digits 4 2 7 1 in that order, ok", PUZZLE_DIAL, "4271")); /* spells the code */
+    CHECK(!validate_puzzle("Digits are 2,5,8,7 in order.", PUZZLE_DIAL, "2587"));
+    CHECK(!validate_puzzle("2=2,5=5,8=8,7=7. Digits are 2,5,8,7 in order.", PUZZLE_DIAL, "2587"));
+    CHECK(validate_puzzle("1st=2nd-3; 3rd is 2nd+3; 4th=3rd-1; sum is 22", PUZZLE_DIAL, "2587"));
     CHECK(!validate_puzzle("1st=4; 2nd=1st-2; sum is nine", PUZZLE_DIAL, NULL));
     CHECK(!validate_puzzle("1st=4; 2nd=1st-2; sum is nine", PUZZLE_DIAL, "427"));
     CHECK(!validate_puzzle(NULL, PUZZLE_DIAL, "4271"));
@@ -127,10 +130,10 @@ static void test_validate_puzzle(void)
     /* length limits */
     CHECK(!validate_puzzle(filler(text, 9), PUZZLE_DIAL, "4271"));
     CHECK(validate_puzzle(filler(text, 10), PUZZLE_DIAL, "4271"));
-    CHECK(validate_puzzle(filler(text, 80), PUZZLE_DIAL, "4271"));
-    CHECK(!validate_puzzle(filler(text, 81), PUZZLE_DIAL, "4271"));
-    CHECK(validate_puzzle(filler(text, 60), PUZZLE_WIRE, "3"));
-    CHECK(!validate_puzzle(filler(text, 61), PUZZLE_WIRE, "3"));
+    CHECK(validate_puzzle(filler(text, 63), PUZZLE_DIAL, "4271"));     /* O3: 3 OLED rows of 21 */
+    CHECK(!validate_puzzle(filler(text, 64), PUZZLE_DIAL, "4271"));
+    CHECK(validate_puzzle(filler(text, 42), PUZZLE_WIRE, "3"));         /* O3: 2 OLED rows */
+    CHECK(!validate_puzzle(filler(text, 43), PUZZLE_WIRE, "3"));
     CHECK(!validate_puzzle("", PUZZLE_WIRE, "3"));
     /* character set */
     CHECK(!validate_puzzle("caf\xC3\xA9 is not ascii at all", PUZZLE_WIRE, "3"));
@@ -140,7 +143,9 @@ static void test_validate_puzzle(void)
     CHECK(validate_puzzle(" !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ ok", PUZZLE_WIRE, "3"));
     /* wire answers may appear in the text (a single digit is not a giveaway) */
     CHECK(validate_puzzle("Cut the third wire of 5 wires", PUZZLE_WIRE, "3"));
-    CHECK(validate_puzzle("wire 3 of 5 is the one!", PUZZLE_WIRE, "3"));
+    CHECK(validate_puzzle("wire 4 of 5 is the one!", PUZZLE_WIRE, "3"));
+    /* O4 (replaces the old "the wire number may appear" rule): a standalone number token equal to the answer is a leak */
+    CHECK(!validate_puzzle("wire 3 of 5 is the one!", PUZZLE_WIRE, "3"));
 }
 
 static void test_parse_checker_answer(void)
@@ -400,6 +405,7 @@ static void test_dial_templates_all_codes(void)
 
                 dial_code_text(code, digits);
                 CHECK(strstr(text, digits) == NULL);                    /* never prints the code */
+                CHECK(validate_puzzle(text, PUZZLE_DIAL, digits));      /* nor spells it in its digits */
             }
             /* Uniqueness by brute force: the text for every code in the 4 base families, and the
              * struct plus text for every 37th code in all 16 variants. */
@@ -477,7 +483,7 @@ static int solve_wire_text(const char *text, int *wires)
         }
         return -1;
     }
-    if (sscanf(text, "%u wires. Skip %u from the %7s cut the next", &n, &x, dir) == 3) {
+    if (sscanf(text, "%u wires. Skip %u from %7s cut next", &n, &x, dir) == 3) {
         *wires = (int)n;
         if (strncmp(dir, "left,", 5) == 0) {
             return (int)x + 1;
@@ -518,7 +524,7 @@ static void test_wire_templates_all(void)
                 CHECK(w.n == n && (unsigned)w.family == variant % WIRE_FAMILIES);
                 CHECK(solve_wire_struct(w) == k);
                 CHECK(solve_wire_text(text, &wires) == k && wires == n);
-                CHECK(validate_puzzle(text, PUZZLE_WIRE, "1"));
+                CHECK(validate_puzzle(text, PUZZLE_WIRE, "99"));        /* printable, fits; "99": no such wire (the old texts name theirs, see O4) */
                 solved++;
             }
         }
@@ -535,8 +541,8 @@ static void test_wire_template_shapes(void)
     CHECK(strcmp((wire_template(3, 5, 0, text, sizeof(text)), text), "5 wires. Cut the 3rd from the left") == 0);
     CHECK(strcmp((wire_template(3, 5, 1, text, sizeof(text)), text), "5 wires. Cut the 3rd from the right") == 0);
     CHECK(strcmp((wire_template(2, 6, 1, text, sizeof(text)), text), "6 wires. Cut the 5th from the right") == 0);
-    CHECK(strcmp((wire_template(4, 6, 3, text, sizeof(text)), text), "6 wires. Skip 3 from the left, cut the next") == 0);
-    CHECK(strcmp((wire_template(4, 6, 7, text, sizeof(text)), text), "6 wires. Skip 2 from the right, cut the next") == 0);
+    CHECK(strcmp((wire_template(4, 6, 3, text, sizeof(text)), text), "6 wires. Skip 3 from left, cut next") == 0);
+    CHECK(strcmp((wire_template(4, 6, 7, text, sizeof(text)), text), "6 wires. Skip 2 from right, cut next") == 0);
     CHECK(wire_template(3, 5, 0, tiny, sizeof(tiny)) == 0 && tiny[0] == '\0');
     /* out-of-range input is clamped, never produces a wrong or crashing clue */
     w = wire_clue_build(9, 4, 0);
@@ -561,6 +567,7 @@ static void test_bank_puzzles(void)
     puzzle_fill_bank_wire(&p, 5, 4, 2);
     CHECK(p.kind == PUZZLE_WIRE && p.wire_count == 5 && p.wire_k == 4 && p.source == PUZZLE_SRC_BANK);
     CHECK(validate_puzzle(p.text, PUZZLE_WIRE, "4"));
+    CHECK(p.level == 0);                                                /* the old fill functions do not rate */
     CHECK(puzzle_answer_text(p, ans, sizeof(ans)) && strcmp(ans, "4") == 0);
     memset(&p, 0, sizeof(p));
     CHECK(!puzzle_answer_text(p, ans, sizeof(ans)));                    /* unknown kind */
@@ -590,7 +597,7 @@ static void test_bank_set(void)
             dial_code_text(s.dial[i].dial_code, digits);
             CHECK(validate_puzzle(s.dial[i].text, PUZZLE_DIAL, digits));
             CHECK(puzzle_answer_text(s.wire[i], ans, sizeof(ans)));
-            CHECK(validate_puzzle(s.wire[i].text, PUZZLE_WIRE, ans));
+            CHECK(validate_puzzle(s.wire[i].text, PUZZLE_WIRE, "99"));   /* old wire texts name their wire: O4 applies to LLM and procedural texts */
         }
     }
     /* a damaged set is refused */
@@ -629,124 +636,17 @@ static void test_random_picks(void)
     for (r = 1; r < 200000u; r += 7919u) {
         dial_code_from_random(r * 2654435761u, code);
         CHECK(code[0] < 10 && code[1] < 10 && code[2] < 10 && code[3] < 10);
-        wire_pick_from_random(r * 2654435761u, &n, &k);
-        CHECK(n >= 3 && n <= 6 && k >= 1 && k <= n);
+        wire_pick_from_random(PR_EASY, r * 2654435761u, &n, &k);
+        CHECK(n >= 3 && n <= 4 && k >= 1 && k <= n);
+        seen_n[n]++;
+        wire_pick_from_random(PR_NORMAL, r * 2654435761u, &n, &k);
+        CHECK(n >= 4 && n <= 5 && k >= 1 && k <= n);
+        seen_n[n]++;
+        wire_pick_from_random(PR_HARD, r * 2654435761u, &n, &k);
+        CHECK(n == 6 && k >= 1 && k <= n);
         seen_n[n]++;
     }
     CHECK(seen_n[3] > 0 && seen_n[4] > 0 && seen_n[5] > 0 && seen_n[6] > 0);
-}
-
-/* ================= difficulty ================= */
-static HistRecord mk(unsigned snoozes, unsigned strikes)
-{
-    HistRecord r;
-
-    memset(&r, 0, sizeof(r));
-    r.snoozes = (uint8_t)snoozes;
-    r.strikes = (uint8_t)strikes;
-    return r;
-}
-
-static void test_difficulty(void)
-{
-    HistRecord h[10];
-    Difficulty d;
-    int i;
-
-    d = difficulty(NULL, 0);
-    CHECK(d.module_count == 3 && d.time_limit_s == 180 && strlen(d.explanation) > 0);
-    CHECK(strcmp(d.explanation, "No history yet: standard bomb") == 0);
-    d = difficulty(h, 0);
-    CHECK(d.module_count == 3 && d.time_limit_s == 180);
-    d = difficulty(h, -3);
-    CHECK(d.module_count == 3 && d.time_limit_s == 180);
-
-    /* snoozes: 3 in the last 7 add a module, 2 do not; the 8th morning is ignored */
-    for (i = 0; i < 10; i++) {
-        h[i] = mk(0, 0);
-    }
-    h[3].snoozes = 2;
-    h[5].snoozes = 1;
-    d = difficulty(h, 10);
-    CHECK(d.module_count == 4 && d.time_limit_s == 150);                /* clean run of 3 earns -30 s */
-    h[5].snoozes = 0;
-    d = difficulty(h, 10);
-    CHECK(d.module_count == 3);
-    h[7].snoozes = 9;
-    d = difficulty(h, 10);
-    CHECK(d.module_count == 3);                                          /* outside the 7-morning window */
-    h[6].snoozes = 1;
-    d = difficulty(h, 10);
-    CHECK(d.module_count == 4);                                          /* 2 + 1 = 3 inside the window */
-
-    /* strikes: average >= 2 adds 30 s (one snooze on the newest morning keeps the clean bonus away) */
-    for (i = 0; i < 7; i++) {
-        h[i] = mk(0, 2);
-    }
-    h[0].snoozes = 1;
-    d = difficulty(h, 7);
-    CHECK(d.time_limit_s == 210 && d.module_count == 3);
-    h[0].strikes = 1;                                                    /* sum 13 over 7: avg < 2 */
-    d = difficulty(h, 7);
-    CHECK(d.time_limit_s == 180);
-    h[0].strikes = 3;                                                    /* sum 15 */
-    d = difficulty(h, 7);
-    CHECK(d.time_limit_s == 210);
-    d = difficulty(h, 2);                                                /* two mornings: (3 + 2) / 2 = 2.5 */
-    CHECK(d.time_limit_s == 210);
-    h[0].strikes = 0;
-    d = difficulty(h, 2);                                                /* (0 + 2) / 2 = 1 */
-    CHECK(d.time_limit_s == 180);
-
-    /* clean streak: 3 newest mornings without a snooze give -30 s, needs 3 records */
-    for (i = 0; i < 7; i++) {
-        h[i] = mk(0, 0);
-    }
-    d = difficulty(h, 3);
-    CHECK(d.time_limit_s == 150);
-    d = difficulty(h, 2);
-    CHECK(d.time_limit_s == 180);
-    h[2].snoozes = 1;                                                    /* the third newest snoozed */
-    d = difficulty(h, 7);
-    CHECK(d.time_limit_s == 180);
-    h[2].snoozes = 0;
-    h[3].snoozes = 1;                                                    /* the fourth does not matter */
-    d = difficulty(h, 7);
-    CHECK(d.time_limit_s == 150);
-
-    /* clean and hard cancel out (180 s); older snoozes then add a module without changing the time */
-    for (i = 0; i < 7; i++) {
-        h[i] = mk(0, 2);
-    }
-    d = difficulty(h, 7);
-    CHECK(d.time_limit_s == 180 && d.module_count == 3);
-    for (i = 3; i < 7; i++) {
-        h[i].snoozes = 1;
-    }
-    d = difficulty(h, 7);
-    CHECK(d.module_count == 4 && d.time_limit_s == 180);
-
-    /* always inside the allowed range and the explanation always fits, for every combination */
-    for (i = 0; i < 4000; i++) {
-        int j;
-
-        for (j = 0; j < 10; j++) {
-            h[j] = mk((unsigned)((i * 7 + j * 13) % 5 == 0 ? 255 : (i + j) % 3), (unsigned)((i / 3 + j * 5) % 5 == 0 ? 255 : (i + j) % 4));
-        }
-        d = difficulty(h, 1 + i % 10);
-        CHECK(d.module_count >= 3 && d.module_count <= 4);
-        CHECK(d.time_limit_s >= DIFF_TIME_MIN_S && d.time_limit_s <= DIFF_TIME_MAX_S && d.time_limit_s % 30 == 0);
-        CHECK(strlen(d.explanation) > 0 && strlen(d.explanation) <= PUZZLE_EXPLAIN_MAX);
-    }
-    /* the longest explanation: all three reasons with a two-digit snooze count */
-    for (i = 0; i < 7; i++) {
-        h[i] = mk(i < 3 ? 0 : 99, 2);
-    }
-    d = difficulty(h, 7);
-    CHECK(strlen(d.explanation) <= PUZZLE_EXPLAIN_MAX);
-    CHECK(strstr(d.explanation, "99 snoozes") != NULL && strstr(d.explanation, "+30s") != NULL &&
-          strstr(d.explanation, "-30s") != NULL);
-    printf("  explanation sample: \"%s\"\n", d.explanation);
 }
 
 /* ================= BOMB_CONFIG ================= */
@@ -783,29 +683,35 @@ static void test_build_config(void)
 
     puzzle_fill_bank_dial(&dial, code, 0);
     puzzle_fill_bank_wire(&wire, 5, 3, 0);
-    d = difficulty(NULL, 0);
-    puzzle_build_config(d, dial, wire, &c);
+    d = difficulty(NULL, 0, DIFF_MODE_AUTO);                             /* score 50 = NORMAL: 4 modules, 180 s */
+    puzzle_build_config(d, dial, wire, 0u, &c);
     check_config_ranges(c);
-    CHECK(c.module_count == 3 && c.module_order[0] == PROTO_MODULE_DIAL && c.module_order[1] == PROTO_MODULE_WIRES &&
-          c.module_order[2] == PROTO_MODULE_TRIPWIRE);
+    CHECK(c.module_count == 4 && c.module_order[0] == PROTO_MODULE_DIAL && c.module_order[1] == PROTO_MODULE_WIRES &&
+          c.module_order[2] == PROTO_MODULE_TRIPWIRE && c.module_order[3] == PROTO_MODULE_LIGHTS);   /* D, W, T, L */
     CHECK(c.time_limit_s == 180 && c.dial_code[0] == 4 && c.dial_code[1] == 2 && c.dial_code[2] == 7 && c.dial_code[3] == 1);
     CHECK(c.wire_count == 5 && c.correct_wire == 2);                    /* k = 3 (1-based) -> index 2 */
-    CHECK(c.trip_min_cm == 18 && c.trip_max_cm == 22 && c.max_strikes == 3);
+    CHECK(c.trip_min_cm == PUZZLE_TRIP_MIN_BASE_CM && c.trip_max_cm == PUZZLE_TRIP_MIN_BASE_CM + PUZZLE_TRIP_WIDTH_CM &&
+          c.max_strikes == 3);                                           /* rnd 0 -> the nearest band, 10-20 cm */
     CHECK(proto_pack_bomb_config(&c, buf, sizeof(buf)) == PROTO_SIZE_BOMB_CONFIG);
     CHECK(proto_unpack_bomb_config(buf, sizeof(buf), &back) && back.module_count == c.module_count &&
           back.time_limit_s == c.time_limit_s && back.wire_count == c.wire_count &&
           back.correct_wire == c.correct_wire && memcmp(back.dial_code, c.dial_code, 4) == 0);
 
-    d.module_count = 4;                                                  /* 4 modules: DIAL again as the 4th */
+    d.module_count = 4;
     d.time_limit_s = 210;
-    puzzle_build_config(d, dial, wire, &c);
-    CHECK(c.module_count == 4 && c.module_order[3] == PROTO_MODULE_DIAL && c.time_limit_s == 210);
+    puzzle_build_config(d, dial, wire, 1u, &c);
+    CHECK(c.module_count == 4 && c.module_order[3] == PROTO_MODULE_LIGHTS && c.time_limit_s == 210);
     check_config_ranges(c);
+    d.module_count = 3;                                                  /* a shorter bomb is a prefix: LIGHTS is dropped */
+    puzzle_build_config(d, dial, wire, 1u, &c);
+    CHECK(c.module_count == 3 && c.module_order[2] == PROTO_MODULE_TRIPWIRE);
+    check_config_ranges(c);
+    d.module_count = 4;
 
     for (n = 3; n <= 6; n++) {
         for (k = 1; k <= n; k++) {
             puzzle_fill_bank_wire(&wire, n, k, 0);
-            puzzle_build_config(d, dial, wire, &c);
+            puzzle_build_config(d, dial, wire, (uint32_t)(n * 7 + k), &c);
             check_config_ranges(c);
             CHECK(c.wire_count == n && c.correct_wire == k - 1);
         }
@@ -815,8 +721,9 @@ static void test_build_config(void)
     memset(&wire, 0, sizeof(wire));
     d.module_count = 9;
     d.time_limit_s = 9999;
-    puzzle_build_config(d, dial, wire, &c);
+    puzzle_build_config(d, dial, wire, 0xFFFFFFFFu, &c);
     CHECK(c.module_count == 4 && c.wire_count == 3 && c.correct_wire == 0);
+    check_config_ranges(c);
 }
 
 /* ================= selection rules ================= */
@@ -852,22 +759,34 @@ static void test_checker_order(void)
     static const char *const chain[] = { "x-test-1", "x-test-2", "qwen3.6:35b", "default" };
     int order[4];
 
-    CHECK(checker_order(chain, 4, "x-test-2", order) == 4);
-    CHECK(order[0] == 0 && order[1] == 2 && order[2] == 3 && order[3] == 1);   /* setter's own model last */
-    CHECK(checker_order(chain, 4, "x-test-1", order) == 4);
-    CHECK(order[0] == 1 && order[1] == 2 && order[2] == 3 && order[3] == 0);
-    CHECK(checker_order(chain, 4, "default", order) == 4);
-    CHECK(order[0] == 0 && order[1] == 1 && order[2] == 2 && order[3] == 3);
-    CHECK(checker_order(chain, 4, "unknown", order) == 4);
+    /* O5: the setter's own model is never a checker (it used to be tried last) */
+    CHECK(checker_order(chain, 4, "x-test-2", order) == 3);
+    CHECK(order[0] == 0 && order[1] == 2 && order[2] == 3);
+    CHECK(checker_order(chain, 4, "x-test-1", order) == 3);
+    CHECK(order[0] == 1 && order[1] == 2 && order[2] == 3);
+    CHECK(checker_order(chain, 4, "default", order) == 3);
+    CHECK(order[0] == 0 && order[1] == 1 && order[2] == 2);
+    CHECK(checker_order(chain, 4, "unknown", order) == 4);              /* not in the chain: all four */
     CHECK(order[0] == 0 && order[3] == 3);
     CHECK(checker_order(chain, 4, NULL, order) == 4);
     CHECK(checker_order(chain, 0, "x-test-2", order) == 0);
-    /* the first entry is never the setter's own model while another model exists */
+    {
+        static const char *const one[] = { "only" };
+
+        CHECK(checker_order(one, 1, "only", order) == 0);                /* no other model: no checker at all */
+        CHECK(checker_order(one, 1, "other", order) == 1 && order[0] == 0);
+    }
     {
         int s;
+        int i;
 
         for (s = 0; s < 4; s++) {
-            CHECK(checker_order(chain, 4, chain[s], order) == 4 && strcmp(chain[order[0]], chain[s]) != 0);
+            const int n = checker_order(chain, 4, chain[s], order);
+
+            CHECK(n == 3);
+            for (i = 0; i < n; i++) {
+                CHECK(strcmp(chain[order[i]], chain[s]) != 0);
+            }
         }
     }
 }
@@ -915,8 +834,7 @@ int main(void)
     test_bank_puzzles();
     test_bank_set();
     test_random_picks();
-    printf("test_puzzle: difficulty, config, selection\n");
-    test_difficulty();
+    printf("test_puzzle: config, selection\n");
     test_build_config();
     test_pair_rules();
     test_checker_order();

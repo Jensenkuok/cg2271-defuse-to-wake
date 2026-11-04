@@ -11,3 +11,7 @@ dist/
 # IDE-local files
 *.launch
 mcxc444/**/.settings/language.settings.xml
+# planner / AI workflow notes (local only)
+CLAUDE.md
+.claude/
+.esp32_build/

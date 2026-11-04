@@ -20,7 +20,16 @@
 #define APP_UART_TX_PIN             1       /* GPIO1  -> MCX PTE23 (UART2 RX) */
 #define APP_DEBUG_BAUD              115200u /* Serial (debug) */
 
-/* ---- I2C bus shared by the OLED and the MPU-6050 ---- */
+/* ---- Gyro switch ----
+ * Dropped on 27 Oct: the GY-521 board shorted the shared I2C bus and stopped the OLED, and the team
+ * rule is no new I2C devices. 0 = the gyro task is never created, nothing talks to 0x68 and the
+ * "mpu" Serial command only says so. Set 1 only with a working gyro board. The code stays in the
+ * tree (gyro_task.cpp) and compiles when this is 1. */
+#ifndef APP_USE_GYRO
+#define APP_USE_GYRO                0
+#endif
+
+/* ---- I2C bus: the OLED (and the MPU-6050 when APP_USE_GYRO is 1) ---- */
 #define APP_I2C_SDA_PIN             8
 #define APP_I2C_SCL_PIN             9
 #define APP_I2C_HZ                  400000u
@@ -28,6 +37,11 @@
 #define APP_OLED_WIDTH              128
 #define APP_OLED_HEIGHT             64
 #define APP_MPU_ADDR                0x68
+#define APP_MPU_ADDR_ALT            0x69    /* AD0 pin high */
+#define APP_I2C_FALLBACK_HZ         100000u /* tried when nothing answers at APP_I2C_HZ (long jumper wires) */
+#define APP_I2C_SCAN_FIRST          0x08    /* 7-bit addresses 0x00-0x07 and 0x78-0x7F are reserved */
+#define APP_I2C_SCAN_LAST           0x77
+#define APP_I2C_SCAN_MAX            (APP_I2C_SCAN_LAST - APP_I2C_SCAN_FIRST + 1)
 #define APP_I2C_MUTEX_WAIT_MS       30u     /* bounded wait for the I2C bus mutex (a frame takes ~25 ms) */
 #define APP_STATE_MUTEX_WAIT_MS     10u     /* bounded wait for the app-state mutex (held for a memcpy) */
 
@@ -63,8 +77,19 @@
 /* ---- Display ---- */
 #define APP_DISPLAY_PERIOD_MS       100u    /* 10 fps */
 #define APP_HEADLESS_PRINT_MS       1000u   /* one-line summary period without an OLED */
+#define APP_HEADLESS_REFRESH_MS     30000u  /* ...printed only when its text changed, or at least this often */
+#define APP_HEADLESS_LINE_MAX       320     /* the summary line is built in memory (text rows included) */
 #define APP_BOOM_FLASH_MS           250u    /* inverted-screen flash half-period */
 #define APP_CLUE_PLACEHOLDER        "Clue: (AI clue pending)"
+#define APP_TRIP_CLUE_FMT           "Hold hand %u-%ucm %us"  /* tripwire instruction; 21 chars at most (min 2 digits, max 100) */
+#define APP_TRIP_CLUE_BUF           32               /* scratch for the formatted instruction before it is cut to 21 chars */
+#define APP_ALARM_AT_FMT            "Alarm %s"       /* ARMED bottom line, alarm >= 1 h away: "Alarm Fri 11:00" */
+#define APP_ALARM_IN_FMT            "Rings in %s"    /* ARMED bottom line, under 1 h: "Rings in MM:SS" */
+#define APP_ALARM_SET_TEXT          "Alarm set"      /* ARMED but the alarm time is not known yet */
+#define APP_IDLE_TOGGLE_MS          3000u            /* ARMED clock screen: bottom line swaps next class / alarm this often */
+#define APP_BELL_X                  119              /* armed-alarm bell marker, under the link icon */
+#define APP_BELL_Y                  11
+#define MS_PER_SEC                  1000u
 #define APP_CLUE_MAX_CHARS          21      /* 128 px / 6 px per char */
 #define APP_BRIEF_GENERIC           "Good morning! Check your timetable."  /* DEFUSED page 1 with no briefing for today */
 #define APP_COACH_GENERIC           "Defused. Now go be brilliant."          /* DEFUSED page 2 likewise */
@@ -74,9 +99,29 @@
 #define APP_TAMPER_SEND_MG          600u    /* deviation from 1 g that is sent to the MCX */
 #define APP_TAMPER_COOLDOWN_MS      500u    /* local cooldown between TAMPER_EVENTs */
 #define APP_GYRO_LOG_MS             5000u   /* peak deviation log period */
-#define APP_STANDARD_GRAVITY        9.80665f
 #define APP_MG_PER_G                1000.0f
 #define APP_TAMPER_MAX_MG           65535u  /* TAMPER_EVENT field is u16 */
+#define APP_GYRO_RETRY_MS           5000u   /* init retry period (loose wire, late power-up) */
+#define APP_GYRO_FAIL_LOG_MS        60000u  /* init failure is logged at most this often */
+#define APP_GYRO_RESET_WAIT_MS      100u    /* after the device reset, before the wake write */
+
+/* ---- MPU-6050 registers (also MPU-6500 and other GY-521 clones) ---- */
+#define APP_MPU_REG_CONFIG          0x1A    /* DLPF setting */
+#define APP_MPU_REG_ACCEL_CONFIG    0x1C    /* full-scale range */
+#define APP_MPU_REG_ACCEL_XOUT_H    0x3B    /* X, Y, Z as big-endian int16 */
+#define APP_MPU_REG_PWR_MGMT_1      0x6B
+#define APP_MPU_REG_WHO_AM_I        0x75
+#define APP_MPU_WHO_AM_I_MPU6050    0x68
+#define APP_MPU_WHO_AM_I_BUS_LOW    0x00    /* all-zero / all-one reads mean a dead or floating bus */
+#define APP_MPU_WHO_AM_I_BUS_HIGH   0xFF
+#define APP_MPU_PWR_RESET           0x80
+#define APP_MPU_PWR_WAKE_PLL        0x01    /* sleep off, PLL with gyro X clock */
+#define APP_MPU_CONFIG_DLPF_260HZ   0x00    /* keep spikes, no smoothing */
+#define APP_MPU_ACCEL_RANGE_16G     0x18    /* shakes exceed 8 g */
+#define APP_MPU_LSB_PER_G           2048.0f /* at +-16 g */
+#define APP_MPU_ACCEL_BYTES         6u
+#define APP_MPU_REG_BYTES           1u      /* single-register reads */
+#define APP_GYRO_REASON_LEN         80u     /* init failure reason text buffer */
 
 /* ---- Network ---- */
 #define APP_WIFI_POLL_CONNECTED_MS  2000u   /* WiFiMulti.run() cadence when connected */
@@ -85,6 +130,8 @@
 #define APP_NET_LOOP_MS             250u
 #define APP_NTP_SERVER_1            "pool.ntp.org"
 #define APP_NTP_SERVER_2            "time.google.com"
+#define APP_ARMED_MMSS_MAX_S        3600u       /* ARMED countdown: below this show MM:SS */
+#define APP_ARMED_HOURS_MAX_S       86400u      /* ARMED countdown: below this show "Hh MMm", from here the alarm day/time */
 #define APP_TZ_OFFSET_S             (8 * 3600)  /* Asia/Singapore, UTC+8, no DST */
 #define APP_TIME_SYNC_PERIOD_MS     600000u /* re-send TIME_SYNC every 10 min */
 #define APP_MIN_VALID_UNIX          1700000000u /* anything earlier means SNTP has not set the clock */
@@ -94,6 +141,7 @@
 #define APP_FLASH_MUTEX_WAIT_MS     2000u   /* a flash write can take tens of ms; bounded, never forever */
 #define APP_KEY_LINK                "nusmods_link"
 #define APP_KEY_LEAD                "lead_min"
+#define APP_KEY_DIFFICULTY          "diff_mode"     /* DiffMode number (difficulty.h) */
 #define APP_KEY_TIMETABLE           "tt_cache"
 #define APP_KEY_HISTORY             "hist"
 #define APP_KEY_MIRROR              "mirror"
@@ -129,16 +177,17 @@
 #define APP_SOCLAAS_BASE_URL        "https://soclaas-api.comp.nus.edu.sg/v1"
 #define APP_SOCLAAS_CHAT_PATH       "/chat/completions"
 #define APP_LLM_CHAIN_LEN           4
-#define APP_LLM_SETTER_CHAIN        { "x-test-2", "x-test-1", "qwen3.6:35b", "default" }
-#define APP_LLM_CHECKER_CHAIN       { "x-test-1", "x-test-2", "qwen3.6:35b", "default" }
+#define APP_LLM_SETTER_CHAIN        { "qwen3.6:35b", "x-test-1", "x-test-2", "default" }
+#define APP_LLM_CHECKER_CHAIN       { "x-test-1", "default", "x-test-2", "qwen3.6:35b" }
 #define APP_LLM_TIMEOUT_MS          30000u  /* one request: connect and read, at most 30 s */
 #define APP_LLM_TIMEOUT_S           30u     /* same limit for the TLS client */
-#define APP_LLM_MAX_TOKENS          600     /* reasoning models spend part of it before the JSON */
+#define APP_LLM_MAX_TOKENS          2000    /* thinking models spend most of it before answering; 600 gave empty replies */
 #define APP_LLM_SETTER_TEMP         0.9f
 #define APP_LLM_CHECKER_TEMP        0.0f
-#define APP_LLM_REPLY_MAX           2048    /* reply text kept per call */
+#define APP_LLM_REPLY_MAX           8192    /* reply text kept per call (PSRAM buffers) */
 #define APP_LLM_BODY_MAX            16384   /* larger HTTP bodies are refused */
 #define APP_PUZZLE_ATTEMPTS         3       /* setter + checker rounds per puzzle before the bank */
+#define APP_PUZZLE_DEFAULT_LEVEL    2       /* fallback level (NORMAL) until puzzle_gen_init / puzzle_gen_apply_level give the effective one */
 #define APP_PUZZLE_DEAD_CHAINS      2       /* chains that failed outright in a row: stop asking the LLM */
 #define APP_PUZZLE_FRESH_S          (24 * 3600) /* a stored set younger than this needs no new run at boot */
 #define APP_PUZZLE_NIGHTLY_HOUR     22      /* local hour of the nightly run */
@@ -151,7 +200,7 @@
 
 /* ---- Briefing + coach (one LLM call after each nightly puzzle run, same setter chain) ---- */
 #define APP_BRIEF_TEMP              0.7f
-#define APP_BRIEF_MAX_TOKENS        600
+#define APP_BRIEF_MAX_TOKENS        2000    /* same thinking-model budget as APP_LLM_MAX_TOKENS */
 #define APP_BRIEF_MAGIC             0x42524631u /* "BRF1": bump when BriefText changes */
 #define APP_KEY_BRIEF               "brief"
 #define APP_BRIEF_PROMPT_MAX        640     /* user message: alarm, <= 6 classes, history, difficulty */
@@ -163,6 +212,7 @@
 /* ---- Serial test commands ("lead 90", "link <url>", "refresh", "puzzles", "ai", "diff") ---- */
 #define APP_CMD_MAX_CHARS           (APP_LINK_MAX_CHARS + 16)
 #define APP_SERIAL_RX_BUF           1024u
+#define APP_CMD_ECHO_BYTES          32      /* an unknown command is echoed as text + hex, at most this many bytes */
 
 /* ---- Local web page (CLAUDE.md "Local web page (CORE)"): WebServer + ESPmDNS, own task ---- */
 #define APP_WEB_PORT                80
@@ -190,5 +240,14 @@
 
 /* ---- Tripwire gauge range on the OLED ---- */
 #define APP_GAUGE_MAX_CM            50
+
+/* ---- LIGHTS screen (module_value = level | target << 8, both 0..255; target 0 = no baseline yet) ---- */
+#define APP_LIGHTS_TITLE            "LIGHTS ON"
+#define APP_LIGHTS_CLUE_LOW         "Turn on a light"    /* level below the target, hold not running */
+#define APP_LIGHTS_CLUE_HOLD        "Hold it..."         /* level at the target (or in the grace) */
+#define APP_LIGHTS_CLUE_CALIBRATE   "Calibrating..."     /* no baseline yet: the MCX is still reading the room */
+#define APP_LIGHTS_NUMBERS_FMT      "lvl %u  target %u"  /* small line under the level bar */
+#define APP_LIGHTS_NUMBERS_BUF      32
+#define APP_LIGHTS_LEVEL_MAX        GAME_LIGHT_LEVEL_MAX /* the bar's full scale */
 
 #endif /* APP_CONFIG_H */

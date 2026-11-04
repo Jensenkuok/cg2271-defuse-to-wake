@@ -13,9 +13,14 @@
 #include "briefing.h"
 #include "config.h"
 #include "fault.h"
+#if APP_USE_GYRO
+#include "gyro_task.h"
+#endif
 #include "flash_store.h"
 #include "history.h"
+#include "i2c_bus.h"
 #include "link_task.h"
+#include "mem_big.h"
 #include "mirror.h"
 #include "puzzle_gen.h"
 #include "schedule.h"
@@ -66,7 +71,8 @@ static portMUX_TYPE s_req_mux = portMUX_INITIALIZER_UNLOCKED;
 static bool s_regen_requested;      /* guarded by s_req_mux: set by the web task, taken by this task */
 static WiFiMulti s_multi;
 static NetCtx s_ctx;
-static Lesson s_lessons[SCHED_MAX_LESSONS];    /* scheduler input, network task only */
+static AppState *s_puzzle_state;               /* service_llm_jobs only (PSRAM) */
+static Lesson *s_lessons;                      /* scheduler input (PSRAM, SCHED_MAX_LESSONS), network task only */
 static char s_link[APP_LINK_MAX_CHARS + 1];
 
 /* ================= helpers ================= */
@@ -387,13 +393,28 @@ static bool puzzle_calls_allowed(const NetCtx &c, const AppState &st, uint32_t u
 /* The BOOT demo ring and bomb_config_service() live in the LINK task now (see bomb_config.h):
  * the LLM jobs below can block this task for up to 30 s per call. */
 
+/* O10: the puzzle set follows the effective difficulty level (mode setting, or the score band in Auto).
+ * Runs every pass, before the MCX sync so a BOMB_CONFIG sent this pass already finds the new set; the work
+ * itself is cheap (one history copy) and puzzle_gen_apply_level only acts when the level differs from the
+ * cached set's. It never acts inside a bomb session (CLAUDE.md session guard): the refill waits for it. */
+static void service_difficulty_level(void)
+{
+    AppState *const st = s_puzzle_state;
+    Difficulty d;
+
+    if (!app_state_read(st) || !bomb_config_difficulty(&d)) {
+        return;                                    /* state or history busy: try again next pass */
+    }
+    (void)puzzle_gen_apply_level(d.level, st->session_active || game_ringing(*st));
+}
+
 /* LLM jobs: the puzzle run and the briefing. Together they do at most ONE LLM call per pass: the
  * briefing waits while a puzzle run is in progress, so the loop (timetable, results, alarm sync)
  * is back within one call's timeout. */
 static void service_llm_jobs(const NetCtx &c, uint32_t now_ms, uint32_t unix_now)
 {
-    static AppState st;                            /* static: ~1.3 KB that would stay on the stack during the TLS call */
-    const bool gen_ok = app_state_read(&st) && puzzle_calls_allowed(c, st, unix_now);
+    AppState *const st = s_puzzle_state;           /* PSRAM: ~1.3 KB that would stay on the stack during the TLS call */
+    const bool gen_ok = app_state_read(st) && puzzle_calls_allowed(c, *st, unix_now);
     const bool net_ok = c.wifi_up && c.time_valid;
     const uint32_t unix_valid = c.time_valid ? unix_now : 0u;
 
@@ -451,7 +472,27 @@ static void print_history(uint32_t unix_now)
     }
 }
 
-static void run_command(NetCtx &c, const char *cmd, uint32_t unix_now)
+/* The line did not match any command: show what actually arrived (printable text and hex), so a
+ * garbled USB-serial link (wrong line ending, altered bytes) is visible instead of just "help". */
+static void print_unknown_command(const char *cmd, size_t len)
+{
+    char text[APP_CMD_ECHO_BYTES + 1];
+    char hex[APP_CMD_ECHO_BYTES * 3 + 1];
+    const size_t shown = (len < APP_CMD_ECHO_BYTES) ? len : APP_CMD_ECHO_BYTES;
+    size_t i;
+
+    for (i = 0; i < shown; i++) {
+        const unsigned char b = (unsigned char)cmd[i];
+
+        text[i] = (b >= 0x20u && b <= 0x7Eu) ? (char)b : '.';
+        snprintf(&hex[i * 3u], 4u, i + 1u < shown ? "%02x " : "%02x", b);
+    }
+    text[shown] = '\0';
+    hex[shown == 0u ? 0u : shown * 3u - 1u] = '\0';
+    Serial.printf("[cmd] unknown: '%s%s' hex: %s%s\n", text, len > shown ? "..." : "", hex, len > shown ? " ..." : "");
+}
+
+static void run_command(NetCtx &c, const char *cmd, size_t len, uint32_t unix_now)
 {
     if (strncmp(cmd, "lead ", 5) == 0) {
         Serial.printf("[cmd] lead_min = %d\n", settings_set_lead_min(atoi(cmd + 5)));
@@ -471,11 +512,20 @@ static void run_command(NetCtx &c, const char *cmd, uint32_t unix_now)
         puzzle_print_set();
     } else if (strcmp(cmd, "diff") == 0) {
         bomb_config_print_difficulty();
+    } else if (strcmp(cmd, "i2c") == 0) {
+        i2c_bus_report(false);
+    } else if (strcmp(cmd, "mpu") == 0) {
+#if APP_USE_GYRO
+        gyro_task_dump_regs();
+#else
+        Serial.println("[cmd] gyro disabled (APP_USE_GYRO 0)");
+#endif
     } else if (strcmp(cmd, "brief") == 0) {
         briefing_request();
         Serial.println("[cmd] briefing run requested");
     } else {
-        Serial.println("[cmd] commands: lead <15..180> | link <url> | refresh | resched | hist | puzzles | ai | diff | brief");
+        print_unknown_command(cmd, len);
+        Serial.println("[cmd] commands: lead <15..180> | link <url> | refresh | resched | hist | puzzles | ai | diff | brief | i2c | mpu");
     }
 }
 
@@ -491,7 +541,7 @@ static void serial_commands(NetCtx &c, uint32_t unix_now)
         if (ch == '\r' || ch == '\n') {
             if (len > 0u && !overflow) {
                 line[len] = '\0';
-                run_command(c, line, unix_now);
+                run_command(c, line, len, unix_now);
             }
             len = 0;
             overflow = false;
@@ -566,6 +616,7 @@ static void network_task(void *arg)
         service_outage_end(c, now);
         handle_settings(c, now);
         handle_results(c, unix_valid);
+        service_difficulty_level();
         puzzle_flush_used();                       /* the link task marks pairs used in RAM; the flash write is ours */
         if (c.time_valid) {
             if (c.wifi_up) {
@@ -589,6 +640,15 @@ static void network_task(void *arg)
     }
 }
 
+/* The level a new puzzle set is built for at boot: the mode, or the score of the stored mornings. */
+static int initial_level(void)
+{
+    Difficulty d;
+
+    (void)bomb_config_difficulty(&d);
+    return d.level;
+}
+
 bool network_task_start(void)
 {
     NetCtx &c = s_ctx;
@@ -597,11 +657,17 @@ bool network_task_start(void)
     c.tt_due = true;                               /* fetch once at boot, as soon as Wi-Fi + time are valid */
     c.tt_last_nightly_day = -1;
     c.resched_pending = true;                      /* schedule from the flash cache as soon as the time is valid */
-    if (!flash_store_init() || !timetable_init() || !history_init() || !puzzle_gen_init()) {
+    s_lessons = mem_big_new<Lesson>(SCHED_MAX_LESSONS, "network lessons");
+    s_puzzle_state = mem_big_new<AppState>(1u, "network app state");
+    if (s_lessons == NULL || s_puzzle_state == NULL || !flash_store_init()) {
         Serial.println("[net] could not create the storage objects");
         return false;
     }
-    (void)briefing_init();
+    settings_load_difficulty();                    /* RAM copy of the mode, before the first difficulty() call */
+    if (!timetable_init() || !history_init() || !puzzle_gen_init(initial_level()) || !briefing_init()) {
+        Serial.println("[net] could not create the storage objects");
+        return false;
+    }
     bomb_config_init();                            /* last: from now on the link task may send BOMB_CONFIG */
     (void)mirror_init();
     (void)timetable_load_cache();                  /* offline-first: the cache works with no network */

@@ -8,7 +8,7 @@
  * correct by construction (host tests solve every dial code 0000..9999 and every wire k of n).
  *
  * Contents: JSON/text helpers for model replies, puzzle validation, the template bank, the
- * difficulty rule, BOMB_CONFIG assembly and the small pair-selection rules.
+ * BOMB_CONFIG assembly and the small pair-selection rules.
  */
 #ifndef PUZZLE_LOGIC_H
 #define PUZZLE_LOGIC_H
@@ -16,34 +16,25 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "difficulty.h"
 #include "history_ring.h"
 #include "../game/game_config.h"
 #include "../shared/protocol.h"
 
 /* ---- Sizes ---- */
 #define PUZZLE_PAIRS            4       /* dial + wire puzzles per set (pair i = dial[i] + wire[i]) */
-#define PUZZLE_DIAL_TEXT_MAX    80      /* OLED budget for the dial clue */
+#define PUZZLE_DIAL_TEXT_MAX    80      /* storage budget (buffers, flash blob) of the dial clue */
 #define PUZZLE_WIRE_TEXT_MAX    60
+#define PUZZLE_DIAL_TEXT_LIMIT  63      /* what validate_puzzle accepts (O3): 3 OLED rows of 21 columns, nothing scrolls */
+#define PUZZLE_WIRE_TEXT_LIMIT  42      /* 2 OLED rows */
 #define PUZZLE_TEXT_MIN         10
 #define PUZZLE_TEXT_BUF         (PUZZLE_DIAL_TEXT_MAX + 1)
 #define PUZZLE_MODEL_LEN        16      /* "qwen3.6:35b" + NUL */
 #define PUZZLE_ANSWER_LEN       8
-#define PUZZLE_EXPLAIN_MAX      60
-#define PUZZLE_MAGIC            0x505A4C31u /* "PZL1": bump when PuzzleSet changes */
-
-/* ---- Difficulty rule (CLAUDE.md "Difficulty"): deterministic, from the last mornings ---- */
-#define DIFF_WINDOW             7       /* mornings looked at */
-#define DIFF_BASE_MODULES       3
-#define DIFF_BASE_TIME_S        180
-#define DIFF_SNOOZE_LIMIT       3       /* snoozes in the window that add a module */
-#define DIFF_STRIKE_AVG         2       /* average strikes per morning that adds time pressure... */
-#define DIFF_TIME_STEP_S        30      /* ...as one step less/more time */
-#define DIFF_TIME_MAX_S         240
-#define DIFF_TIME_MIN_S         120
-#define DIFF_CLEAN_RUN          3       /* recent mornings with no snooze that earn more time */
-#define DIFF_MODULES_MAX        PROTO_MAX_MODULES
+#define PUZZLE_MAGIC            0x505A4C32u /* "PZL2": bump when PuzzleSet changes (PZL2 added Puzzle.level) */
 
 enum PuzzleKind { PUZZLE_DIAL = 1, PUZZLE_WIRE = 2 };
+#define PUZZLE_LEVEL_MAX        3       /* Puzzle.level: 1 EASY, 2 NORMAL, 3 HARD (the PrLevel numbers), 0 = not rated */
 enum PuzzleSource { PUZZLE_SRC_BANK = 0, PUZZLE_SRC_AI = 1 };
 
 /* One puzzle. memset the whole struct before filling it (it is stored in flash as a blob). */
@@ -58,6 +49,7 @@ struct Puzzle {
     uint8_t source;                         /* PuzzleSource */
     uint8_t verified;                       /* 1 = the checker model reproduced the answer */
     uint8_t attempts;                       /* setter/checker rounds used (0 for the bank) */
+    uint8_t level;                          /* PrLevel rating of the rules behind the text (1 EASY .. 3 HARD, 0 = not rated) */
     char setter[PUZZLE_MODEL_LEN];          /* model that wrote the text */
     char checker[PUZZLE_MODEL_LEN];         /* model that solved it */
     char checker_answer[PUZZLE_ANSWER_LEN]; /* what the checker said (also when it was wrong) */
@@ -67,7 +59,8 @@ struct PuzzleSet {
     uint32_t magic;                         /* PUZZLE_MAGIC */
     uint32_t generated_unix;                /* 0 = built from the bank only, not stored */
     uint8_t ai_count;                       /* puzzles of source AI */
-    uint8_t reserved[3];
+    uint8_t level;                          /* level (PrLevel) the set was built for; 0 = a P2-era set, built for NORMAL (O10) */
+    uint8_t reserved[2];
     Puzzle dial[PUZZLE_PAIRS];
     Puzzle wire[PUZZLE_PAIRS];
 };
@@ -87,8 +80,29 @@ bool extract_json_object(const char *text, char *out, size_t out_size);
  * such as 4271. False if the key is missing, malformed, or the value does not fit. */
 bool json_get_string(const char *json, const char *key, char *out, size_t out_size);
 
-/* Text length 10..80 (wire 10..60), printable ASCII only (0x20..0x7E) and, for DIAL, the 4-digit
- * answer must not appear as a literal substring. answer: "4271" for DIAL, "3" for WIRE. */
+/* Why a riddle text is refused (puzzle_text_problem), cheapest checks first. */
+enum PuzzleTextProblem {
+    PTP_OK = 0,
+    PTP_ARGS,               /* NULL text, unknown kind, or an answer of the wrong shape */
+    PTP_TOO_SHORT,          /* fewer than PUZZLE_TEXT_MIN characters */
+    PTP_TOO_LONG,           /* more than PUZZLE_DIAL_TEXT_LIMIT (dial) / PUZZLE_WIRE_TEXT_LIMIT (wire) */
+    PTP_BAD_CHAR,           /* not printable ASCII 0x20..0x7E */
+    PTP_LEAKS_CODE,         /* DIAL: the 4-digit answer appears as a literal substring */
+    PTP_LEAKS_DIGITS,       /* DIAL: the digits of the text, in order, spell the answer ("2,5,8,7") */
+    PTP_LEAKS_NUMBER        /* WIRE (O4): a standalone number token, ordinals included ("3", "3rd"), equals the answer */
+};
+int puzzle_text_problem(const char *text, int kind, const char *answer);
+const char *puzzle_text_problem_name(int problem);
+
+/* Does the text contain `value` as a standalone number token (O4)? A token is a run of digits that
+ * is not glued to a letter or digit before it, and is followed by nothing alphanumeric except an
+ * ordinal suffix (st nd rd th): "3", "n-3", "(3)" and "3rd" are tokens; "w3" and "3m" are not. */
+bool puzzle_text_has_number(const char *text, int value);
+
+/* Text length 10..63 for DIAL (O3), 10..42 for WIRE, printable ASCII only (0x20..0x7E); for DIAL
+ * the 4-digit answer must not appear as a literal substring nor as the digits of the text in order;
+ * for WIRE no standalone number token may equal the answer (O4). answer: "4271" for DIAL, "3" for
+ * WIRE. True exactly when puzzle_text_problem() is PTP_OK. */
 bool validate_puzzle(const char *text, int kind, const char *answer);
 
 /* Checker reply {"answer":"..."} -> normalised answer in out. DIAL: exactly 4 digits (spaces
@@ -101,7 +115,9 @@ void dial_code_text(const uint8_t code[PROTO_DIAL_DIGITS], char out[PROTO_DIAL_D
 bool puzzle_answer_text(const Puzzle &p, char *out, size_t out_size);
 /* Random picks from one 32-bit random word (esp_random on the board). */
 void dial_code_from_random(uint32_t r, uint8_t code[PROTO_DIAL_DIGITS]);
-void wire_pick_from_random(uint32_t r, int *wire_count, int *k);
+/* The wire count comes from the level's range (difficulty_level_spec: EASY 3-4, NORMAL 4-5, HARD 6), the
+ * wire from 1..count. An unknown level is treated as NORMAL. */
+void wire_pick_from_random(int level, uint32_t r, int *wire_count, int *k);
 
 /* ================= template bank (correct by construction) ================= */
 #define DIAL_FAMILIES   4
@@ -132,7 +148,8 @@ struct DialClue {
 };
 
 /* variant: family = variant % 4 (chain / reverse chain / pivot + sum / pair sums and differences),
- * variant / 4 % 4 changes the details (start digit, multiply instead of add, pairing, pivot). */
+ * variant / 4 % 4 changes the details (start digit, multiply instead of add, pairing, pivot).
+ * A variant whose text would spell the code in its digits is replaced by the next valid one. */
 DialClue dial_clue_build(const uint8_t code[PROTO_DIAL_DIGITS], unsigned variant);
 /* Renders to e.g. "1st=3; 2nd=1st+4; 3rd=2nd-5; 4th=1st*3". Returns the length, 0 if it does not fit. */
 size_t dial_clue_render(const DialClue &clue, char *out, size_t out_size);
@@ -169,20 +186,28 @@ void puzzle_set_fill_bank(PuzzleSet *s, const uint32_t rnd[PUZZLE_BANK_WORDS]);
 /* Sanity check of a set read back from flash: magic, kinds, ranges, terminated text. */
 bool puzzle_set_valid(const PuzzleSet &s);
 
-/* ================= difficulty ================= */
-struct Difficulty {
-    uint8_t module_count;                   /* 3..4 */
-    uint16_t time_limit_s;                  /* 120..240 */
-    char explanation[PUZZLE_EXPLAIN_MAX + 1];
-};
-
-/* recent: newest first, n records (only the first DIFF_WINDOW count). Empty history = base. */
-Difficulty difficulty(const HistRecord *recent, int n);
-
 /* ================= BOMB_CONFIG ================= */
-/* Modules DIAL, WIRES, TRIPWIRE (+ DIAL when 4), the puzzle answers, default tripwire band and
- * strikes. Every field is inside the MCX's range checks. */
-void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &wire, proto_bomb_config_t *out);
+/* Tripwire band (O11, user: the HC-SR04 is not sensitive enough for a narrower band and reads beyond
+ * ~40 cm are unreliable): the band is always PUZZLE_TRIP_WIDTH_CM wide (the hold time stays the game's
+ * GAME_TRIP_HOLD_MS) and its start moves per bomb, the same at every level. Starts 10..30 cm, so the
+ * bands run from 10-20 to 30-40 cm. */
+#define PUZZLE_TRIP_MIN_BASE_CM     10u
+#define PUZZLE_TRIP_START_VALUES    21u     /* start = base + r % 21 -> 10..30 */
+#define PUZZLE_TRIP_WIDTH_CM        10u
+#define PUZZLE_TRIP_FAR_LIMIT_CM    40u     /* no band reaches beyond this */
+static_assert(PUZZLE_TRIP_MIN_BASE_CM + PUZZLE_TRIP_START_VALUES - 1u + PUZZLE_TRIP_WIDTH_CM == PUZZLE_TRIP_FAR_LIMIT_CM,
+              "the farthest band ends exactly at the limit");
+static_assert(PUZZLE_TRIP_MIN_BASE_CM >= GAME_TRIP_BOUND_MIN_CM && PUZZLE_TRIP_FAR_LIMIT_CM <= GAME_TRIP_BOUND_MAX_CM,
+              "inside the bounds the MCX range-checks");
+
+/* One 32-bit random word (esp_random on the board) -> a band of PUZZLE_TRIP_WIDTH_CM. */
+void trip_band_from_random(uint32_t r, uint8_t *min_cm, uint8_t *max_cm);
+
+/* Modules DIAL, WIRES, TRIPWIRE, LIGHTS (every level asks for all four), the time of the level, the puzzle answers (wire count
+ * and wire come from the puzzle actually used, so the clue and the config never disagree), a tripwire
+ * band from trip_rnd and the default strikes. Every field is inside the MCX's range checks. */
+void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &wire, uint32_t trip_rnd,
+                         proto_bomb_config_t *out);
 
 /* ================= selection rules ================= */
 /* Lowest pair index whose bit is clear in used_mask, -1 if all `count` are used. */
@@ -190,8 +215,9 @@ int pair_next_unused(uint8_t used_mask, int count);
 /* Marks idx used. When that was the last unused pair the mask restarts at 0 and *cycled is true. */
 uint8_t pair_mark_used(uint8_t used_mask, int idx, int count, bool *cycled);
 
-/* Order in which the checker chain is tried: every model except the setter's first (chain
- * order), the setter's own model last (only used when no other model answers). Returns the count. */
+/* Order in which the checker chain is tried: every model EXCEPT the setter's own, in chain order
+ * (O5: the setter never checks itself, there is no fallback to its own model). Returns the count,
+ * which is 0 when the chain holds no other model. */
 int checker_order(const char *const *chain, int n, const char *setter, int *order_out);
 
 /* Is a stored set still good? Needs at least one AI puzzle and an age of at most max_age_s.
