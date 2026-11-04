@@ -203,7 +203,7 @@
 #define APP_KEY_PUZZLE_USED         "pz_used"   /* SPENT-pair mask: a pair a bomb started with, not yet refilled by the bank */
 #define APP_CONFIG_PENDING_MS       5000u   /* one BOMB_CONFIG at a time; give up on its ACK after this */
 
-/* ---- Briefing + coach (one LLM call after each nightly puzzle run, same setter chain) ---- */
+/* ---- Briefing + coach (one LLM call, same setter chain; today it starts after each finished puzzle redo or level refill, P3 will replace that trigger) ---- */
 #define APP_BRIEF_TEMP              0.7f
 #define APP_BRIEF_MAX_TOKENS        2000    /* same thinking-model budget as APP_LLM_MAX_TOKENS */
 #define APP_BRIEF_MAGIC             0x42524631u /* "BRF1": bump when BriefText changes */

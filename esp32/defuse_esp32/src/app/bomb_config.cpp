@@ -217,8 +217,11 @@ static void service_locked(const AppState &st)
     }
     state = st.game.state;
 
-    if (bomb_just_started(s_prev_state, state) && s_active_pair >= 0 && !s_active_consumed) {
-        /* the bomb took the config the MCX held; if the puzzle lock is busy, try again next pass */
+    if (state == PROTO_STATE_BOMB_ACTIVE && s_active_pair >= 0 && !s_active_consumed) {
+        /* The bomb took the config the MCX held. Tried on EVERY pass while it runs, not only on the start edge
+         * (bomb_just_started is the first such pass): if the puzzle lock was busy the pair would otherwise never
+         * be spent and the next bomb would show the same puzzle (D4). Safe because a new take (send_locked) only
+         * happens outside BOMB_ACTIVE, and on_ack() resets s_active_consumed for each newly ACKed take. */
         s_active_consumed = puzzle_consume_pair(s_active_pair);
     }
     if (config_trigger_needed(s_prev_state, state, st.session_active)) {
@@ -238,9 +241,11 @@ static void service_locked(const AppState &st)
             if (st.link_up && send_locked("new puzzle set")) {
                 s_resend_new_set = false;
             }
-        } else if (state == PROTO_STATE_IDLE) {
-            s_resend_new_set = false;                   /* the next SET_ALARM carries the new set */
         }
+        /* In any other state (IDLE, a session, ringing) the flag simply stays set until the next ARMED outside a
+         * session. It is NOT cleared in IDLE: the ESP32 can still see IDLE for up to ~1 s after SET_ALARM plus the
+         * config went out, and an upgrade of the reserved pair raised in that window would be lost. A redundant
+         * resend of an unchanged pair is harmless. */
     }
 }
 
