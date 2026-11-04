@@ -450,20 +450,54 @@ static DemoCtx demo_ctx_ok(void)
     return c;
 }
 
+/* A real timetable alarm the caller can see: it is the scheduled alarm, and it is not a demo. */
+static void set_real_alarm(DemoCtx *c, uint32_t t)
+{
+    c->alarm_unix = t;
+    c->alarm_is_demo = false;
+    c->real_alarm_unix = t;
+}
+
 static void test_demo_check_start(void)
 {
     DemoCtx c = demo_ctx_ok();
 
     CHECK(web_demo_check(2, c) == DEMO_OK);                                  /* idle, no alarm at all */
-    c.alarm_unix = c.now + 8 * 3600u;                                        /* real alarm tomorrow morning */
+    set_real_alarm(&c, c.now + 8 * 3600u);                                   /* real alarm tomorrow morning */
     CHECK(web_demo_check(30, c) == DEMO_OK);
-    c.alarm_unix = c.now + 29 * 60u;                                         /* real alarm before a 30 min demo */
+    set_real_alarm(&c, c.now + 29 * 60u);                                    /* real alarm before a 30 min demo */
     CHECK(web_demo_check(30, c) == DEMO_ERR_REAL_FIRST);
-    CHECK(web_demo_check(2, c) == DEMO_OK);                                  /* but a 2 min demo is before it */
-    c.alarm_unix = c.now + 2 * 60u + APP_DEMO_ALARM_SLACK_S;                 /* exactly the same second */
+    set_real_alarm(&c, c.now + 2 * 60u + APP_DEMO_ALARM_SLACK_S);            /* exactly the same second */
     CHECK(web_demo_check(2, c) == DEMO_ERR_REAL_FIRST);
-    c.alarm_unix = c.now - 30u;                                              /* a real alarm that just rang */
+    set_real_alarm(&c, c.now - 30u);                                         /* a real alarm that just rang */
     CHECK(web_demo_check(2, c) == DEMO_ERR_REAL_FIRST);
+}
+
+/* A demo must ring at least APP_DEMO_CLEAR_S before the real alarm (its session must end first). */
+static void test_demo_check_clear_boundary(void)
+{
+    DemoCtx c = demo_ctx_ok();
+    const uint32_t demo_at = sched_demo_alarm_at(c.now, 2, APP_DEMO_ALARM_SLACK_S);
+    char msg[80];
+
+    set_real_alarm(&c, demo_at + APP_DEMO_CLEAR_S);
+    CHECK(web_demo_check(2, c) == DEMO_OK);                                  /* exactly CLEAR_S apart: allowed */
+    set_real_alarm(&c, demo_at + APP_DEMO_CLEAR_S - 1u);
+    CHECK(web_demo_check(2, c) == DEMO_ERR_TOO_CLOSE);                       /* one second short */
+    set_real_alarm(&c, demo_at + 1u);
+    CHECK(web_demo_check(2, c) == DEMO_ERR_TOO_CLOSE);                       /* just after the demo */
+    set_real_alarm(&c, demo_at);
+    CHECK(web_demo_check(2, c) == DEMO_ERR_REAL_FIRST);                      /* same second: the real one first */
+
+    const uint32_t utc_midnight = (c.now / 86400u) * 86400u;
+    web_demo_err_message(DEMO_ERR_TOO_CLOSE, utc_midnight + 23 * 3600u, msg, sizeof(msg));
+    CHECK(strcmp(msg, "your real alarm at 07:00 is too close") == 0);       /* 23:00 UTC = 07:00 UTC+8 */
+    web_demo_err_message(DEMO_ERR_REAL_FIRST, utc_midnight + 6 * 3600u + 5 * 60u, msg, sizeof(msg));
+    CHECK(strcmp(msg, "your real alarm at 14:05 rings first") == 0);        /* 06:05 UTC = 14:05 UTC+8 */
+    web_demo_err_message(DEMO_ERR_LINK_DOWN, 0u, msg, sizeof(msg));
+    CHECK(strcmp(msg, "the MCX link is down") == 0);
+    web_demo_err_message(DEMO_ERR_TOO_CLOSE, 0u, msg, 12u);                  /* truncated, still terminated */
+    CHECK(strlen(msg) == 11u);
 }
 
 static void test_demo_check_refusals(void)
@@ -514,6 +548,16 @@ static void test_demo_check_cancel_and_replace(void)
     CHECK(web_demo_check(30, c) == DEMO_OK);                                 /* demo vs demo: no "real first" */
     c.alarm_unix = c.now + 30u;
     CHECK(web_demo_check(5, c) == DEMO_ERR_REPLACE_LATE);
+
+    /* Replacing a pending demo: the real alarm behind it still counts (the network task knows it). */
+    c.alarm_unix = c.now + 600u;                                             /* the pending demo */
+    c.real_alarm_unix = c.now + 15 * 60u;                                    /* nearer than a 30 min demo */
+    CHECK(web_demo_check(30, c) == DEMO_ERR_REAL_FIRST);
+    CHECK(web_demo_check(2, c) == DEMO_ERR_TOO_CLOSE);                       /* 13 min gap < CLEAR_S */
+    c.real_alarm_unix = c.now + 5 * 3600u;
+    CHECK(web_demo_check(30, c) == DEMO_OK);
+    c.real_alarm_unix = 0u;                                                  /* web task: real alarm not visible */
+    CHECK(web_demo_check(30, c) == DEMO_OK);                                 /* fast path passes; the network task decides */
 }
 
 /* ================= game panel helpers ================= */
@@ -574,6 +618,7 @@ int main(void)
     test_timetable_json_overflow_is_reported();
     test_demo_minutes_parse();
     test_demo_check_start();
+    test_demo_check_clear_boundary();
     test_demo_check_refusals();
     test_demo_check_cancel_and_replace();
     printf("test_web: %d checks, %d failed\n", g_checks, g_failed);

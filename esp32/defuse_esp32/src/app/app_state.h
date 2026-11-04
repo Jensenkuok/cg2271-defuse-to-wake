@@ -57,6 +57,7 @@ struct AppState {
     bool time_valid;
     uint32_t alarm_unix;          /* 0 = none */
     bool alarm_is_demo;           /* alarm_unix is a demo morning alarm (no class behind it) */
+    char demo_msg[APP_DEMO_MSG_LEN]; /* last demo result for the page: a refusal or "dropped" text, "" = none */
     bool next_valid;              /* a next class exists (alarm_unix != 0) */
     uint32_t next_start_unix;     /* start of that class */
     char next_module[SCHED_MODULE_LEN];
@@ -100,6 +101,8 @@ void app_state_set_alarm(uint32_t alarm_unix);
 /* The scheduler's answer: the alarm and the class it is for. alarm_unix = 0 / lesson NULL = no class.
  * is_demo: a demo morning alarm (lesson is then a pseudo-lesson); the web page reads it as alarm.demo. */
 void app_state_set_schedule(uint32_t alarm_unix, uint32_t class_start_unix, const Lesson *lesson, bool is_demo = false);
+/* Network task: the outcome of the last demo request ("" = accepted / nothing to say). Truncated to fit. */
+void app_state_set_demo_msg(const char *msg);
 void app_state_set_timetable_info(uint8_t lessons, uint32_t fetched_unix);
 void app_state_set_mirror_pending(uint8_t pending);
 void app_state_set_bomb_config(uint8_t wires, uint8_t trip_min, uint8_t trip_max, uint8_t max_strikes);

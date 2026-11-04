@@ -153,6 +153,10 @@
 /* ---- Demo morning alarm (a SET_ALARM for now + N minutes through the normal alarm path) ---- */
 #define APP_DEMO_ALARM_MAX_MIN      30      /* longest demo delay the page / Serial accept (0 = cancel) */
 #define APP_DEMO_ALARM_SLACK_S      5       /* added to now + N min so N = 1 stays above SCHED_MIN_LEAD_S */
+#define APP_DEMO_CLEAR_S            1800    /* a demo must ring at least this long before the real alarm: a demo session
+                                             * with snoozes and explosions has to end first, because the session guard
+                                             * sends no SET_ALARM during a session */
+#define APP_DEMO_MSG_LEN            64      /* last demo result text for the page (app_state.demo_msg) */
 
 /* ---- Timetable (NUSMods) ---- */
 #define APP_NUSMODS_URL_PREFIX      "https://api.nusmods.com/v2/2026-2027/modules/"

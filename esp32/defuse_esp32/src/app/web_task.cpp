@@ -275,6 +275,7 @@ static void put_alarm(JsonBuf *j, uint32_t unix_now)
     jb_obj(j);
     jb_kv_bool(j, "valid", valid);
     jb_kv_bool(j, "demo", valid && s_st->alarm_is_demo);   /* a demo morning alarm, not a class alarm */
+    jb_kv_str(j, "demo_msg", s_st->demo_msg);               /* why the network task refused / dropped the last demo, "" = fine */
     jb_kv_uint(j, "unix", valid ? s_st->alarm_unix : 0u);
     jb_kv_str(j, "local", when);
     jb_kv_str(j, "class_local", cls);
@@ -736,15 +737,14 @@ static void handle_demo_alarm(void)
     ctx.now = s_st->time_valid ? (uint32_t)time(nullptr) : 0u;
     ctx.alarm_unix = s_st->next_valid ? s_st->alarm_unix : 0u;
     ctx.alarm_is_demo = s_st->alarm_is_demo;
+    /* Fast path only: while a demo is pending this task sees just the demo, not the real alarm behind
+     * it (0 = unknown). The network task repeats the check with the real alarm and publishes a
+     * refusal as alarm.demo_msg, so a reply "ok" here means "accepted for checking". */
+    ctx.real_alarm_unix = (!ctx.alarm_is_demo) ? ctx.alarm_unix : 0u;
     err = web_demo_check(minutes, ctx);
-    if (err == DEMO_ERR_REAL_FIRST) {
-        fmt_hhmm_local(hhmm, sizeof(hhmm), ctx.alarm_unix);
-        snprintf(msg, sizeof(msg), "your real alarm at %s rings first", hhmm);
-        reply(409, false, "error", msg);
-        return;
-    }
     if (err != DEMO_OK) {
-        reply(409, false, "error", web_demo_err_text(err));
+        web_demo_err_message(err, ctx.real_alarm_unix, msg, sizeof(msg));
+        reply(409, false, "error", msg);
         return;
     }
     network_request_demo_alarm(minutes);

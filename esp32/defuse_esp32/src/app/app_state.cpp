@@ -126,6 +126,11 @@ void app_state_set_schedule(uint32_t alarm_unix, uint32_t class_start_unix, cons
     });
 }
 
+void app_state_set_demo_msg(const char *msg)
+{
+    with_lock([&]() { snprintf(s_state->demo_msg, sizeof(s_state->demo_msg), "%s", msg != NULL ? msg : ""); });
+}
+
 void app_state_set_timetable_info(uint8_t lessons, uint32_t fetched_unix)
 {
     with_lock([&]() { s_state->tt_lessons = lessons; s_state->tt_fetched_unix = fetched_unix; });

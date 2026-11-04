@@ -180,11 +180,33 @@ DemoErr web_demo_check(int minutes, const DemoCtx &ctx)
     if (ctx.alarm_is_demo && has_alarm && ctx.alarm_unix <= ctx.now + SCHED_MIN_LEAD_S) {
         return DEMO_ERR_REPLACE_LATE;
     }
-    if (!ctx.alarm_is_demo && has_alarm &&
-        ctx.alarm_unix <= sched_demo_alarm_at(ctx.now, minutes, APP_DEMO_ALARM_SLACK_S)) {
-        return DEMO_ERR_REAL_FIRST;           /* equal times count too: two alarms at once */
+    if (ctx.real_alarm_unix != 0u) {
+        const uint32_t demo_at = sched_demo_alarm_at(ctx.now, minutes, APP_DEMO_ALARM_SLACK_S);
+
+        if (ctx.real_alarm_unix <= demo_at) {
+            return DEMO_ERR_REAL_FIRST;       /* equal times count too: two alarms at once */
+        }
+        if (ctx.real_alarm_unix - demo_at < (uint32_t)APP_DEMO_CLEAR_S) {
+            return DEMO_ERR_TOO_CLOSE;
+        }
     }
     return DEMO_OK;
+}
+
+void web_demo_err_message(DemoErr err, uint32_t real_alarm_unix, char *out, size_t out_size)
+{
+    if (out == NULL || out_size == 0u) {
+        return;
+    }
+    if (err == DEMO_ERR_REAL_FIRST || err == DEMO_ERR_TOO_CLOSE) {
+        const uint32_t minute_of_day =
+            ((real_alarm_unix + (uint32_t)SCHED_TZ_OFFSET_S) % (uint32_t)SCHED_SEC_PER_DAY) / (uint32_t)SCHED_SEC_PER_MIN;
+
+        snprintf(out, out_size, "your real alarm at %02u:%02u %s", (unsigned)(minute_of_day / MINUTES_PER_HOUR),
+                 (unsigned)(minute_of_day % MINUTES_PER_HOUR), err == DEMO_ERR_REAL_FIRST ? "rings first" : "is too close");
+        return;
+    }
+    snprintf(out, out_size, "%s", web_demo_err_text(err));
 }
 
 const char *web_demo_err_text(DemoErr err)
@@ -198,6 +220,7 @@ const char *web_demo_err_text(DemoErr err)
     case DEMO_ERR_BUSY:         return "a bomb is already running";
     case DEMO_ERR_NO_TIME:      return "the clock is not set yet (no Wi-Fi time)";
     case DEMO_ERR_REAL_FIRST:   return "your real alarm rings first";
+    case DEMO_ERR_TOO_CLOSE:    return "your real alarm is too close";
     case DEMO_ERR_NO_DEMO:      return "no demo alarm is pending";
     case DEMO_ERR_CANCEL_LATE:  return "too late to cancel: the demo alarm rings in under a minute";
     case DEMO_ERR_REPLACE_LATE: return "too late to change: the demo alarm rings in under a minute";

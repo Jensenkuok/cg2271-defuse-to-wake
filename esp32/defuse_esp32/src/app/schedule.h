@@ -107,9 +107,10 @@ NextAlarm next_alarm(const Lesson *lessons, int count, uint32_t now_unix, int le
                      uint32_t consumed_class_start_unix = 0u);
 
 /* ---- Demo morning alarm (pure helpers; the network task owns the state) ---- */
-/* Which alarm the scheduler uses: the demo alarm when it is set (non-zero) and still in the future
- * (> now), otherwise the real timetable alarm (0 = none). A demo that is past never wins, so it
- * cannot hide the real alarm; the demo itself is cleared by the network task when its session ends. */
+/* Which alarm the scheduler uses: the demo alarm when it is set (non-zero), still in the future
+ * (> now) and the real timetable alarm is none (0) or later than the demo; otherwise the real one.
+ * So the earlier future alarm wins and a demo can never push the real alarm out. A past demo never
+ * wins either; the demo itself is cleared by the network task when its session ends. */
 uint32_t sched_pick_alarm(uint32_t real_alarm, uint32_t demo_alarm, uint32_t now);
 
 /* The unix time a demo requested "minutes" from now rings at: now + minutes * 60 + slack_s. */

@@ -203,8 +203,18 @@ static void reschedule(NetCtx &c, uint32_t unix_now)
     a = next_alarm(s_lessons, n, c.first_schedule_done ? unix_now : unix_now - ALARM_BOOT_GRACE_S,
                    settings_get_lead_min(), c.consumed_class_start_unix);
     c.first_schedule_done = true;
-    /* A pending demo replaces the real alarm until it is used up (drop_demo); a past demo never wins. */
+    /* A pending demo replaces the real alarm only while it is EARLIER (sched_pick_alarm). If the real
+     * alarm now comes at or before the demo (a bigger lead time, a timetable refresh), the demo is
+     * dropped so the real one is sent: a demo must never cost the user the real alarm. */
     new_alarm = sched_pick_alarm(a.found ? a.alarm_unix : 0u, c.demo_alarm_unix, unix_now);
+    if (c.demo_alarm_unix > unix_now && new_alarm != c.demo_alarm_unix) {
+        char note[APP_DEMO_MSG_LEN];
+
+        web_demo_err_message(DEMO_ERR_REAL_FIRST, new_alarm, note, sizeof(note));
+        Serial.println("[demo] dropped: real alarm first");
+        app_state_set_demo_msg(note);                  /* "your real alarm at HH:MM rings first" */
+        c.demo_alarm_unix = 0u;
+    }
     use_demo = (new_alarm != 0u && new_alarm == c.demo_alarm_unix);
     if (new_alarm == c.cur_alarm_unix && use_demo == c.cur_is_demo) {
         return;
@@ -525,12 +535,22 @@ static void service_connectivity(NetCtx &c, uint32_t now_ms, uint32_t *unix_now)
  * session is running, so a demo never overwrites the alarm a snooze left on the MCX; the SET_ALARM
  * itself is sent by sync_with_mcx through the normal TIME_SYNC -> BOMB_CONFIG -> SET_ALARM path.
  * minutes 0 = cancel (the real alarm comes back, or a CANCEL is sent when there is none). */
+/* The real timetable alarm as reschedule() would compute it now (0 = none). Read-only: it changes no state. */
+static uint32_t real_alarm_now(const NetCtx &c, uint32_t unix_now)
+{
+    const int n = timetable_copy(s_lessons, SCHED_MAX_LESSONS);
+    const NextAlarm a = next_alarm(s_lessons, n, unix_now, settings_get_lead_min(), c.consumed_class_start_unix);
+
+    return a.found ? a.alarm_unix : 0u;
+}
+
 static void apply_demo_request(NetCtx &c, int minutes, uint32_t unix_now)
 {
     AppState st;
     DemoCtx ctx;
     DemoErr err;
     char when[48];
+    char note[APP_DEMO_MSG_LEN];
 
     if (minutes < 0 || minutes > APP_DEMO_ALARM_MAX_MIN || !app_state_read(&st)) {
         Serial.println("[demo] ignored: bad minutes or state busy");
@@ -543,11 +563,18 @@ static void apply_demo_request(NetCtx &c, int minutes, uint32_t unix_now)
     ctx.now = unix_now;
     ctx.alarm_is_demo = c.cur_is_demo || c.demo_alarm_unix != 0u;
     ctx.alarm_unix = c.demo_alarm_unix != 0u ? c.demo_alarm_unix : c.cur_alarm_unix;
+    /* The authoritative real-alarm check. While a demo is current, cur_alarm_unix is the demo, so the real
+     * alarm behind it is recomputed; otherwise cur_alarm_unix already is the real one. This is what stops
+     * a REPLACING demo from running into the real alarm, which the web task cannot see. */
+    ctx.real_alarm_unix = c.cur_is_demo ? real_alarm_now(c, unix_now) : c.cur_alarm_unix;
     err = web_demo_check(minutes, ctx);
     if (err != DEMO_OK) {
-        Serial.printf("[demo] refused: %s\n", web_demo_err_text(err));
+        web_demo_err_message(err, ctx.real_alarm_unix, note, sizeof(note));
+        Serial.printf("[demo] refused: %s\n", note);
+        app_state_set_demo_msg(note);                  /* the web reply is already sent: the page reads this */
         return;
     }
+    app_state_set_demo_msg("");
     if (minutes == 0) {
         drop_demo(c);                                  /* the next reschedule restores the real alarm */
         Serial.println("[demo] cancelled");

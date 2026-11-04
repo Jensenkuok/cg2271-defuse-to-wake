@@ -140,8 +140,14 @@ void finish(int mask, const char *model)
     Serial.printf("[brief] coach:    \"%s\"\n", b.coach);
 }
 
-/* Collect the inputs for the next alarm's day. False when there is no class to brief. */
-bool begin_run(uint32_t unix_now)
+enum BeginResult { BEGIN_STARTED = 0, BEGIN_NO_CLASS, BEGIN_DEFERRED };
+
+bool s_defer_logged;                /* "waiting for the demo alarm" is printed once per wait */
+
+/* Collect the inputs for the next alarm's day. BEGIN_NO_CLASS when there is no class to brief,
+ * BEGIN_DEFERRED while a demo alarm is the scheduled one (it has no class, but the real alarm is
+ * only held back, so the request must stay pending until the demo is gone). */
+BeginResult begin_run(uint32_t unix_now)
 {
     static const char *const k_weekday[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
     AppState st;
@@ -155,9 +161,20 @@ bool begin_run(uint32_t unix_now)
     int hh;
     int mm;
 
-    if (!app_state_read(&st) || !st.next_valid || st.next_start_unix == 0u || st.alarm_unix == 0u) {
+    if (!app_state_read(&st)) {
+        return BEGIN_DEFERRED;                       /* state busy: try again on the next pass */
+    }
+    if (st.alarm_is_demo) {
+        if (!s_defer_logged) {
+            s_defer_logged = true;
+            Serial.println("[brief] demo alarm pending: the briefing run waits until it is gone");
+        }
+        return BEGIN_DEFERRED;
+    }
+    s_defer_logged = false;
+    if (!st.next_valid || st.next_start_unix == 0u || st.alarm_unix == 0u) {
         Serial.println("[brief] no next class: nothing to brief");
-        return false;
+        return BEGIN_NO_CLASS;
     }
     s_target_day = local_day(st.next_start_unix);
     sum = collect_summary(unix_now);
@@ -172,7 +189,7 @@ bool begin_run(uint32_t unix_now)
     s_phase = PH_CALL;
     Serial.printf("[brief] generating for local day %u: %d classes, alarm %s (chain starts with %s)\n",
                   (unsigned)s_target_day, s_ncls, alarm_text, k_chain[0]);
-    return true;
+    return BEGIN_STARTED;
 }
 
 /* One LLM call; a model that fails or answers unusably hands over to the next one. */
@@ -291,7 +308,12 @@ void briefing_service(uint32_t now_ms, uint32_t unix_now, bool net_ok, bool gen_
     if (!gen_ok || puzzle_gen_busy()) {
         return;                                      /* never in parallel with a puzzle run */
     }
+    const bool was_manual = s_manual;
+
     s_requested = false;
     s_manual = false;
-    (void)begin_run(unix_now);
+    if (begin_run(unix_now) == BEGIN_DEFERRED) {
+        s_requested = true;                          /* a demo alarm is the scheduled one: ask again next pass */
+        s_manual = was_manual;
+    }
 }

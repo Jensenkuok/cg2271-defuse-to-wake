@@ -126,7 +126,8 @@ enum DemoErr {
     DEMO_ERR_LINK_DOWN,
     DEMO_ERR_BUSY,            /* a bomb is running or a session is active (the MCX owns the alarm) */
     DEMO_ERR_NO_TIME,
-    DEMO_ERR_REAL_FIRST,      /* the real alarm rings before the requested demo time */
+    DEMO_ERR_REAL_FIRST,      /* the real alarm rings at or before the requested demo time */
+    DEMO_ERR_TOO_CLOSE,       /* the real alarm is later, but less than APP_DEMO_CLEAR_S after the demo */
     DEMO_ERR_NO_DEMO,         /* cancel with no demo pending */
     DEMO_ERR_CANCEL_LATE,     /* cancel within SCHED_MIN_LEAD_S of ringing: the scheduler would ignore it */
     DEMO_ERR_REPLACE_LATE     /* same for replacing a demo that is about to ring */
@@ -145,16 +146,23 @@ struct DemoCtx {
     uint32_t now;             /* unix seconds */
     uint32_t alarm_unix;      /* the alarm currently scheduled, 0 = none */
     bool alarm_is_demo;       /* ...and it is a demo alarm */
+    uint32_t real_alarm_unix; /* the real timetable alarm if the caller can see it, else 0. The web task cannot
+                               * while a demo is pending (it only sees the demo); the network task always can. */
 };
 
 /* Whether a validated request may go to the network task. minutes 0 = cancel. Checks, in this order:
- * link, bomb/session, clock, then for a start: a real alarm that is not later than the demo time
- * (it would ring first), a demo about to ring (cannot be replaced); for a cancel: a pending demo that
- * is not within SCHED_MIN_LEAD_S of ringing. */
+ * link, bomb/session, clock, then for a start: a demo about to ring (cannot be replaced), a real
+ * alarm at or before the demo time (it rings first) or less than APP_DEMO_CLEAR_S after it (a demo
+ * session with snoozes must end before the real alarm: the session guard sends no SET_ALARM during
+ * one); for a cancel: a pending demo that is not within SCHED_MIN_LEAD_S of ringing. */
 DemoErr web_demo_check(int minutes, const DemoCtx &ctx);
 
-/* Message for the response. DEMO_ERR_REAL_FIRST has no time here: the handler writes its own text. */
+/* Generic message for the response (no clock times). */
 const char *web_demo_err_text(DemoErr err);
+
+/* Like web_demo_err_text, but REAL_FIRST / TOO_CLOSE name the real alarm: "your real alarm at HH:MM rings
+ * first" / "... is too close" (UTC+8). Truncated to out_size. */
+void web_demo_err_message(DemoErr err, uint32_t real_alarm_unix, char *out, size_t out_size);
 
 /* ================= game panel helpers ================= */
 /* May the web page show the ACTIVE puzzle's answer? No while the MCX is ARMED or BOMB_ACTIVE, while

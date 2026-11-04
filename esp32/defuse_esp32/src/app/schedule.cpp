@@ -362,7 +362,10 @@ NextAlarm next_alarm(const Lesson *lessons, int count, uint32_t now_unix, int le
 
 uint32_t sched_pick_alarm(uint32_t real_alarm, uint32_t demo_alarm, uint32_t now)
 {
-    return (demo_alarm != 0u && demo_alarm > now) ? demo_alarm : real_alarm;
+    if (demo_alarm == 0u || demo_alarm <= now) {
+        return real_alarm;                            /* no demo, or it is past: never hides the real alarm */
+    }
+    return (real_alarm == 0u || demo_alarm < real_alarm) ? demo_alarm : real_alarm;   /* the earlier one wins */
 }
 
 uint32_t sched_demo_alarm_at(uint32_t now, int minutes, uint32_t slack_s)

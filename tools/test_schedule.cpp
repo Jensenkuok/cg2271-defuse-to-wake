@@ -546,7 +546,11 @@ static void test_pick_alarm(void)
     CHECK(sched_pick_alarm(0u, demo, now) == demo);               /* no real class, future demo */
     CHECK(sched_pick_alarm(0u, 0u, now) == 0u);                   /* nothing at all */
     CHECK(sched_pick_alarm(0u, now - 1u, now) == 0u);             /* a past demo is not an alarm either */
-    CHECK(sched_pick_alarm(kAlarmA, kAlarmA + 60u, now) == kAlarmA + 60u);   /* no "earlier wins": the page refuses that case */
+    /* The earlier of two future alarms wins: a demo never pushes the real alarm out. */
+    CHECK(sched_pick_alarm(kAlarmA, kAlarmA + 60u, now) == kAlarmA);        /* real moved before the demo */
+    CHECK(sched_pick_alarm(kAlarmA, kAlarmA, now) == kAlarmA);              /* same second: the real one */
+    CHECK(sched_pick_alarm(kAlarmA, kAlarmA - 1u, now) == kAlarmA - 1u);    /* demo one second earlier */
+    CHECK(sched_pick_alarm(now + 90u, demo, now) == now + 90u);             /* a nearer real alarm (settings save) */
 }
 
 static void test_demo_alarm_at(void)
