@@ -530,6 +530,21 @@ const BriefText *brief_pick(const BriefText &stored, const BriefText &today_tmpl
     return NULL;
 }
 
+bool brief_needs_run(const BriefText &stored, bool has_next_class, uint32_t next_day, bool failed_before,
+                     uint32_t last_fail_ms, uint32_t now_ms, uint32_t retry_ms)
+{
+    if (!has_next_class || next_day == 0u) {
+        return false;                                   /* nothing to brief: not a failure, no retry loop */
+    }
+    if (brief_valid(stored) && stored.for_day == next_day && stored.from_llm != 0u) {
+        return false;                                   /* the LLM already wrote this day's text */
+    }
+    if (failed_before && (uint32_t)(now_ms - last_fail_ms) < retry_ms) {
+        return false;                                   /* D1: wait after a failed run */
+    }
+    return true;
+}
+
 int defused_page(uint32_t defused_ms)
 {
     return (int)((defused_ms / DEFUSED_PAGE_MS) % DEFUSED_PAGES);

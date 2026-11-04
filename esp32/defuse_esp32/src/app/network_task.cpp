@@ -202,12 +202,7 @@ static void reschedule(NetCtx &c, uint32_t unix_now)
      * instead of being skipped for the next class. A past result is never sent (see sync_with_mcx). */
     a = next_alarm(s_lessons, n, c.first_schedule_done ? unix_now : unix_now - ALARM_BOOT_GRACE_S,
                    settings_get_lead_min(), c.consumed_class_start_unix);
-    if (!c.first_schedule_done) {
-        /* Only a request flag here: service_llm_jobs consumes it after this pass has returned, by which
-         * time app_state_set_schedule() below has written the alarm that begin_run() reads. */
-        briefing_request_boot();
-    }
-    c.first_schedule_done = true;
+    c.first_schedule_done = true;       /* no boot briefing request: briefing_service asks brief_needs_run() every pass */
     /* A pending demo replaces the real alarm only while it is EARLIER (sched_pick_alarm). If the real
      * alarm now comes at or before the demo (a bigger lead time, a timetable refresh), the demo is
      * dropped so the real one is sent: a demo must never cost the user the real alarm. */
@@ -484,9 +479,11 @@ static void service_difficulty_level(void)
     (void)puzzle_gen_apply_level(d.level, st->session_active || game_ringing(*st));
 }
 
-/* LLM jobs: the puzzle run and the briefing. Together they do at most ONE LLM call per pass: the
- * briefing waits while a puzzle run is in progress, so the loop (timetable, results, alarm sync)
- * is back within one call's timeout. */
+/* LLM jobs: the briefing and the puzzle upgrade. Together they do at most ONE LLM call per pass, so the
+ * loop (timetable, results, alarm sync) is back within one call's timeout. The briefing goes first (R4):
+ * it is a short run, and puzzle upgrades are continuous, so waiting for them would starve it. Between
+ * two passes puzzle_gen is always between steps (one step per pass), so skipping it for a pass only
+ * delays it; its state machine resumes unchanged. */
 static void service_llm_jobs(const NetCtx &c, uint32_t now_ms, uint32_t unix_now)
 {
     AppState *const st = s_puzzle_state;           /* PSRAM: ~1.3 KB that would stay on the stack during the TLS call */
@@ -494,10 +491,10 @@ static void service_llm_jobs(const NetCtx &c, uint32_t now_ms, uint32_t unix_now
     const bool net_ok = c.wifi_up && c.time_valid;
     const uint32_t unix_valid = c.time_valid ? unix_now : 0u;
 
-    puzzle_gen_service(now_ms, unix_valid, net_ok, gen_ok);
-    if (!puzzle_gen_busy()) {
-        briefing_service(now_ms, unix_valid, net_ok, gen_ok);
+    if (briefing_service(now_ms, unix_valid, net_ok, gen_ok)) {
+        return;                                    /* the briefing used this pass's LLM call */
     }
+    puzzle_gen_service(now_ms, unix_valid, net_ok, gen_ok);
 }
 
 /* ================= Wi-Fi + SNTP ================= */

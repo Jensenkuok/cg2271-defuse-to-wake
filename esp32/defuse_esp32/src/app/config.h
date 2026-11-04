@@ -203,10 +203,11 @@
 #define APP_KEY_PUZZLE_USED         "pz_used"   /* SPENT-pair mask: a pair a bomb started with, not yet refilled by the bank */
 #define APP_CONFIG_PENDING_MS       5000u   /* one BOMB_CONFIG at a time; give up on its ACK after this */
 
-/* ---- Briefing + coach (one LLM call, same setter chain; today it starts after each finished puzzle redo or level refill, P3 will replace that trigger) ---- */
+/* ---- Briefing + coach (one LLM call per pass, same setter chain; runs while online until the next class day has an LLM-written text) ---- */
 #define APP_BRIEF_TEMP              0.7f
 #define APP_BRIEF_MAX_TOKENS        2000    /* same thinking-model budget as APP_LLM_MAX_TOKENS */
-#define APP_BRIEF_MAGIC             0x42524631u /* "BRF1": bump when BriefText changes */
+#define APP_BRIEF_RETRY_MS          60000u  /* after a failed briefing run (template stored) wait this long before the next (D1) */
+#define APP_BRIEF_MAGIC             0x42524632u /* "BRF2": bump when BriefText changes (BRF2 added from_llm) */
 #define APP_KEY_BRIEF               "brief"
 #define APP_BRIEF_PROMPT_MAX        640     /* user message: alarm, <= 6 classes, history, difficulty */
 
