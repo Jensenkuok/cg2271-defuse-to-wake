@@ -1,6 +1,7 @@
 /* Defuse to Wake - pure helpers of the local web page. See web_logic.h. */
 #include "web_logic.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "config.h"
@@ -11,6 +12,10 @@
 #define OUTAGE_MAX_MS     0x7FFFFFFFu   /* wraparound-safe comparisons need a duration below 2^31 */
 #define MS_PER_S          1000u
 #define ESC_BUF           8u
+#define STR_(x)           #x
+#define STR(x)            STR_(x)   /* expands the macro first, so the text follows config.h */
+#define MINUTES_PER_HOUR  60u
+#define LAST_MINUTE_OF_DAY 1439u
 
 /* ================= settings form ================= */
 static bool is_blank(char c)
@@ -109,7 +114,7 @@ const char *web_settings_err_text(SettingsErr err)
     case SETTINGS_ERR_LINK_NO_SLOTS:   return "nusmods_link has no module selection (use the Share/Sync link)";
     case SETTINGS_ERR_LEAD_MISSING:    return "lead_min is missing";
     case SETTINGS_ERR_LEAD_NOT_NUMBER: return "lead_min must be a whole number";
-    case SETTINGS_ERR_LEAD_RANGE:      return "lead_min must be between 15 and 180";
+    case SETTINGS_ERR_LEAD_RANGE:      return "lead_min must be between " STR(APP_LEAD_MIN_LOW) " and " STR(APP_LEAD_MIN_HIGH);
     case SETTINGS_ERR_DIFFICULTY:      return "difficulty must be auto, easy, normal or hard";
     }
     return "invalid settings";
@@ -405,6 +410,68 @@ void jb_kv_bool(JsonBuf *j, const char *key, bool v)
 {
     jb_key(j, key);
     jb_bool(j, v);
+}
+
+/* ================= timetable response ================= */
+uint8_t web_weeks_list(uint16_t mask, uint8_t *out)
+{
+    uint8_t n = 0u;
+    uint8_t w;
+
+    for (w = 1u; w <= WEB_TT_WEEKS_MAX; w++) {
+        if ((mask & (1u << (w - 1u))) != 0u) {
+            out[n++] = w;
+        }
+    }
+    return n;
+}
+
+void web_fmt_hhmm(uint16_t minutes, char *out, size_t out_size)
+{
+    if (minutes > LAST_MINUTE_OF_DAY) {
+        minutes = LAST_MINUTE_OF_DAY;
+    }
+    snprintf(out, out_size, "%02u:%02u", (unsigned)(minutes / MINUTES_PER_HOUR), (unsigned)(minutes % MINUTES_PER_HOUR));
+}
+
+void web_put_timetable(JsonBuf *j, const Lesson *lessons, int count, int week, const char *fetched_local)
+{
+    uint8_t weeks[WEB_TT_WEEKS_MAX];
+    char hhmm[8];
+    int i;
+    uint8_t k;
+    uint8_t n;
+
+    jb_obj(j);
+    jb_kv_bool(j, "ok", true);
+    jb_kv_int(j, "week", week);
+    jb_kv_str(j, "fetched_local", fetched_local);
+    jb_key(j, "lessons");
+    jb_arr(j);
+    for (i = 0; i < count; i++) {
+        if (lessons[i].weekday < 1u || lessons[i].weekday > SCHED_MAX_WEEKDAY) {
+            continue;
+        }
+        jb_obj(j);
+        jb_kv_str(j, "module", lessons[i].module);
+        jb_kv_str(j, "type", lessons[i].type);
+        jb_kv_uint(j, "day", lessons[i].weekday);
+        web_fmt_hhmm(lessons[i].start_min, hhmm, sizeof(hhmm));
+        jb_kv_str(j, "start", hhmm);
+        web_fmt_hhmm(lessons[i].end_min, hhmm, sizeof(hhmm));
+        jb_kv_str(j, "end", hhmm);
+        jb_key(j, "weeks");
+        jb_arr(j);
+        n = web_weeks_list(lessons[i].weeks, weeks);
+        for (k = 0u; k < n; k++) {
+            jb_uint(j, weeks[k]);
+        }
+        jb_end(j);
+        jb_kv_str(j, "venue", lessons[i].venue);
+        jb_end(j);
+    }
+    jb_end(j);
+    jb_end(j);
 }
 
 /* ================= game panel helpers ================= */

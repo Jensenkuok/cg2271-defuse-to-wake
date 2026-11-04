@@ -4,6 +4,7 @@
  *   - validation of the settings form (NUSMods link, wake-up lead, difficulty mode),
  *   - the "simulated internet outage" expiry rule,
  *   - a small bounded JSON writer + string escaper for /api/status (fixed buffer, no String),
+ *   - the /api/timetable response (weeks mask -> list, HH:MM, whole-object writer),
  *   - whether the active puzzle's answer may be shown, and the bomb's module total.
  */
 #ifndef WEB_LOGIC_H
@@ -12,6 +13,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#include "schedule.h"
 
 /* ================= settings form ================= */
 #define WEB_LINK_PREFIX     "https://nusmods.com/timetable/"
@@ -40,7 +43,8 @@ SettingsErr web_validate_settings(const char *link, const char *lead_text, int *
  * (mode_out may be NULL). The field is optional in the request: the caller validates it only when present. */
 SettingsErr web_validate_difficulty(const char *text, int *mode_out);
 
-/* Message for the 400 response, e.g. "lead_min must be between 15 and 180". */
+/* Message for the 400 response, e.g. "lead_min must be between <LOW> and <HIGH>" (built from
+ * APP_LEAD_MIN_LOW / APP_LEAD_MIN_HIGH). */
 const char *web_settings_err_text(SettingsErr err);
 
 /* ================= simulated outage ================= */
@@ -95,6 +99,21 @@ void jb_kv_bool(JsonBuf *j, const char *key, bool v);
  * < > &, bytes >= 0x80 become '?'. out is NUL-terminated. Returns false if it did
  * not fit (out then holds the truncated text). */
 bool json_escape(const char *s, char *out, size_t out_size);
+
+/* ================= timetable response (/api/timetable) ================= */
+#define WEB_TT_WEEKS_MAX   13u    /* teaching weeks 1..13: bit (w - 1) of Lesson.weeks */
+
+/* Teaching weeks set in a Lesson.weeks mask, ascending, written to out (room for WEB_TT_WEEKS_MAX).
+ * Bits above week 13 are ignored. Returns how many. */
+uint8_t web_weeks_list(uint16_t mask, uint8_t *out);
+
+/* "HH:MM" from minutes after midnight (clamped to 23:59) into out (at least 6 bytes). */
+void web_fmt_hhmm(uint16_t minutes, char *out, size_t out_size);
+
+/* Writes the whole object {"ok":true,"week":N,"fetched_local":"..","lessons":[..]} into j (which must be
+ * freshly initialised). Lessons whose weekday is outside 1..6 are skipped. An answer that does not fit sets
+ * j->overflow: the caller must then refuse (jb_ok false), never send the cut-off text. */
+void web_put_timetable(JsonBuf *j, const Lesson *lessons, int count, int week, const char *fetched_local);
 
 /* ================= game panel helpers ================= */
 /* May the web page show the ACTIVE puzzle's answer? No while the MCX is ARMED or BOMB_ACTIVE, while

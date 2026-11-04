@@ -26,6 +26,7 @@ static void test_settings_accept_good_input(void)
     int lead = -1;
 
     CHECK(web_validate_settings(GOOD_LINK, "60", &lead) == SETTINGS_OK && lead == 60);
+    CHECK(web_validate_settings(GOOD_LINK, "1", &lead) == SETTINGS_OK && lead == 1);       /* APP_LEAD_MIN_LOW */
     CHECK(web_validate_settings(GOOD_LINK, "15", &lead) == SETTINGS_OK && lead == 15);
     CHECK(web_validate_settings(GOOD_LINK, "180", &lead) == SETTINGS_OK && lead == 180);
     CHECK(web_validate_settings(GOOD_LINK, " 90 ", &lead) == SETTINGS_OK && lead == 90);
@@ -45,7 +46,6 @@ static void test_settings_reject_bad_lead(void)
     CHECK(web_validate_settings(GOOD_LINK, "6 0", &lead) == SETTINGS_ERR_LEAD_NOT_NUMBER);
     CHECK(web_validate_settings(GOOD_LINK, "1e2", &lead) == SETTINGS_ERR_LEAD_NOT_NUMBER);
     CHECK(web_validate_settings(GOOD_LINK, "60.5", &lead) == SETTINGS_ERR_LEAD_NOT_NUMBER);
-    CHECK(web_validate_settings(GOOD_LINK, "14", &lead) == SETTINGS_ERR_LEAD_RANGE);
     CHECK(web_validate_settings(GOOD_LINK, "181", &lead) == SETTINGS_ERR_LEAD_RANGE);
     CHECK(web_validate_settings(GOOD_LINK, "0", &lead) == SETTINGS_ERR_LEAD_RANGE);
     CHECK(web_validate_settings(GOOD_LINK, "99999999999999999999", &lead) == SETTINGS_ERR_LEAD_RANGE);
@@ -96,11 +96,113 @@ static void test_settings_link_error_wins_over_lead_error(void)
 static void test_settings_messages(void)
 {
     CHECK(strlen(web_settings_err_text(SETTINGS_OK)) > 0u);
-    CHECK(strstr(web_settings_err_text(SETTINGS_ERR_LEAD_RANGE), "15") != NULL);
-    CHECK(strstr(web_settings_err_text(SETTINGS_ERR_LEAD_RANGE), "180") != NULL);
+    CHECK(strcmp(web_settings_err_text(SETTINGS_ERR_LEAD_RANGE), "lead_min must be between 1 and 180") == 0);
+    CHECK(APP_LEAD_MIN_LOW == 1 && APP_LEAD_MIN_HIGH == 180);                      /* user decision 4 Nov: 1..180 */
     CHECK(strstr(web_settings_err_text(SETTINGS_ERR_LINK_PREFIX), "nusmods.com/timetable") != NULL);
     CHECK(strstr(web_settings_err_text(SETTINGS_ERR_LINK_TOO_LONG), "512") != NULL);
     CHECK(strlen(web_settings_err_text((SettingsErr)99)) > 0u);
+}
+
+/* ================= timetable response ================= */
+static void test_weeks_list(void)
+{
+    uint8_t w[WEB_TT_WEEKS_MAX];
+    uint8_t n;
+    uint8_t i;
+
+    CHECK(web_weeks_list(0u, w) == 0u);
+    n = web_weeks_list(0x1FFFu, w);                                  /* weeks 1..13 */
+    CHECK(n == 13u);
+    for (i = 0u; i < n; i++) {
+        CHECK(w[i] == i + 1u);
+    }
+    n = web_weeks_list(1u << 8, w);                                  /* only week 9 */
+    CHECK(n == 1u && w[0] == 9u);
+    n = web_weeks_list((1u << 0) | (1u << 2) | (1u << 12), w);
+    CHECK(n == 3u && w[0] == 1u && w[1] == 3u && w[2] == 13u);
+    CHECK(web_weeks_list(0xE000u, w) == 0u);                         /* bits above week 13 are ignored */
+}
+
+static void test_fmt_hhmm(void)
+{
+    char b[8];
+
+    web_fmt_hhmm(0u, b, sizeof(b));
+    CHECK(strcmp(b, "00:00") == 0);
+    web_fmt_hhmm(7u * 60u + 5u, b, sizeof(b));
+    CHECK(strcmp(b, "07:05") == 0);
+    web_fmt_hhmm(18u * 60u, b, sizeof(b));
+    CHECK(strcmp(b, "18:00") == 0);
+    web_fmt_hhmm(5000u, b, sizeof(b));
+    CHECK(strcmp(b, "23:59") == 0);
+}
+
+static void fill_lessons(Lesson *l, int n, char fill)
+{
+    int i;
+
+    memset(l, 0, sizeof(Lesson) * (size_t)n);
+    for (i = 0; i < n; i++) {
+        memset(l[i].module, fill, SCHED_MODULE_LEN - 1u);
+        memset(l[i].type, fill, SCHED_ABBREV_LEN - 1u);
+        memset(l[i].venue, fill, SCHED_VENUE_LEN - 1u);
+        l[i].weekday = (uint8_t)(1 + i % SCHED_MAX_WEEKDAY);
+        l[i].start_min = 1439u;
+        l[i].end_min = 1439u;
+        l[i].weeks = 0x1FFFu;                                        /* longest weeks array */
+    }
+}
+
+static void test_timetable_json_small(void)
+{
+    char buf[APP_WEB_STATUS_MAX];
+    JsonBuf j;
+    Lesson l[2];
+
+    memset(l, 0, sizeof(l));
+    strcpy(l[0].module, "CG2271"); strcpy(l[0].type, "LEC"); strcpy(l[0].venue, "E4-04-02");
+    l[0].weekday = 1u; l[0].start_min = 9u * 60u; l[0].end_min = 11u * 60u; l[0].weeks = 1u << 8;
+    strcpy(l[1].module, "QF2104"); strcpy(l[1].type, "TUT"); l[1].weekday = 7u;      /* bad weekday: skipped */
+    jb_init(&j, buf, sizeof(buf));
+    web_put_timetable(&j, l, 2, 9, "Wed 2026-11-04 07:12");
+    CHECK(jb_ok(j));
+    CHECK(strcmp(buf, "{\"ok\":true,\"week\":9,\"fetched_local\":\"Wed 2026-11-04 07:12\",\"lessons\":["
+                      "{\"module\":\"CG2271\",\"type\":\"LEC\",\"day\":1,\"start\":\"09:00\",\"end\":\"11:00\","
+                      "\"weeks\":[9],\"venue\":\"E4-04-02\"}]}") == 0);
+    jb_init(&j, buf, sizeof(buf));
+    web_put_timetable(&j, l, 0, 0, "");
+    CHECK(jb_ok(j) && strcmp(buf, "{\"ok\":true,\"week\":0,\"fetched_local\":\"\",\"lessons\":[]}") == 0);
+}
+
+/* Worst case that real data can produce: 40 lessons, every string at its maximum length, all 13 weeks,
+ * three-digit-free fields. Must fit the status buffer with room to spare. */
+static void test_timetable_json_worst_case_fits(void)
+{
+    static char buf[APP_WEB_STATUS_MAX];
+    static Lesson l[SCHED_MAX_LESSONS];
+    JsonBuf j;
+
+    fill_lessons(l, SCHED_MAX_LESSONS, 'A');
+    jb_init(&j, buf, sizeof(buf));
+    web_put_timetable(&j, l, SCHED_MAX_LESSONS, 13, "Wed 2026-11-04 07:12");
+    CHECK(jb_ok(j));
+    CHECK(j.len < APP_WEB_STATUS_MAX);
+    printf("  worst-case timetable JSON: %u of %u bytes\n", (unsigned)j.len, (unsigned)APP_WEB_STATUS_MAX);
+}
+
+/* Characters json_escape expands to six bytes (< > &) can push 40 full lessons past the buffer: the
+ * writer must then report overflow (the handler answers 503), never leave a cut-off "ok" document. */
+static void test_timetable_json_overflow_is_reported(void)
+{
+    static char buf[APP_WEB_STATUS_MAX];
+    static Lesson l[SCHED_MAX_LESSONS];
+    JsonBuf j;
+
+    fill_lessons(l, SCHED_MAX_LESSONS, '<');
+    jb_init(&j, buf, sizeof(buf));
+    web_put_timetable(&j, l, SCHED_MAX_LESSONS, 13, "");
+    CHECK(!jb_ok(j));
+    CHECK(strlen(buf) < APP_WEB_STATUS_MAX);
 }
 
 /* ================= outage ================= */
@@ -363,6 +465,11 @@ int main(void)
     test_json_writer_tiny_buffers();
     test_answer_hidden_rule();
     test_modules_total();
+    test_weeks_list();
+    test_fmt_hhmm();
+    test_timetable_json_small();
+    test_timetable_json_worst_case_fits();
+    test_timetable_json_overflow_is_reported();
     printf("test_web: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed == 0 ? 0 : 1;
 }

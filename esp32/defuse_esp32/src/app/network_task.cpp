@@ -525,7 +525,7 @@ static void run_command(NetCtx &c, const char *cmd, size_t len, uint32_t unix_no
         Serial.println("[cmd] briefing run requested");
     } else {
         print_unknown_command(cmd, len);
-        Serial.println("[cmd] commands: lead <15..180> | link <url> | refresh | resched | hist | puzzles | ai | diff | brief | i2c | mpu");
+        Serial.println("[cmd] commands: lead <1..180> | link <url> | refresh | resched | hist | puzzles | ai | diff | brief | i2c | mpu");
     }
 }
 

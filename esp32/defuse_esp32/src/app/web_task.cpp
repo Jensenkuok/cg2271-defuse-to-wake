@@ -553,6 +553,35 @@ static void handle_status(void)
     send_json(200, s_json);
 }
 
+/* GET /api/timetable: the whole cached timetable for the page's week grid. Not part of /api/status
+ * (40 lessons would not fit its buffer). Reuses s_json and s_lessons: one request at a time runs in
+ * this task. An answer that does not fit is refused (503), never sent cut off. */
+static void handle_timetable(void)
+{
+    JsonBuf j;
+    char fetched[TIME_TEXT_LEN];
+    int week = 0;
+    const uint32_t unix_now = s_st->time_valid ? (uint32_t)time(nullptr) : 0u;
+    const int count = timetable_copy(s_lessons, SCHED_MAX_LESSONS);
+
+    if (unix_now != 0u) {
+        time_t at = (time_t)(unix_now + (uint32_t)APP_TZ_OFFSET_S);
+        struct tm t;
+
+        gmtime_r(&at, &t);
+        week = teaching_week(t.tm_year + 1900, t.tm_mon + 1, t.tm_mday);   /* 0 outside teaching weeks */
+    }
+    fmt_local(fetched, sizeof(fetched), timetable_fetched_unix());
+    jb_init(&j, s_json, APP_WEB_STATUS_MAX);
+    web_put_timetable(&j, s_lessons, count, week, fetched);
+    if (!jb_ok(j)) {
+        Serial.printf("[web] timetable not built (buffer %u of %u bytes used)\n", (unsigned)j.len, (unsigned)j.cap);
+        send_json(503, "{\"ok\":false,\"error\":\"timetable unavailable\"}");
+        return;
+    }
+    send_json(200, s_json);
+}
+
 /* {"ok":true,"nusmods_link":"..","lead_min":N,"difficulty":"auto"}: the stored values (also the answer to a save). */
 static void send_settings(void)
 {
@@ -766,6 +795,7 @@ bool web_task_start(void)
     s_server.on("/eng", HTTP_GET, handle_eng);
     s_server.on("/favicon.ico", HTTP_GET, handle_favicon);
     s_server.on("/api/status", HTTP_GET, handle_status);
+    s_server.on("/api/timetable", HTTP_GET, handle_timetable);
     s_server.on("/api/settings", HTTP_GET, send_settings);
     s_server.on("/api/settings", HTTP_POST, handle_settings);
     s_server.on("/api/ring", HTTP_POST, handle_ring);

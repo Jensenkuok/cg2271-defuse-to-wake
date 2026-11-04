@@ -147,7 +147,7 @@
 #define APP_KEY_MIRROR              "mirror"
 #define APP_LINK_MAX_CHARS          512
 #define APP_LEAD_MIN_DEFAULT        60      /* minutes of wake-up lead before the first lecture */
-#define APP_LEAD_MIN_LOW            15
+#define APP_LEAD_MIN_LOW            1
 #define APP_LEAD_MIN_HIGH           180
 
 /* ---- Timetable (NUSMods) ---- */
