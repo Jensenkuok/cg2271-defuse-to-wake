@@ -414,6 +414,108 @@ static void test_json_writer_tiny_buffers(void)
     CHECK(!jb_ok(j));
 }
 
+/* ================= demo morning alarm ================= */
+static void test_demo_minutes_parse(void)
+{
+    int m = -1;
+
+    CHECK(web_validate_demo_minutes("2", &m) == DEMO_OK && m == 2);
+    CHECK(web_validate_demo_minutes("1", &m) == DEMO_OK && m == 1);
+    CHECK(web_validate_demo_minutes("0", &m) == DEMO_OK && m == 0);                     /* cancel */
+    CHECK(web_validate_demo_minutes(" 30 ", &m) == DEMO_OK && m == APP_DEMO_ALARM_MAX_MIN);
+    CHECK(web_validate_demo_minutes("007", &m) == DEMO_OK && m == 7);
+    CHECK(web_validate_demo_minutes("5", NULL) == DEMO_OK);                             /* minutes_out is optional */
+    m = 99;
+    CHECK(web_validate_demo_minutes(NULL, &m) == DEMO_ERR_MISSING);
+    CHECK(web_validate_demo_minutes("", &m) == DEMO_ERR_MISSING);
+    CHECK(web_validate_demo_minutes("  ", &m) == DEMO_ERR_MISSING);
+    CHECK(web_validate_demo_minutes("abc", &m) == DEMO_ERR_NOT_NUMBER);
+    CHECK(web_validate_demo_minutes("-1", &m) == DEMO_ERR_NOT_NUMBER);
+    CHECK(web_validate_demo_minutes("2.5", &m) == DEMO_ERR_NOT_NUMBER);
+    CHECK(web_validate_demo_minutes("1 2", &m) == DEMO_ERR_NOT_NUMBER);
+    CHECK(web_validate_demo_minutes("31", &m) == DEMO_ERR_RANGE);
+    CHECK(web_validate_demo_minutes("99999999999999999999", &m) == DEMO_ERR_RANGE);
+    CHECK(m == 99);                                                                     /* untouched on failure */
+    CHECK(strstr(web_demo_err_text(DEMO_ERR_RANGE), "30") != NULL);                     /* text follows the constant */
+}
+
+static DemoCtx demo_ctx_ok(void)
+{
+    DemoCtx c;
+
+    memset(&c, 0, sizeof(c));
+    c.link_up = true;
+    c.time_valid = true;
+    c.now = 1800000000u;
+    return c;
+}
+
+static void test_demo_check_start(void)
+{
+    DemoCtx c = demo_ctx_ok();
+
+    CHECK(web_demo_check(2, c) == DEMO_OK);                                  /* idle, no alarm at all */
+    c.alarm_unix = c.now + 8 * 3600u;                                        /* real alarm tomorrow morning */
+    CHECK(web_demo_check(30, c) == DEMO_OK);
+    c.alarm_unix = c.now + 29 * 60u;                                         /* real alarm before a 30 min demo */
+    CHECK(web_demo_check(30, c) == DEMO_ERR_REAL_FIRST);
+    CHECK(web_demo_check(2, c) == DEMO_OK);                                  /* but a 2 min demo is before it */
+    c.alarm_unix = c.now + 2 * 60u + APP_DEMO_ALARM_SLACK_S;                 /* exactly the same second */
+    CHECK(web_demo_check(2, c) == DEMO_ERR_REAL_FIRST);
+    c.alarm_unix = c.now - 30u;                                              /* a real alarm that just rang */
+    CHECK(web_demo_check(2, c) == DEMO_ERR_REAL_FIRST);
+}
+
+static void test_demo_check_refusals(void)
+{
+    DemoCtx c = demo_ctx_ok();
+
+    c.link_up = false;
+    CHECK(web_demo_check(2, c) == DEMO_ERR_LINK_DOWN);
+    CHECK(web_demo_check(0, c) == DEMO_ERR_LINK_DOWN);
+    c = demo_ctx_ok();
+    c.bomb_running = true;
+    CHECK(web_demo_check(2, c) == DEMO_ERR_BUSY);
+    CHECK(web_demo_check(0, c) == DEMO_ERR_BUSY);
+    c = demo_ctx_ok();
+    c.session_active = true;                                                 /* e.g. a snooze: MCX ARMED, session open */
+    CHECK(web_demo_check(2, c) == DEMO_ERR_BUSY);
+    c = demo_ctx_ok();
+    c.time_valid = false;
+    CHECK(web_demo_check(2, c) == DEMO_ERR_NO_TIME);
+    CHECK(web_demo_check(0, c) == DEMO_ERR_NO_TIME);
+    c = demo_ctx_ok();
+    c.link_up = false;
+    c.bomb_running = true;
+    CHECK(web_demo_check(2, c) == DEMO_ERR_LINK_DOWN);                       /* link is reported first */
+    CHECK(strlen(web_demo_err_text(DEMO_ERR_LINK_DOWN)) > 0u);
+}
+
+static void test_demo_check_cancel_and_replace(void)
+{
+    DemoCtx c = demo_ctx_ok();
+
+    CHECK(web_demo_check(0, c) == DEMO_ERR_NO_DEMO);                         /* nothing scheduled */
+    c.alarm_unix = c.now + 3600u;
+    CHECK(web_demo_check(0, c) == DEMO_ERR_NO_DEMO);                         /* a real alarm is not cancelled here */
+    c.alarm_is_demo = true;
+    c.alarm_unix = c.now + 120u;
+    CHECK(web_demo_check(0, c) == DEMO_OK);
+    c.alarm_unix = c.now + SCHED_MIN_LEAD_S + 1u;
+    CHECK(web_demo_check(0, c) == DEMO_OK);                                  /* one second above the gate */
+    c.alarm_unix = c.now + SCHED_MIN_LEAD_S;
+    CHECK(web_demo_check(0, c) == DEMO_ERR_CANCEL_LATE);                     /* the scheduler would ignore it */
+    c.alarm_unix = c.now - 10u;
+    CHECK(web_demo_check(0, c) == DEMO_ERR_CANCEL_LATE);                     /* rang, no session yet */
+    CHECK(strstr(web_demo_err_text(DEMO_ERR_CANCEL_LATE), "too late to cancel") != NULL);
+
+    c.alarm_unix = c.now + 600u;                                             /* a pending demo can be replaced */
+    CHECK(web_demo_check(5, c) == DEMO_OK);
+    CHECK(web_demo_check(30, c) == DEMO_OK);                                 /* demo vs demo: no "real first" */
+    c.alarm_unix = c.now + 30u;
+    CHECK(web_demo_check(5, c) == DEMO_ERR_REPLACE_LATE);
+}
+
 /* ================= game panel helpers ================= */
 static void test_answer_hidden_rule(void)
 {
@@ -470,6 +572,10 @@ int main(void)
     test_timetable_json_small();
     test_timetable_json_worst_case_fits();
     test_timetable_json_overflow_is_reported();
+    test_demo_minutes_parse();
+    test_demo_check_start();
+    test_demo_check_refusals();
+    test_demo_check_cancel_and_replace();
     printf("test_web: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed == 0 ? 0 : 1;
 }

@@ -32,6 +32,8 @@
 #define TIME_TEXT_LEN       48
 #define LEAD_TEXT_MAX       15u
 #define DIFF_TEXT_MAX       15u     /* longer than "normal": rejected as unknown, never truncated into a valid id */
+#define MINUTES_TEXT_MAX    15u     /* longer than any valid "minutes": rejected, never truncated into a valid one */
+#define HHMM_TEXT_LEN       8
 #define STATE_COUNT         5
 #define WEB_REDUCED_LOG     8       /* frame-log rows kept if the full status does not fit the buffer */
 #define WEB_REDUCED_HIST    7
@@ -272,6 +274,7 @@ static void put_alarm(JsonBuf *j, uint32_t unix_now)
     jb_key(j, "alarm");
     jb_obj(j);
     jb_kv_bool(j, "valid", valid);
+    jb_kv_bool(j, "demo", valid && s_st->alarm_is_demo);   /* a demo morning alarm, not a class alarm */
     jb_kv_uint(j, "unix", valid ? s_st->alarm_unix : 0u);
     jb_kv_str(j, "local", when);
     jb_kv_str(j, "class_local", cls);
@@ -561,9 +564,15 @@ static void handle_timetable(void)
     JsonBuf j;
     char fetched[TIME_TEXT_LEN];
     int week = 0;
-    const uint32_t unix_now = s_st->time_valid ? (uint32_t)time(nullptr) : 0u;
-    const int count = timetable_copy(s_lessons, SCHED_MAX_LESSONS);
+    uint32_t unix_now;
+    int count;
 
+    if (!app_state_read(s_st)) {                    /* fresh state: time_valid below must not be a stale copy */
+        send_json(503, "{\"ok\":false,\"error\":\"state busy, try again\"}");
+        return;
+    }
+    unix_now = s_st->time_valid ? (uint32_t)time(nullptr) : 0u;
+    count = timetable_copy(s_lessons, SCHED_MAX_LESSONS);
     if (unix_now != 0u) {
         time_t at = (time_t)(unix_now + (uint32_t)APP_TZ_OFFSET_S);
         struct tm t;
@@ -674,6 +683,80 @@ static void handle_ring(void)
         Serial.println("[web] demo ring requested");
         reply(200, true, "msg", "Ringing: the MCX arms now and the bomb starts in 3 s");
     }
+}
+
+/* "HH:MM" in UTC+8 for the demo alarm messages. */
+static void fmt_hhmm_local(char *dst, size_t n, uint32_t unix_s)
+{
+    time_t at = (time_t)(unix_s + (uint32_t)APP_TZ_OFFSET_S);
+    struct tm t;
+
+    gmtime_r(&at, &t);
+    snprintf(dst, n, "%02d:%02d", t.tm_hour, t.tm_min);
+}
+
+/* POST /api/demo_alarm, form field minutes: 1..APP_DEMO_ALARM_MAX_MIN starts a demo morning alarm at
+ * now + N min (through the real SET_ALARM path, so the OLED counts down and rings like a real one),
+ * 0 cancels the pending one. Refused with 409 while a bomb or session runs (the MCX owns the alarm),
+ * when the link or the clock is down, when the real alarm rings first, and for a cancel in the last
+ * minute (the scheduler would ignore it). The network task re-checks before it acts. */
+static void handle_demo_alarm(void)
+{
+    const String &arg = s_server.arg("minutes");
+    char text[MINUTES_TEXT_MAX + 1];
+    char hhmm[HHMM_TEXT_LEN];
+    char msg[TIME_TEXT_LEN + 24];
+    DemoCtx ctx;
+    DemoErr err;
+    int minutes = 0;
+
+    if (!post_allowed()) {
+        return;
+    }
+    if (!app_state_read(s_st)) {
+        reply(503, false, "error", "state busy, try again");
+        return;
+    }
+    if (!s_server.hasArg("minutes")) {
+        err = DEMO_ERR_MISSING;
+    } else if (arg.length() > MINUTES_TEXT_MAX) {
+        err = DEMO_ERR_NOT_NUMBER;
+    } else {
+        snprintf(text, sizeof(text), "%s", arg.c_str());
+        err = web_validate_demo_minutes(text, &minutes);
+    }
+    if (err != DEMO_OK) {
+        reply(400, false, "error", web_demo_err_text(err));
+        return;
+    }
+    ctx.link_up = s_st->link_up;
+    ctx.bomb_running = game_ringing(*s_st);
+    ctx.session_active = s_st->session_active;
+    ctx.time_valid = s_st->time_valid;
+    ctx.now = s_st->time_valid ? (uint32_t)time(nullptr) : 0u;
+    ctx.alarm_unix = s_st->next_valid ? s_st->alarm_unix : 0u;
+    ctx.alarm_is_demo = s_st->alarm_is_demo;
+    err = web_demo_check(minutes, ctx);
+    if (err == DEMO_ERR_REAL_FIRST) {
+        fmt_hhmm_local(hhmm, sizeof(hhmm), ctx.alarm_unix);
+        snprintf(msg, sizeof(msg), "your real alarm at %s rings first", hhmm);
+        reply(409, false, "error", msg);
+        return;
+    }
+    if (err != DEMO_OK) {
+        reply(409, false, "error", web_demo_err_text(err));
+        return;
+    }
+    network_request_demo_alarm(minutes);
+    if (minutes == 0) {
+        Serial.println("[web] demo alarm cancel requested");
+        reply(200, true, "msg", "Demo alarm cancelled");
+        return;
+    }
+    fmt_hhmm_local(hhmm, sizeof(hhmm), sched_demo_alarm_at(ctx.now, minutes, APP_DEMO_ALARM_SLACK_S));
+    snprintf(msg, sizeof(msg), "Demo alarm at %s", hhmm);
+    Serial.printf("[web] demo alarm requested: %d min\n", minutes);
+    reply(200, true, "msg", msg);
 }
 
 static void handle_corrupt(void)
@@ -799,6 +882,7 @@ bool web_task_start(void)
     s_server.on("/api/settings", HTTP_GET, send_settings);
     s_server.on("/api/settings", HTTP_POST, handle_settings);
     s_server.on("/api/ring", HTTP_POST, handle_ring);
+    s_server.on("/api/demo_alarm", HTTP_POST, handle_demo_alarm);
     s_server.on("/api/fault/corrupt", HTTP_POST, handle_corrupt);
     s_server.on("/api/fault/outage", HTTP_POST, handle_outage);
     s_server.on("/api/puzzles", HTTP_POST, handle_puzzles);

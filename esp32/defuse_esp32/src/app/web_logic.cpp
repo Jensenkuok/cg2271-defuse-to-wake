@@ -120,6 +120,91 @@ const char *web_settings_err_text(SettingsErr err)
     return "invalid settings";
 }
 
+/* ================= demo morning alarm ================= */
+DemoErr web_validate_demo_minutes(const char *text, int *minutes_out)
+{
+    size_t start = 0u;
+    size_t end;
+    size_t i;
+    uint32_t value = 0u;
+
+    if (text == NULL) {
+        return DEMO_ERR_MISSING;
+    }
+    end = strlen(text);
+    while (start < end && is_blank(text[start])) {
+        start++;
+    }
+    while (end > start && is_blank(text[end - 1u])) {
+        end--;
+    }
+    if (start == end) {
+        return DEMO_ERR_MISSING;
+    }
+    for (i = start; i < end; i++) {
+        if (text[i] < '0' || text[i] > '9') {
+            return DEMO_ERR_NOT_NUMBER;
+        }
+        if (value <= (uint32_t)APP_DEMO_ALARM_MAX_MIN) {   /* once above the range the exact value no longer matters */
+            value = value * 10u + (uint32_t)(text[i] - '0');
+        }
+    }
+    if (value > (uint32_t)APP_DEMO_ALARM_MAX_MIN) {
+        return DEMO_ERR_RANGE;
+    }
+    if (minutes_out != NULL) {
+        *minutes_out = (int)value;
+    }
+    return DEMO_OK;
+}
+
+DemoErr web_demo_check(int minutes, const DemoCtx &ctx)
+{
+    const bool has_alarm = ctx.alarm_unix != 0u;
+
+    if (!ctx.link_up) {
+        return DEMO_ERR_LINK_DOWN;
+    }
+    if (ctx.bomb_running || ctx.session_active) {
+        return DEMO_ERR_BUSY;                 /* the MCX owns the alarm: SET_ALARM / CANCEL would clobber a snooze */
+    }
+    if (!ctx.time_valid) {
+        return DEMO_ERR_NO_TIME;
+    }
+    if (minutes == 0) {                       /* cancel */
+        if (!ctx.alarm_is_demo || !has_alarm) {
+            return DEMO_ERR_NO_DEMO;
+        }
+        return (ctx.alarm_unix <= ctx.now + SCHED_MIN_LEAD_S) ? DEMO_ERR_CANCEL_LATE : DEMO_OK;
+    }
+    if (ctx.alarm_is_demo && has_alarm && ctx.alarm_unix <= ctx.now + SCHED_MIN_LEAD_S) {
+        return DEMO_ERR_REPLACE_LATE;
+    }
+    if (!ctx.alarm_is_demo && has_alarm &&
+        ctx.alarm_unix <= sched_demo_alarm_at(ctx.now, minutes, APP_DEMO_ALARM_SLACK_S)) {
+        return DEMO_ERR_REAL_FIRST;           /* equal times count too: two alarms at once */
+    }
+    return DEMO_OK;
+}
+
+const char *web_demo_err_text(DemoErr err)
+{
+    switch (err) {
+    case DEMO_OK:               return "ok";
+    case DEMO_ERR_MISSING:      return "minutes is missing";
+    case DEMO_ERR_NOT_NUMBER:   return "minutes must be a whole number";
+    case DEMO_ERR_RANGE:        return "minutes must be 0 (cancel) or between 1 and " STR(APP_DEMO_ALARM_MAX_MIN);
+    case DEMO_ERR_LINK_DOWN:    return "the MCX link is down";
+    case DEMO_ERR_BUSY:         return "a bomb is already running";
+    case DEMO_ERR_NO_TIME:      return "the clock is not set yet (no Wi-Fi time)";
+    case DEMO_ERR_REAL_FIRST:   return "your real alarm rings first";
+    case DEMO_ERR_NO_DEMO:      return "no demo alarm is pending";
+    case DEMO_ERR_CANCEL_LATE:  return "too late to cancel: the demo alarm rings in under a minute";
+    case DEMO_ERR_REPLACE_LATE: return "too late to change: the demo alarm rings in under a minute";
+    }
+    return "invalid request";
+}
+
 /* ================= simulated outage ================= */
 void outage_start(Outage *o, uint32_t now_ms, uint32_t duration_ms)
 {

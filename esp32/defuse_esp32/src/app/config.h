@@ -150,6 +150,10 @@
 #define APP_LEAD_MIN_LOW            1
 #define APP_LEAD_MIN_HIGH           180
 
+/* ---- Demo morning alarm (a SET_ALARM for now + N minutes through the normal alarm path) ---- */
+#define APP_DEMO_ALARM_MAX_MIN      30      /* longest demo delay the page / Serial accept (0 = cancel) */
+#define APP_DEMO_ALARM_SLACK_S      5       /* added to now + N min so N = 1 stays above SCHED_MIN_LEAD_S */
+
 /* ---- Timetable (NUSMods) ---- */
 #define APP_NUSMODS_URL_PREFIX      "https://api.nusmods.com/v2/2026-2027/modules/"
 #define APP_NUSMODS_SEMESTER        1

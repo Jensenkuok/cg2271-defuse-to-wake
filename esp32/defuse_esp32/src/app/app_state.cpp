@@ -108,11 +108,12 @@ void app_state_set_alarm(uint32_t alarm_unix)
     with_lock([&]() { s_state->alarm_unix = alarm_unix; });
 }
 
-void app_state_set_schedule(uint32_t alarm_unix, uint32_t class_start_unix, const Lesson *lesson)
+void app_state_set_schedule(uint32_t alarm_unix, uint32_t class_start_unix, const Lesson *lesson, bool is_demo)
 {
     with_lock([&]() {
         s_state->alarm_unix = alarm_unix;
         s_state->next_valid = (alarm_unix != 0u) && (lesson != NULL);
+        s_state->alarm_is_demo = is_demo && s_state->next_valid;
         s_state->next_start_unix = s_state->next_valid ? class_start_unix : 0u;
         memset(s_state->next_module, 0, sizeof(s_state->next_module));
         memset(s_state->next_type, 0, sizeof(s_state->next_type));
