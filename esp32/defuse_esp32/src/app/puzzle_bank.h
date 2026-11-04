@@ -2,7 +2,7 @@
  * Defuse to Wake - procedural puzzle bank (pure C++11, no Arduino headers, no heap, no globals).
  * Compiled by the sketch and by the host tests (tools/test_puzzle.cpp).
  *
- * The bank is what the nightly run falls back to when the LLM fails, so it has to be as strict as the
+ * The bank is what every puzzle slot falls back to (or starts from) when the LLM fails, so it has to be as strict as the
  * LLM path: for a given ANSWER and LEVEL it builds a rule set in the puzzle_rules.h language that is
  * true at the answer, renders it as compact OLED text, and keeps it only when
  *   - the display text passes validate_puzzle (O3 length, no leaked code / wire number, O4),

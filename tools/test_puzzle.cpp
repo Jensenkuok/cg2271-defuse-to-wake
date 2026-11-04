@@ -669,6 +669,105 @@ static void check_config_ranges(const proto_bomb_config_t &c)
     CHECK(c.max_strikes >= GAME_MIN_STRIKES && c.max_strikes <= GAME_MAX_STRIKES_LIMIT);
 }
 
+/* D5: the four module types, each exactly once, all valid. */
+static bool is_module_permutation(const uint8_t order[PROTO_MAX_MODULES])
+{
+    unsigned seen = 0u;
+    unsigned i;
+
+    for (i = 0u; i < PROTO_MAX_MODULES; i++) {
+        if (order[i] < PROTO_MODULE_DIAL || order[i] > PROTO_MODULE_LIGHTS) {
+            return false;
+        }
+        seen |= 1u << order[i];
+    }
+    return seen == ((1u << PROTO_MODULE_DIAL) | (1u << PROTO_MODULE_WIRES) | (1u << PROTO_MODULE_TRIPWIRE) |
+                    (1u << PROTO_MODULE_LIGHTS));
+}
+
+/* Rank of a permutation of the 4 types (0..23), to count which of the 24 orders showed up. */
+static unsigned order_rank(const uint8_t o[PROTO_MAX_MODULES])
+{
+    unsigned rank = 0u;
+    unsigned i;
+    unsigned j;
+
+    for (i = 0u; i < PROTO_MAX_MODULES; i++) {
+        unsigned smaller = 0u;
+
+        for (j = i + 1u; j < PROTO_MAX_MODULES; j++) {
+            smaller += (o[j] < o[i]) ? 1u : 0u;
+        }
+        rank = rank * (PROTO_MAX_MODULES - i) + smaller;
+    }
+    return rank;
+}
+
+static void test_module_order(void)
+{
+    enum { SEEDS = 2400, ORDERS = 24 };
+    uint8_t o[PROTO_MAX_MODULES];
+    uint8_t again[PROTO_MAX_MODULES];
+    unsigned order_seen[ORDERS] = { 0 };
+    unsigned first_seen[PROTO_MODULE_LIGHTS + 1] = { 0 };
+    unsigned distinct = 0u;
+    unsigned s;
+    unsigned i;
+    bool all_perm = true;
+    bool deterministic = true;
+
+    for (s = 0u; s < SEEDS; s++) {
+        const uint32_t rnd = s * 2654435761u + s;    /* spread seeds, plus the plain small ones below */
+
+        module_order_shuffle(rnd, o);
+        module_order_shuffle(rnd, again);
+        all_perm = all_perm && is_module_permutation(o);
+        deterministic = deterministic && memcmp(o, again, sizeof(o)) == 0;
+        if (is_module_permutation(o)) {
+            order_seen[order_rank(o)]++;
+            first_seen[o[0]]++;
+        }
+    }
+    for (s = 0u; s < SEEDS; s++) {                   /* small consecutive seeds too (0, 1, 2, ...) */
+        module_order_shuffle(s, o);
+        all_perm = all_perm && is_module_permutation(o);
+        if (is_module_permutation(o)) {
+            order_seen[order_rank(o)]++;
+            first_seen[o[0]]++;
+        }
+    }
+    CHECK(all_perm);
+    CHECK(deterministic);
+    for (i = 0u; i < ORDERS; i++) {
+        distinct += order_seen[i] > 0u ? 1u : 0u;
+        CHECK(order_seen[i] > 0u);                   /* each of the 24 orders appears */
+    }
+    CHECK(distinct == ORDERS);
+    for (i = PROTO_MODULE_DIAL; i <= PROTO_MODULE_LIGHTS; i++) {
+        CHECK(first_seen[i] > 0u);                   /* each module is first at least once */
+    }
+    {
+        /* the order is independent of the band word: same trip_rnd, different order_rnd -> same band */
+        proto_bomb_config_t a;
+        proto_bomb_config_t b;
+        Puzzle dial;
+        Puzzle wire;
+        static const uint8_t code[4] = { 1, 2, 3, 4 };
+        const Difficulty d = difficulty(NULL, 0, DIFF_MODE_NORMAL);
+        bool order_differs = false;
+
+        puzzle_fill_bank_dial(&dial, code, 0);
+        puzzle_fill_bank_wire(&wire, 4, 2, 0);
+        for (s = 1u; s < 50u && !order_differs; s++) {
+            puzzle_build_config(d, dial, wire, 9u, 0u, &a);
+            puzzle_build_config(d, dial, wire, 9u, s, &b);
+            CHECK(a.trip_min_cm == b.trip_min_cm && a.trip_max_cm == b.trip_max_cm);
+            order_differs = memcmp(a.module_order, b.module_order, sizeof(a.module_order)) != 0;
+        }
+        CHECK(order_differs);
+    }
+}
+
 static void test_build_config(void)
 {
     Puzzle dial;
@@ -684,10 +783,9 @@ static void test_build_config(void)
     puzzle_fill_bank_dial(&dial, code, 0);
     puzzle_fill_bank_wire(&wire, 5, 3, 0);
     d = difficulty(NULL, 0, DIFF_MODE_AUTO);                             /* score 50 = NORMAL: 4 modules, 180 s */
-    puzzle_build_config(d, dial, wire, 0u, &c);
+    puzzle_build_config(d, dial, wire, 0u, 0u, &c);
     check_config_ranges(c);
-    CHECK(c.module_count == 4 && c.module_order[0] == PROTO_MODULE_DIAL && c.module_order[1] == PROTO_MODULE_WIRES &&
-          c.module_order[2] == PROTO_MODULE_TRIPWIRE && c.module_order[3] == PROTO_MODULE_LIGHTS);   /* D, W, T, L */
+    CHECK(c.module_count == 4 && is_module_permutation(c.module_order));   /* all four, in some order (D5) */
     CHECK(c.time_limit_s == 180 && c.dial_code[0] == 4 && c.dial_code[1] == 2 && c.dial_code[2] == 7 && c.dial_code[3] == 1);
     CHECK(c.wire_count == 5 && c.correct_wire == 2);                    /* k = 3 (1-based) -> index 2 */
     CHECK(c.trip_min_cm == PUZZLE_TRIP_MIN_BASE_CM && c.trip_max_cm == PUZZLE_TRIP_MIN_BASE_CM + PUZZLE_TRIP_WIDTH_CM &&
@@ -699,19 +797,19 @@ static void test_build_config(void)
 
     d.module_count = 4;
     d.time_limit_s = 210;
-    puzzle_build_config(d, dial, wire, 1u, &c);
-    CHECK(c.module_count == 4 && c.module_order[3] == PROTO_MODULE_LIGHTS && c.time_limit_s == 210);
+    puzzle_build_config(d, dial, wire, 1u, 1u, &c);
+    CHECK(c.module_count == 4 && is_module_permutation(c.module_order) && c.time_limit_s == 210);
     check_config_ranges(c);
-    d.module_count = 3;                                                  /* a shorter bomb is a prefix: LIGHTS is dropped */
-    puzzle_build_config(d, dial, wire, 1u, &c);
-    CHECK(c.module_count == 3 && c.module_order[2] == PROTO_MODULE_TRIPWIRE);
+    d.module_count = 3;                                                  /* a shorter bomb is a prefix of the shuffled order */
+    puzzle_build_config(d, dial, wire, 1u, 1u, &c);
+    CHECK(c.module_count == 3 && is_module_permutation(c.module_order));
     check_config_ranges(c);
     d.module_count = 4;
 
     for (n = 3; n <= 6; n++) {
         for (k = 1; k <= n; k++) {
             puzzle_fill_bank_wire(&wire, n, k, 0);
-            puzzle_build_config(d, dial, wire, (uint32_t)(n * 7 + k), &c);
+            puzzle_build_config(d, dial, wire, (uint32_t)(n * 7 + k), (uint32_t)(n * 11 + k), &c);
             check_config_ranges(c);
             CHECK(c.wire_count == n && c.correct_wire == k - 1);
         }
@@ -721,7 +819,7 @@ static void test_build_config(void)
     memset(&wire, 0, sizeof(wire));
     d.module_count = 9;
     d.time_limit_s = 9999;
-    puzzle_build_config(d, dial, wire, 0xFFFFFFFFu, &c);
+    puzzle_build_config(d, dial, wire, 0xFFFFFFFFu, 0xFFFFFFFFu, &c);
     CHECK(c.module_count == 4 && c.wire_count == 3 && c.correct_wire == 0);
     check_config_ranges(c);
 }
@@ -967,6 +1065,7 @@ int main(void)
     test_random_picks();
     printf("test_puzzle: config, selection\n");
     test_build_config();
+    test_module_order();
     test_pair_rules();
     test_spent_pairs();
     test_refill_next_slot();

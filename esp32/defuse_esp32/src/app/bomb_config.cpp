@@ -147,7 +147,9 @@ static bool send_locked(const char *why)
         return false;
     }
     diff = current_difficulty(NULL);
-    puzzle_build_config(diff, dial, wire, esp_random(), &cfg);   /* the random word moves the tripwire band (O11) */
+    /* First random word moves the tripwire band (O11), the second shuffles the module order of this bomb (D5):
+     * the MCX accepts any order of valid module types, and the OLED / web draw by the type it reports. */
+    puzzle_build_config(diff, dial, wire, esp_random(), esp_random(), &cfg);
     if (proto_pack_bomb_config(&cfg, pl, sizeof(pl)) == 0u || !link_send(PROTO_MSG_BOMB_CONFIG, pl, PROTO_SIZE_BOMB_CONFIG)) {
         return false;
     }

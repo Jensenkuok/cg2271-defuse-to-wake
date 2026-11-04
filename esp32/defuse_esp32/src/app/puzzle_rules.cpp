@@ -1,8 +1,8 @@
 /*
  * Defuse to Wake - puzzle rule language (see puzzle_rules.h for the language and the tiers).
  *
- * RTOS note: this runs in the network task (lowest priority, latency tolerant) during the nightly
- * puzzle run, never at alarm time. Worst case is 10,000 codes x 6 rules x ~128 nodes, a few ms on
+ * RTOS note: this runs in the network task (lowest priority, latency tolerant) while puzzles
+ * are generated or checked (bank refill, AI upgrade), never at alarm time. Worst case is 10,000 codes x 6 rules x ~128 nodes, a few ms on
  * the host and tens of ms on the ESP32-S2. No recursion beyond the expression grammar (parser:
  * PR_MAX_DEPTH parentheses; evaluator: tree depth <= PR_MAX_NODES but small in practice), no heap.
  */

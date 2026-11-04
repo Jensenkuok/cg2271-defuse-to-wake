@@ -203,11 +203,16 @@ static_assert(PUZZLE_TRIP_MIN_BASE_CM >= GAME_TRIP_BOUND_MIN_CM && PUZZLE_TRIP_F
 /* One 32-bit random word (esp_random on the board) -> a band of PUZZLE_TRIP_WIDTH_CM. */
 void trip_band_from_random(uint32_t r, uint8_t *min_cm, uint8_t *max_cm);
 
-/* Modules DIAL, WIRES, TRIPWIRE, LIGHTS (every level asks for all four), the time of the level, the puzzle answers (wire count
- * and wire come from the puzzle actually used, so the clue and the config never disagree), a tripwire
- * band from trip_rnd and the default strikes. Every field is inside the MCX's range checks. */
+/* A Fisher-Yates permutation of DIAL, WIRES, TRIPWIRE, LIGHTS into out[0..3], swaps drawn from rnd (pure: the
+ * same rnd always gives the same order). Every module appears exactly once. */
+void module_order_shuffle(uint32_t rnd, uint8_t out[PROTO_MAX_MODULES]);
+
+/* Modules DIAL, WIRES, TRIPWIRE, LIGHTS (every level asks for all four) in an order shuffled from order_rnd,
+ * the time of the level, the puzzle answers (wire count and wire come from the puzzle actually used, so the
+ * clue and the config never disagree), a tripwire band from trip_rnd (independent of the order) and the
+ * default strikes. Every field is inside the MCX's range checks. */
 void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &wire, uint32_t trip_rnd,
-                         proto_bomb_config_t *out);
+                         uint32_t order_rnd, proto_bomb_config_t *out);
 
 /* ================= selection rules ================= */
 /* A pair is SPENT once a bomb started with it (D4): it is never shown again. The network task refills its two

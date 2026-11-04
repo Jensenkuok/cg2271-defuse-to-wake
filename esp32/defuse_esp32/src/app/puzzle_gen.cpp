@@ -112,7 +112,7 @@ volatile bool s_reserved_dirty;         /* a slot of the reserved pair changed: 
                                          * the link task reads it without one (a single byte) and clears it under the lock */
 
 /* Network task only from here (the web task reads some of them as single words, see puzzle_gen_info). */
-uint32_t s_runs_done;                   /* whole-set events finished: a manual redo or a level refill (the briefing trigger, P3) */
+uint32_t s_runs_done;                   /* whole-set events finished (a manual redo or a level refill); only puzzle_gen_runs_done() reads it and nothing calls that now */
 PuzzleSet s_blob;                       /* flash buffer */
 bool s_in_session;                      /* a bomb session or the ring is running (set by puzzle_gen_apply_level every pass) */
 uint8_t s_force_slots;                  /* bit per slot: upgrade it again even if it is AI already (manual redo) */

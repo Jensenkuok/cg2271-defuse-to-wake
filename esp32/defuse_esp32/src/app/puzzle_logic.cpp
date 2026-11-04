@@ -916,17 +916,44 @@ bool puzzle_set_valid(const PuzzleSet &s)
 }
 
 /* ================= BOMB_CONFIG ================= */
+/* Each Fisher-Yates swap draws its index from the top half of a tiny LCG (Numerical Recipes constants), seeded
+ * with the random word: a pure function of rnd, so the host tests can replay it. The low bits of an LCG are
+ * weak, hence the shift by ORDER_LCG_SHIFT before the modulo. */
+#define ORDER_LCG_MUL    1664525u
+#define ORDER_LCG_ADD    1013904223u
+#define ORDER_LCG_SHIFT  16u
+
+void module_order_shuffle(uint32_t rnd, uint8_t out[PROTO_MAX_MODULES])
+{
+    uint32_t state = rnd;
+    unsigned i;
+
+    out[0] = PROTO_MODULE_DIAL;
+    out[1] = PROTO_MODULE_WIRES;
+    out[2] = PROTO_MODULE_TRIPWIRE;
+    out[3] = PROTO_MODULE_LIGHTS;                 /* the wake-up module: every bomb has all four sensors */
+    for (i = PROTO_MAX_MODULES - 1u; i > 0u; i--) {
+        unsigned j;
+        uint8_t tmp;
+
+        state = state * ORDER_LCG_MUL + ORDER_LCG_ADD;
+        j = (unsigned)((state >> ORDER_LCG_SHIFT) % (i + 1u));
+        tmp = out[i];
+        out[i] = out[j];
+        out[j] = tmp;
+    }
+}
+
 void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &wire, uint32_t trip_rnd,
-                         proto_bomb_config_t *out)
+                         uint32_t order_rnd, proto_bomb_config_t *out)
 {
     unsigned i;
 
     memset(out, 0, sizeof(*out));
     out->module_count = (uint8_t)clamp_i(d.module_count, (int)GAME_MIN_MODULES, (int)PROTO_MAX_MODULES);
-    out->module_order[0] = PROTO_MODULE_DIAL;
-    out->module_order[1] = PROTO_MODULE_WIRES;
-    out->module_order[2] = PROTO_MODULE_TRIPWIRE;
-    out->module_order[3] = PROTO_MODULE_LIGHTS;   /* the wake-up module: every bomb has all four sensors */
+    /* All four modules are shuffled; if a level ever asks for fewer than four, the MCX plays the first
+     * module_count entries. Every level asks for all four today (D5). */
+    module_order_shuffle(order_rnd, out->module_order);
     out->time_limit_s = (uint16_t)clamp_i(d.time_limit_s, (int)GAME_MIN_TIME_LIMIT_S, (int)GAME_MAX_TIME_LIMIT_S);
     for (i = 0u; i < PROTO_DIAL_DIGITS; i++) {
         out->dial_code[i] = (uint8_t)(dial.dial_code[i] % DIAL_BASE);

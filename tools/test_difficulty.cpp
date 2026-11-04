@@ -478,12 +478,19 @@ static void test_config_follows_level_and_puzzle(void)
                 proto_bomb_config_t c;
 
                 puzzle_fill_bank_wire(&wire, n, k, 0);
-                puzzle_build_config(d, dial, wire, (uint32_t)(level * 100 + n * 10 + k), &c);
+                puzzle_build_config(d, dial, wire, (uint32_t)(level * 100 + n * 10 + k), (uint32_t)(level * 31 + n * 5 + k), &c);
                 CHECK(c.time_limit_s == spec.time_s && c.module_count == spec.modules);
                 CHECK(c.wire_count == n && c.correct_wire == k - 1);         /* from the puzzle used, never from the level */
-                CHECK(c.module_order[0] == PROTO_MODULE_DIAL && c.module_order[1] == PROTO_MODULE_WIRES &&
-                      c.module_order[2] == PROTO_MODULE_TRIPWIRE);
-                CHECK(spec.modules == 4 && c.module_order[3] == PROTO_MODULE_LIGHTS);   /* D, W, T, L at every level */
+                {
+                    unsigned seen = 0u;
+
+                    for (unsigned m = 0u; m < PROTO_MAX_MODULES; m++) {
+                        seen |= 1u << c.module_order[m];
+                    }
+                    CHECK(spec.modules == 4 && seen == ((1u << PROTO_MODULE_DIAL) | (1u << PROTO_MODULE_WIRES) |
+                                                        (1u << PROTO_MODULE_TRIPWIRE) | (1u << PROTO_MODULE_LIGHTS)));
+                                                                              /* all four, shuffled, at every level */
+                }
                 CHECK(c.trip_min_cm >= 10 && c.trip_max_cm == c.trip_min_cm + 10 && c.trip_max_cm <= 40);
                 CHECK(memcmp(c.dial_code, code, 4) == 0);
             }
@@ -496,7 +503,7 @@ static void test_config_follows_level_and_puzzle(void)
         const Difficulty hard = difficulty(NULL, 0, DIFF_MODE_HARD);
 
         puzzle_fill_bank_wire(&wire, 3, 2, 0);
-        puzzle_build_config(hard, dial, wire, 5u, &c);
+        puzzle_build_config(hard, dial, wire, 5u, 5u, &c);
         CHECK(c.wire_count == 3 && c.correct_wire == 1 && c.time_limit_s == 150 && c.module_count == 4);
     }
     /* different random words move the band between bombs */
@@ -506,8 +513,8 @@ static void test_config_follows_level_and_puzzle(void)
         const Difficulty d = difficulty(NULL, 0, DIFF_MODE_NORMAL);
 
         puzzle_fill_bank_wire(&wire, 5, 3, 0);
-        puzzle_build_config(d, dial, wire, 0u, &a);
-        puzzle_build_config(d, dial, wire, 7u, &b);
+        puzzle_build_config(d, dial, wire, 0u, 0u, &a);
+        puzzle_build_config(d, dial, wire, 7u, 0u, &b);
         CHECK(a.trip_min_cm != b.trip_min_cm);
     }
 }

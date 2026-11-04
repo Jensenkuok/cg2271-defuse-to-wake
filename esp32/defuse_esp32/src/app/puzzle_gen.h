@@ -1,5 +1,5 @@
 /*
- * Defuse to Wake - nightly puzzle generation (network task only, lowest priority).
+ * Defuse to Wake - puzzle generation: bank refill and slot-by-slot AI upgrade (network task only, lowest priority).
  *
  * A SET is 4 dial + 4 wire puzzles; pair i = dial[i] + wire[i] is used for one bomb. Per puzzle:
  *   1. the ESP32 picks the answer (esp_random): a 4-digit code, or a wire 1..N (N from the level's
