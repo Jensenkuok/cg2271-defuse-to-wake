@@ -26,6 +26,9 @@ bool briefing_init(void);
 /* Serial "brief": generate now (when the Wi-Fi, the clock and the game state allow it). */
 void briefing_request(void);
 
+/* Once per boot, from the first schedule pass: an automatic request that waits for Wi-Fi + clock. */
+void briefing_request_boot(void);
+
 /* One scheduling pass: refreshes the "today" template, starts a run after each finished puzzle
  * run or on request, and advances a running one by one LLM call. net_ok = Wi-Fi up and clock
  * valid; gen_ok = no bomb session and the alarm is not imminent. unix_now is 0 when the clock is

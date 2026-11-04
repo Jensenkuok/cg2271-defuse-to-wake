@@ -202,6 +202,11 @@ static void reschedule(NetCtx &c, uint32_t unix_now)
      * instead of being skipped for the next class. A past result is never sent (see sync_with_mcx). */
     a = next_alarm(s_lessons, n, c.first_schedule_done ? unix_now : unix_now - ALARM_BOOT_GRACE_S,
                    settings_get_lead_min(), c.consumed_class_start_unix);
+    if (!c.first_schedule_done) {
+        /* Only a request flag here: service_llm_jobs consumes it after this pass has returned, by which
+         * time app_state_set_schedule() below has written the alarm that begin_run() reads. */
+        briefing_request_boot();
+    }
     c.first_schedule_done = true;
     /* A pending demo replaces the real alarm only while it is EARLIER (sched_pick_alarm). If the real
      * alarm now comes at or before the demo (a bigger lead time, a timetable refresh), the demo is

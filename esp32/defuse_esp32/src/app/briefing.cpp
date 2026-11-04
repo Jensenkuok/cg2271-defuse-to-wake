@@ -272,6 +272,15 @@ void briefing_request(void)
     s_manual = true;
 }
 
+/* Automatic (not manual) so it waits for Wi-Fi + clock instead of being dropped: a reboot always
+ * tries the LLM once, even when the cached puzzle set is fresh and no puzzle run follows. */
+void briefing_request_boot(void)
+{
+    s_requested = true;
+    s_manual = false;
+    Serial.println("[brief] run wanted (boot)");
+}
+
 void briefing_service(uint32_t now_ms, uint32_t unix_now, bool net_ok, bool gen_ok)
 {
     const uint32_t runs = puzzle_gen_runs_done();
