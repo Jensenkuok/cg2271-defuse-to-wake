@@ -642,7 +642,7 @@ static void run_command(NetCtx &c, const char *cmd, size_t len, uint32_t unix_no
         print_history(unix_now);
     } else if (strcmp(cmd, "puzzles") == 0) {
         puzzle_gen_request();
-        Serial.println("[cmd] puzzle run requested");
+        Serial.println("[cmd] redo of every puzzle slot requested");
     } else if (strcmp(cmd, "ai") == 0) {
         puzzle_print_set();
     } else if (strcmp(cmd, "diff") == 0) {
@@ -730,7 +730,7 @@ static void service_web_requests(NetCtx &c, uint32_t unix_now)
 
     if (regen_take()) {
         puzzle_gen_request();
-        Serial.println("[web] puzzle run requested");
+        Serial.println("[web] redo of every puzzle slot requested");
     }
     if (demo_take(&minutes)) {
         Serial.printf("[web] demo alarm requested: %d min\n", minutes);

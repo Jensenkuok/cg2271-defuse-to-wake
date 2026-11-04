@@ -31,7 +31,7 @@ struct Pending {
 
 Pending s_pending;
 int s_active_pair = -1;     /* the pair the MCX holds (last ACKed config) */
-uint32_t s_active_gen;
+uint32_t s_active_gen;      /* set generation of that config (kept for the log; consume no longer checks it) */
 bool s_active_consumed;     /* a bomb already started with it */
 uint32_t s_seen_acks;
 uint32_t s_seen_fails;
@@ -204,6 +204,14 @@ static void service_locked(const AppState &st)
         s_seen_set_gen = gen;
         s_resend_new_set = true;
     }
+    /* The network task upgraded or refilled a puzzle of the pair the MCX already holds. The MCX keeps the old
+     * answers and the OLED shows the text copied at send time, so the two only agree as long as the pair is
+     * sent again WHOLE: dial and wire come from the same take, never one new puzzle beside an old answer.
+     * Same rule as a new set: ARMED outside a session only (below); the network task never touches the
+     * reserved pair during a session, so nothing is lost by waiting. */
+    if (puzzle_reserved_changed_take()) {
+        s_resend_new_set = true;
+    }
     if (!st.game_valid) {
         return;
     }
@@ -211,7 +219,7 @@ static void service_locked(const AppState &st)
 
     if (bomb_just_started(s_prev_state, state) && s_active_pair >= 0 && !s_active_consumed) {
         /* the bomb took the config the MCX held; if the puzzle lock is busy, try again next pass */
-        s_active_consumed = puzzle_consume_pair(s_active_pair, s_active_gen);
+        s_active_consumed = puzzle_consume_pair(s_active_pair);
     }
     if (config_trigger_needed(s_prev_state, state, st.session_active)) {
         s_need_trigger = true;

@@ -729,7 +729,6 @@ static void test_build_config(void)
 /* ================= selection rules ================= */
 static void test_pair_rules(void)
 {
-    bool cycled = true;
     uint8_t mask = 0;
     int i;
 
@@ -740,18 +739,150 @@ static void test_pair_rules(void)
     CHECK(pair_next_unused(0x0F, 4) == -1);
     CHECK(pair_next_unused(0xF0, 4) == 0);                                /* bits above count are ignored */
 
-    for (i = 0; i < 3; i++) {
-        mask = pair_mark_used(mask, pair_next_unused(mask, 4), 4, &cycled);
-        CHECK(!cycled && mask == (uint8_t)((1u << (i + 1)) - 1u));
+    for (i = 0; i < 4; i++) {                                             /* spending never wraps around */
+        mask = pair_mark_spent(mask, pair_next_unused(mask, 4), 4);
+        CHECK(mask == (uint8_t)((1u << (i + 1)) - 1u));
     }
-    mask = pair_mark_used(mask, 3, 4, &cycled);                          /* the 4th: wrap */
-    CHECK(cycled && mask == 0 && pair_next_unused(mask, 4) == 0);
-    mask = pair_mark_used(0x01, 0, 4, &cycled);                          /* marking a used one again */
-    CHECK(!cycled && mask == 0x01);
-    mask = pair_mark_used(0x03, 7, 4, &cycled);                          /* out of range: unchanged */
-    CHECK(!cycled && mask == 0x03);
-    mask = pair_mark_used(0x03, -1, 4, NULL);
-    CHECK(mask == 0x03);
+    CHECK(mask == 0x0F && pair_next_unused(mask, 4) == -1);               /* all spent: still all spent */
+    mask = pair_mark_spent(0x01, 0, 4);                                   /* spending a spent one again */
+    CHECK(mask == 0x01);
+    CHECK(pair_mark_spent(0x03, 7, 4) == 0x03);                           /* out of range: unchanged */
+    CHECK(pair_mark_spent(0x03, -1, 4) == 0x03);
+    CHECK(pair_clear_spent(0x0F, 2, 4) == 0x0B);
+    CHECK(pair_clear_spent(0x0B, 2, 4) == 0x0B);                          /* already clear */
+    CHECK(pair_clear_spent(0x0B, 4, 4) == 0x0B && pair_clear_spent(0x0B, -1, 4) == 0x0B);
+}
+
+/* D4: a pair is never taken twice until it was refilled (its spent bit cleared); D6: with every pair spent the
+ * least recently spent one is reused. */
+static void test_spent_pairs(void)
+{
+    uint32_t order[4] = { 0, 0, 0, 0 };
+    uint32_t counter = 0;
+    uint8_t spent = 0;
+    bool reused = true;
+    int seen[4] = { 0, 0, 0, 0 };
+    int i;
+    int p;
+
+    for (i = 0; i < 4; i++) {                                             /* four bombs in a row: four different pairs */
+        p = pair_pick(spent, order, 4, &reused);
+        CHECK(p == i && !reused);
+        CHECK(seen[p] == 0);
+        seen[p]++;
+        spent = pair_mark_spent(spent, p, 4);
+        order[p] = ++counter;
+    }
+    CHECK(spent == 0x0F);
+    p = pair_pick(spent, order, 4, &reused);                              /* fifth bomb, nothing refilled yet */
+    CHECK(p == 0 && reused);                                              /* pair 0 was spent first */
+    spent = pair_clear_spent(spent, 2, 4);                                /* pair 2 refilled */
+    p = pair_pick(spent, order, 4, &reused);
+    CHECK(p == 2 && !reused);                                             /* a refilled pair beats any reuse */
+    spent = pair_mark_spent(spent, 2, 4);
+    order[2] = ++counter;
+    p = pair_pick(spent, order, 4, &reused);                              /* oldest is still pair 0, then 1 ... */
+    CHECK(p == 0 && reused);
+    order[0] = ++counter;                                                 /* pair 0 reused and spent again */
+    p = pair_pick(spent, order, 4, &reused);
+    CHECK(p == 1 && reused);
+    order[1] = ++counter;
+    p = pair_pick(spent, order, 4, &reused);
+    CHECK(p == 3 && reused);                                              /* 3 (order 4) older than 2 (order 5) */
+
+    CHECK(pair_oldest_spent(0x00, order, 4) == -1);                       /* nothing spent */
+    {
+        const uint32_t zero[4] = { 0, 0, 0, 0 };                          /* after a reboot every order is 0: lowest index */
+        CHECK(pair_oldest_spent(0x0C, zero, 4) == 2);
+        CHECK(pair_oldest_spent(0x0F, zero, 4) == 0);
+    }
+    CHECK(pair_pick(0x00, order, 4, NULL) == 0);                          /* reused may be NULL */
+    CHECK(pair_pick(0x0F, order, 4, NULL) == pair_oldest_spent(0x0F, order, 4));
+}
+
+static void test_refill_next_slot(void)
+{
+    CHECK(refill_next_slot(0x00, 0x00) == -1);                            /* nothing spent: nothing to refill */
+    CHECK(refill_next_slot(0x00, 0xFF) == -1);
+    CHECK(refill_next_slot(0x04, 0x00) == 2);                             /* pair 2: its dial slot first */
+    CHECK(refill_next_slot(0x04, 1u << 2) == PUZZLE_PAIRS + 2);           /* then its wire slot */
+    CHECK(refill_next_slot(0x04, (1u << 2) | (1u << (PUZZLE_PAIRS + 2))) == -1);   /* both done: the caller clears the bit */
+    CHECK(refill_next_slot(0x0A, 0x00) == 1);                             /* lowest spent pair first */
+    CHECK(refill_next_slot(0x0A, 1u << 1) == PUZZLE_PAIRS + 1);
+    CHECK(refill_next_slot(0x0A, (1u << 1) | (1u << (PUZZLE_PAIRS + 1))) == 3);
+    CHECK(refill_next_slot(0x04, 1u << 0) == 2);                          /* a refilled bit of another pair is irrelevant */
+}
+
+/* A set whose every slot is a bank puzzle at `level`, or AI at `level` with `ai_mask` (bit per slot). */
+static PuzzleSet make_slot_set(uint8_t level, uint8_t ai_mask)
+{
+    PuzzleSet s;
+    uint32_t rnd[PUZZLE_BANK_WORDS];
+    int i;
+
+    for (i = 0; i < (int)PUZZLE_BANK_WORDS; i++) {
+        rnd[i] = 0x9E3779B9u * (uint32_t)(i + 1);
+    }
+    puzzle_set_fill_bank(&s, rnd);
+    for (i = 0; i < PUZZLE_SLOTS; i++) {
+        Puzzle &p = i < PUZZLE_PAIRS ? s.dial[i] : s.wire[i - PUZZLE_PAIRS];
+
+        p.level = level;
+        p.source = ((ai_mask >> i) & 1u) ? PUZZLE_SRC_AI : PUZZLE_SRC_BANK;
+    }
+    s.ai_count = puzzle_set_count_ai(s);
+    return s;
+}
+
+static void test_upgrade_next_slot(void)
+{
+    PuzzleSet s = make_slot_set(PR_NORMAL, 0x00);                         /* all bank */
+    int slot;
+    int visited = 0;
+    int i;
+
+    CHECK(puzzle_set_count_ai(s) == 0);
+    CHECK(upgrade_next_slot(s, PR_NORMAL, 0x00, 0x00, -1) == 0);          /* starts at slot 0 */
+    CHECK(upgrade_next_slot(s, PR_NORMAL, 0x00, 0x00, 0) == 1);           /* round-robin: the one after the last */
+    CHECK(upgrade_next_slot(s, PR_NORMAL, 0x00, 0x00, 6) == 7);
+    CHECK(upgrade_next_slot(s, PR_NORMAL, 0x00, 0x00, 7) == 0);           /* wraps */
+
+    /* a full round visits every slot once */
+    slot = -1;
+    for (i = 0; i < PUZZLE_SLOTS; i++) {
+        slot = upgrade_next_slot(s, PR_NORMAL, 0x00, 0x00, slot);
+        CHECK(slot >= 0);
+        visited |= 1 << slot;
+    }
+    CHECK(visited == 0xFF);
+
+    /* spent pairs are skipped: pair 1 = slots 1 and 5 */
+    CHECK(upgrade_next_slot(s, PR_NORMAL, 0x02, 0x00, 0) == 2);
+    CHECK(upgrade_next_slot(s, PR_NORMAL, 0x02, 0x00, 4) == 6);
+    CHECK(upgrade_next_slot(s, PR_NORMAL, 0x0F, 0x00, -1) == -1);         /* everything spent: nothing to do */
+
+    /* AI slots at the target level are done */
+    s = make_slot_set(PR_NORMAL, 0xFF);
+    CHECK(puzzle_set_count_ai(s) == 8);
+    CHECK(upgrade_next_slot(s, PR_NORMAL, 0x00, 0x00, -1) == -1);
+    s = make_slot_set(PR_NORMAL, 0xDF);                                   /* only slot 5 (wire of pair 1) is a bank puzzle */
+    CHECK(puzzle_set_count_ai(s) == 7);
+    CHECK(upgrade_next_slot(s, PR_NORMAL, 0x00, 0x00, -1) == 5);
+    CHECK(upgrade_next_slot(s, PR_NORMAL, 0x00, 0x00, 5) == 5);           /* the only one: also after itself */
+    CHECK(upgrade_next_slot(s, PR_NORMAL, 0x02, 0x00, -1) == -1);         /* ...unless its pair is spent */
+
+    /* an AI puzzle at another level than the target is upgraded again */
+    s = make_slot_set(PR_EASY, 0xFF);
+    CHECK(upgrade_next_slot(s, PR_NORMAL, 0x00, 0x00, -1) == 0);
+    CHECK(upgrade_next_slot(s, PR_EASY, 0x00, 0x00, -1) == -1);
+
+    /* manual redo: the force bits make AI slots at the target level candidates, in slot order */
+    s = make_slot_set(PR_NORMAL, 0xFF);
+    CHECK(upgrade_next_slot(s, PR_NORMAL, 0x00, 0x24, -1) == 2);          /* slots 2 and 5 forced */
+    CHECK(upgrade_next_slot(s, PR_NORMAL, 0x00, 0x24, 2) == 5);
+    CHECK(upgrade_next_slot(s, PR_NORMAL, 0x00, 0x24, 5) == 2);
+    CHECK(upgrade_next_slot(s, PR_NORMAL, 0x04, 0x24, -1) == 5);          /* slot 2 is pair 2 (spent): skipped, slot 5 stays */
+    CHECK(upgrade_next_slot(s, PR_NORMAL, 0x06, 0x24, -1) == -1);         /* both pairs spent: nothing */
 }
 
 static void test_checker_order(void)
@@ -837,6 +968,9 @@ int main(void)
     printf("test_puzzle: config, selection\n");
     test_build_config();
     test_pair_rules();
+    test_spent_pairs();
+    test_refill_next_slot();
+    test_upgrade_next_slot();
     test_checker_order();
     test_fresh_and_triggers();
     printf("test_puzzle: %d checks, %d failed\n", g_checks, g_failed);

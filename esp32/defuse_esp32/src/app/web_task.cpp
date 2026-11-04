@@ -384,23 +384,26 @@ static void put_ai_header(JsonBuf *j, uint32_t gen)
 {
     PuzzleRunInfo run;
     char when[TIME_TEXT_LEN];
+    char slot_txt[4] = "";
 
     puzzle_gen_info(&run);
     fmt_local(when, sizeof(when), s_set->generated_unix);
-    jb_kv_uint(j, "gen", gen);
+    (void)gen;                                          /* constant now: a slot changes in place (see puzzle_gen.h) */
     jb_kv_str(j, "generated", when);
     jb_kv_uint(j, "ai_count", s_set->ai_count);
-    jb_kv_uint(j, "total", 2u * PUZZLE_PAIRS);
+    jb_kv_uint(j, "total", PUZZLE_SLOTS);
     jb_kv_bool(j, "busy", run.busy);
-    jb_kv_bool(j, "queued", run.queued);
-    jb_kv_uint(j, "progress", run.progress);
-    jb_kv_uint(j, "runs", run.runs_done);
-    jb_key(j, "last");
-    jb_obj(j);
-    jb_kv_bool(j, "valid", run.runs_done > 0u);
-    jb_kv_uint(j, "ai", run.last_ai);
-    jb_kv_bool(j, "installed", run.last_installed);
-    jb_end(j);
+    jb_kv_bool(j, "queued", run.queued);                /* a manual redo of every slot is pending */
+    /* Slot under upgrade as "D2"/"W0" ("" = idle), the spent-pair mask and seconds to the next retry: three small
+     * fields replace the old progress/runs/last object, so the status JSON is a little SMALLER than before. */
+    if (run.slot >= 0) {
+        slot_txt[0] = run.slot < PUZZLE_PAIRS ? 'D' : 'W';
+        slot_txt[1] = (char)('0' + (run.slot % PUZZLE_PAIRS));       /* pair index 0..3: one digit */
+        slot_txt[2] = '\0';
+    }
+    jb_kv_str(j, "slot", slot_txt);
+    jb_kv_uint(j, "spent", run.spent);
+    jb_kv_uint(j, "retry_s", run.retry_s);
 }
 
 static void put_ai(JsonBuf *j)

@@ -938,37 +938,107 @@ void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &
 }
 
 /* ================= selection rules ================= */
-int pair_next_unused(uint8_t used_mask, int count)
+int pair_next_unused(uint8_t spent_mask, int count)
 {
     int i;
 
     for (i = 0; i < count && i < 8; i++) {
-        if ((used_mask & (1u << i)) == 0u) {
+        if ((spent_mask & (1u << i)) == 0u) {
             return i;
         }
     }
     return -1;
 }
 
-uint8_t pair_mark_used(uint8_t used_mask, int idx, int count, bool *cycled)
+uint8_t pair_mark_spent(uint8_t spent_mask, int idx, int count)
 {
-    unsigned full;
-
-    if (cycled != NULL) {
-        *cycled = false;
-    }
     if (idx < 0 || idx >= count || count > 8) {
-        return used_mask;
+        return spent_mask;
     }
-    used_mask = (uint8_t)(used_mask | (1u << idx));
-    full = (1u << count) - 1u;
-    if ((used_mask & full) == full) {
-        if (cycled != NULL) {
-            *cycled = true;
+    return (uint8_t)(spent_mask | (1u << idx));
+}
+
+uint8_t pair_clear_spent(uint8_t spent_mask, int idx, int count)
+{
+    if (idx < 0 || idx >= count || count > 8) {
+        return spent_mask;
+    }
+    return (uint8_t)(spent_mask & ~(1u << idx));
+}
+
+int pair_oldest_spent(uint8_t spent_mask, const uint32_t *spend_order, int count)
+{
+    int best = -1;
+    int i;
+
+    for (i = 0; i < count && i < 8; i++) {
+        if ((spent_mask & (1u << i)) != 0u && (best < 0 || spend_order[i] < spend_order[best])) {
+            best = i;                               /* strict <: a tie keeps the lowest index */
         }
-        return 0u;
     }
-    return used_mask;
+    return best;
+}
+
+int pair_pick(uint8_t spent_mask, const uint32_t *spend_order, int count, bool *reused)
+{
+    const int fresh = pair_next_unused(spent_mask, count);
+
+    if (reused != NULL) {
+        *reused = (fresh < 0);
+    }
+    return fresh >= 0 ? fresh : pair_oldest_spent(spent_mask, spend_order, count);
+}
+
+int refill_next_slot(uint8_t spent_mask, uint8_t refilled_slots)
+{
+    int pair;
+
+    for (pair = 0; pair < PUZZLE_PAIRS; pair++) {
+        if ((spent_mask & (1u << pair)) == 0u) {
+            continue;
+        }
+        if ((refilled_slots & (1u << pair)) == 0u) {
+            return pair;                            /* the dial slot */
+        }
+        if ((refilled_slots & (1u << (PUZZLE_PAIRS + pair))) == 0u) {
+            return PUZZLE_PAIRS + pair;             /* the wire slot */
+        }
+    }
+    return -1;
+}
+
+static const Puzzle &set_slot(const PuzzleSet &s, int slot)
+{
+    return slot < PUZZLE_PAIRS ? s.dial[slot] : s.wire[slot - PUZZLE_PAIRS];
+}
+
+int upgrade_next_slot(const PuzzleSet &s, int target_level, uint8_t spent_mask, uint8_t force_slots, int last_slot)
+{
+    int step;
+
+    for (step = 1; step <= PUZZLE_SLOTS; step++) {
+        const int slot = (last_slot + step + PUZZLE_SLOTS) % PUZZLE_SLOTS;   /* last_slot -1 starts at 0 */
+        const Puzzle &p = set_slot(s, slot);
+
+        if ((spent_mask & (1u << (slot % PUZZLE_PAIRS))) != 0u) {
+            continue;                               /* a used pair is refilled by the bank, never upgraded */
+        }
+        if (p.source == PUZZLE_SRC_BANK || (int)p.level != target_level || (force_slots & (1u << slot)) != 0u) {
+            return slot;
+        }
+    }
+    return -1;
+}
+
+uint8_t puzzle_set_count_ai(const PuzzleSet &s)
+{
+    uint8_t n = 0u;
+    unsigned i;
+
+    for (i = 0u; i < PUZZLE_PAIRS; i++) {
+        n = (uint8_t)(n + (s.dial[i].source == PUZZLE_SRC_AI ? 1u : 0u) + (s.wire[i].source == PUZZLE_SRC_AI ? 1u : 0u));
+    }
+    return n;
 }
 
 int checker_order(const char *const *chain, int n, const char *setter, int *order_out)

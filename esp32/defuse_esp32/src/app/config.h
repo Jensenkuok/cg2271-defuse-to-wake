@@ -197,13 +197,10 @@
 #define APP_PUZZLE_ATTEMPTS         3       /* setter + checker rounds per puzzle before the bank */
 #define APP_PUZZLE_DEFAULT_LEVEL    2       /* fallback level (NORMAL) until puzzle_gen_init / puzzle_gen_apply_level give the effective one */
 #define APP_PUZZLE_DEAD_CHAINS      2       /* chains that failed outright in a row: stop asking the LLM */
-#define APP_PUZZLE_FRESH_S          (24 * 3600) /* a stored set younger than this needs no new run at boot */
-#define APP_PUZZLE_NIGHTLY_HOUR     22      /* local hour of the nightly run */
-#define APP_PUZZLE_RETRY_MS         1800000u /* a run with no verified puzzle is retried after 30 min... */
-#define APP_PUZZLE_RETRIES          2       /* ...at most this many times per trigger */
+#define APP_PUZZLE_UPGRADE_RETRY_MS 60000u  /* after a slot's AI attempt failed (3 attempts used, or the models are unreachable) wait this long before the next */
 #define APP_PUZZLE_QUIET_S          300     /* no LLM calls this close to (or just after) the alarm */
-#define APP_KEY_PUZZLES             "pz_set"
-#define APP_KEY_PUZZLE_USED         "pz_used"
+#define APP_KEY_PUZZLES            "pz_set"
+#define APP_KEY_PUZZLE_USED         "pz_used"   /* SPENT-pair mask: a pair a bomb started with, not yet refilled by the bank */
 #define APP_CONFIG_PENDING_MS       5000u   /* one BOMB_CONFIG at a time; give up on its ACK after this */
 
 /* ---- Briefing + coach (one LLM call after each nightly puzzle run, same setter chain) ---- */
