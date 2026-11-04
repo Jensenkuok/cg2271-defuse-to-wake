@@ -703,6 +703,78 @@ static unsigned order_rank(const uint8_t o[PROTO_MAX_MODULES])
     return rank;
 }
 
+/* The MCX derives the dial code from the module index; the pre-shifted base must land on the puzzle's code at
+ * the dial's position in every one of the 24 orders. */
+/* What game_dial_code() (game/game_dial.h) makes of a base at a module index. Written out here because that header
+ * includes "protocol.h" without a path and run_tests.ps1 gives the puzzle tests no -I shared. */
+static void mcx_dial_code(const uint8_t base[PROTO_DIAL_DIGITS], unsigned idx, uint8_t out[PROTO_DIAL_DIGITS])
+{
+    unsigned i;
+
+    for (i = 0u; i < PROTO_DIAL_DIGITS; i++) {
+        out[i] = (uint8_t)((base[i] + GAME_DIAL_REPEAT_STEP * idx) % GAME_DIAL_BASE);
+    }
+}
+
+static void test_dial_preshift(void)
+{
+    static const uint8_t codes[][PROTO_DIAL_DIGITS] = { { 0, 0, 0, 0 }, { 9, 9, 9, 9 }, { 4, 2, 7, 1 }, { 1, 8, 3, 0 }, { 2, 5, 9, 6 } };
+    unsigned a;
+    unsigned b;
+    unsigned c;
+    unsigned d;
+    unsigned k;
+    unsigned i;
+
+    for (a = PROTO_MODULE_DIAL; a <= PROTO_MODULE_LIGHTS; a++) {
+        for (b = PROTO_MODULE_DIAL; b <= PROTO_MODULE_LIGHTS; b++) {
+            for (c = PROTO_MODULE_DIAL; c <= PROTO_MODULE_LIGHTS; c++) {
+                for (d = PROTO_MODULE_DIAL; d <= PROTO_MODULE_LIGHTS; d++) {
+                    const uint8_t order[PROTO_MAX_MODULES] = { (uint8_t)a, (uint8_t)b, (uint8_t)c, (uint8_t)d };
+
+                    if (!is_module_permutation(order)) {
+                        continue;
+                    }
+                    for (k = 0u; k < sizeof(codes) / sizeof(codes[0]); k++) {
+                        uint8_t base[PROTO_DIAL_DIGITS];
+                        uint8_t back[PROTO_DIAL_DIGITS];
+                        const unsigned pos = module_order_find(order, PROTO_MODULE_DIAL);
+                        bool in_range = true;
+
+                        dial_code_preshift(codes[k], pos, base);
+                        mcx_dial_code(base, pos, back);
+                        for (i = 0u; i < PROTO_DIAL_DIGITS; i++) {
+                            in_range = in_range && base[i] <= 9u;
+                        }
+                        CHECK(in_range);
+                        CHECK(memcmp(back, codes[k], PROTO_DIAL_DIGITS) == 0);   /* the MCX expects the AI code here */
+                    }
+                }
+            }
+        }
+    }
+    {
+        /* end to end through puzzle_build_config, whatever the order word */
+        static const uint8_t code[4] = { 4, 2, 7, 1 };
+        Puzzle dial;
+        Puzzle wire;
+        proto_bomb_config_t cfg;
+        uint8_t back[PROTO_DIAL_DIGITS];
+        const Difficulty df = difficulty(NULL, 0, DIFF_MODE_NORMAL);
+        uint32_t r;
+
+        puzzle_fill_bank_dial(&dial, code, 0);
+        puzzle_fill_bank_wire(&wire, 4, 2, 0);
+        for (r = 0u; r < 200u; r++) {
+            const unsigned pos = (puzzle_build_config(df, dial, wire, r, r, &cfg), module_order_find(cfg.module_order, PROTO_MODULE_DIAL));
+
+            mcx_dial_code(cfg.dial_code, pos, back);
+            CHECK(memcmp(back, code, 4) == 0);
+            check_config_ranges(cfg);
+        }
+    }
+}
+
 static void test_module_order(void)
 {
     enum { SEEDS = 2400, ORDERS = 24 };
@@ -786,7 +858,13 @@ static void test_build_config(void)
     puzzle_build_config(d, dial, wire, 0u, 0u, &c);
     check_config_ranges(c);
     CHECK(c.module_count == 4 && is_module_permutation(c.module_order));   /* all four, in some order (D5) */
-    CHECK(c.time_limit_s == 180 && c.dial_code[0] == 4 && c.dial_code[1] == 2 && c.dial_code[2] == 7 && c.dial_code[3] == 1);
+    CHECK(c.time_limit_s == 180);
+    {
+        uint8_t sent[PROTO_DIAL_DIGITS];
+
+        dial_code_preshift(code, module_order_find(c.module_order, PROTO_MODULE_DIAL), sent);
+        CHECK(memcmp(c.dial_code, sent, 4) == 0);                        /* the base sent is the pre-shifted 4271 */
+    }
     CHECK(c.wire_count == 5 && c.correct_wire == 2);                    /* k = 3 (1-based) -> index 2 */
     CHECK(c.trip_min_cm == PUZZLE_TRIP_MIN_BASE_CM && c.trip_max_cm == PUZZLE_TRIP_MIN_BASE_CM + PUZZLE_TRIP_WIDTH_CM &&
           c.max_strikes == 3);                                           /* rnd 0 -> the nearest band, 10-20 cm */
@@ -1066,6 +1144,7 @@ int main(void)
     printf("test_puzzle: config, selection\n");
     test_build_config();
     test_module_order();
+    test_dial_preshift();
     test_pair_rules();
     test_spent_pairs();
     test_refill_next_slot();

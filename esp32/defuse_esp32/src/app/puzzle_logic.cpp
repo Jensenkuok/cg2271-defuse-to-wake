@@ -944,9 +944,35 @@ void module_order_shuffle(uint32_t rnd, uint8_t out[PROTO_MAX_MODULES])
     }
 }
 
+unsigned module_order_find(const uint8_t order[PROTO_MAX_MODULES], uint8_t type)
+{
+    unsigned i;
+
+    for (i = 0u; i < PROTO_MAX_MODULES; i++) {
+        if (order[i] == type) {
+            return i;
+        }
+    }
+    return 0u;
+}
+
+/* The MCX expects code + GAME_DIAL_REPEAT_STEP * index (mod 10) at module index `index` (game_dial_code), so
+ * the base it is sent is the wanted code minus that shift. Adding DIAL_BASE keeps every step non-negative. */
+void dial_code_preshift(const uint8_t code[PROTO_DIAL_DIGITS], unsigned pos, uint8_t out[PROTO_DIAL_DIGITS])
+{
+    const unsigned shift = (GAME_DIAL_REPEAT_STEP * pos) % DIAL_BASE;
+    unsigned i;
+
+    for (i = 0u; i < PROTO_DIAL_DIGITS; i++) {
+        out[i] = (uint8_t)((code[i] % DIAL_BASE + DIAL_BASE - shift) % DIAL_BASE);
+    }
+}
+
 void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &wire, uint32_t trip_rnd,
                          uint32_t order_rnd, proto_bomb_config_t *out)
 {
+    uint8_t ai_code[PROTO_DIAL_DIGITS];
+
     unsigned i;
 
     memset(out, 0, sizeof(*out));
@@ -956,8 +982,11 @@ void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &
     module_order_shuffle(order_rnd, out->module_order);
     out->time_limit_s = (uint16_t)clamp_i(d.time_limit_s, (int)GAME_MIN_TIME_LIMIT_S, (int)GAME_MAX_TIME_LIMIT_S);
     for (i = 0u; i < PROTO_DIAL_DIGITS; i++) {
-        out->dial_code[i] = (uint8_t)(dial.dial_code[i] % DIAL_BASE);
+        ai_code[i] = (uint8_t)(dial.dial_code[i] % DIAL_BASE);
     }
+    /* The MCX shifts the dial code by the module index, so send a base that lands on the puzzle's code exactly
+     * where the dial sits in the shuffled order (the display derives every other index from the same base). */
+    dial_code_preshift(ai_code, module_order_find(out->module_order, PROTO_MODULE_DIAL), out->dial_code);
     out->wire_count = (uint8_t)clamp_i(wire.wire_count, (int)GAME_MIN_WIRES, (int)GAME_MAX_WIRES);
     out->correct_wire = (uint8_t)clamp_i((int)wire.wire_k - 1, 0, (int)out->wire_count - 1);
     trip_band_from_random(trip_rnd, &out->trip_min_cm, &out->trip_max_cm);

@@ -23,7 +23,9 @@ struct ActivePuzzle {
     bool valid;
     uint8_t pair;                       /* index in the puzzle set */
     uint32_t set_gen;                   /* which generation of the set it came from */
-    uint8_t dial_code[PROTO_DIAL_DIGITS];
+    uint8_t dial_code[PROTO_DIAL_DIGITS]; /* the code the player ENTERS for the AI dial (the puzzle's answer), not the base sent */
+    uint8_t dial_pos;                   /* index of the DIAL in the sent module order; the base sent is
+                                         * dial_code_preshift(dial_code, dial_pos), so game_dial_code(base, dial_pos) == dial_code */
     uint8_t wire_count;
     uint8_t wire_k;                     /* 1-based from the left */
     uint8_t dial_source;                /* PuzzleSource */

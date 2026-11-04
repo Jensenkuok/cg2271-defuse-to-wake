@@ -135,19 +135,25 @@ static void fill_puzzle(const AppState &st, ScreenModel *out)
     int wire_k = (int)GAME_DEFAULT_CORRECT_WIRE + 1;     /* game_config.h is zero-based */
     const char *stored = "";
 
+    unsigned dial_pos = 0u;                              /* the default bomb has the dial first */
+
     if (known) {
         memcpy(code, st.active.dial_code, sizeof(code));
+        dial_pos = st.active.dial_pos;
         wires = st.active.wire_count;
         wire_k = st.active.wire_k;
     }
     if (out->module_type == PROTO_MODULE_DIAL) {
-        if (st.game.module_idx > 0u) {
-            /* A repeated dial: the MCX expects the derived code (game_dial_code, the same function it
-             * validates with), which the AI pair knows nothing about -> built-in bank clue, hint from
-             * the derived code. */
+        /* The MCX expects game_dial_code(sent base, module index). The base was pre-shifted so that at the
+         * dial's own position that is the AI puzzle's code (code); rebuild the base and derive from it. */
+        if (st.game.module_idx != dial_pos) {
+            /* A repeated dial (after an explosion or snooze): the derived code is one the AI pair knows
+             * nothing about -> built-in bank clue, hint from the derived code. */
+            uint8_t base[PROTO_DIAL_DIGITS];
             uint8_t derived[PROTO_DIAL_DIGITS];
 
-            game_dial_code(code, st.game.module_idx, derived);
+            dial_code_preshift(code, dial_pos, base);
+            game_dial_code(base, st.game.module_idx, derived);
             memcpy(code, derived, sizeof(code));
             (void)dial_clue_render(dial_clue_build(code, 0u), out->puzzle_text, sizeof(out->puzzle_text));
         } else {

@@ -64,13 +64,14 @@ Difficulty current_difficulty(bool *ok)
     return difficulty_resolve(recs, n, settings_get_difficulty_mode(), history_ok, &s_last_good_score);
 }
 
-void make_view(ActivePuzzle *v, int pair, uint32_t gen, const Puzzle &d, const Puzzle &w)
+void make_view(ActivePuzzle *v, int pair, uint32_t gen, const Puzzle &d, const Puzzle &w, unsigned dial_pos)
 {
     memset(v, 0, sizeof(*v));
     v->valid = true;
     v->pair = (uint8_t)pair;
     v->set_gen = gen;
     memcpy(v->dial_code, d.dial_code, sizeof(v->dial_code));
+    v->dial_pos = (uint8_t)dial_pos;
     v->wire_count = w.wire_count;
     v->wire_k = w.wire_k;
     v->dial_source = d.source;
@@ -157,15 +158,16 @@ static bool send_locked(const char *why)
     s_pending.pair = pair;
     s_pending.gen = gen;
     s_pending.since_ms = millis();
-    make_view(&s_pending.view, pair, gen, dial, wire);
+    make_view(&s_pending.view, pair, gen, dial, wire, module_order_find(cfg.module_order, PROTO_MODULE_DIAL));
     s_pending.wires = cfg.wire_count;
     s_pending.trip_min_cm = cfg.trip_min_cm;
     s_pending.trip_max_cm = cfg.trip_max_cm;
     s_pending.max_strikes = cfg.max_strikes;
-    Serial.printf("[cfg] BOMB_CONFIG queued (%s): pair %d, %u modules, %us, %u wires (cut %u), dial %u%u%u%u, tripwire %u-%ucm [%s]\n",
+    Serial.printf("[cfg] BOMB_CONFIG queued (%s): pair %d, %u modules, %us, %u wires (cut %u), dial %u%u%u%u at #%u, tripwire %u-%ucm [%s]\n",
                   why, pair, (unsigned)cfg.module_count, (unsigned)cfg.time_limit_s, (unsigned)cfg.wire_count,
-                  (unsigned)cfg.correct_wire + 1u, (unsigned)cfg.dial_code[0], (unsigned)cfg.dial_code[1],
-                  (unsigned)cfg.dial_code[2], (unsigned)cfg.dial_code[3], (unsigned)cfg.trip_min_cm,
+                  (unsigned)cfg.correct_wire + 1u, (unsigned)dial.dial_code[0], (unsigned)dial.dial_code[1],
+                  (unsigned)dial.dial_code[2], (unsigned)dial.dial_code[3], module_order_find(cfg.module_order, PROTO_MODULE_DIAL) + 1u,
+                  (unsigned)cfg.trip_min_cm,
                   (unsigned)cfg.trip_max_cm, diff.explanation);
     return true;
 }

@@ -492,7 +492,12 @@ static void test_config_follows_level_and_puzzle(void)
                                                                               /* all four, shuffled, at every level */
                 }
                 CHECK(c.trip_min_cm >= 10 && c.trip_max_cm == c.trip_min_cm + 10 && c.trip_max_cm <= 40);
-                CHECK(memcmp(c.dial_code, code, 4) == 0);
+                {
+                    uint8_t sent[PROTO_DIAL_DIGITS];
+
+                    dial_code_preshift(code, module_order_find(c.module_order, PROTO_MODULE_DIAL), sent);
+                    CHECK(memcmp(c.dial_code, sent, 4) == 0);        /* the base sent, pre-shifted to the dial's slot */
+                }
             }
         }
     }

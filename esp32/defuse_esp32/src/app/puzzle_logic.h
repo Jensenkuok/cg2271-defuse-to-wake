@@ -207,10 +207,18 @@ void trip_band_from_random(uint32_t r, uint8_t *min_cm, uint8_t *max_cm);
  * same rnd always gives the same order). Every module appears exactly once. */
 void module_order_shuffle(uint32_t rnd, uint8_t out[PROTO_MAX_MODULES]);
 
+/* Index of `type` in the order (0 if absent, which cannot happen for a permutation). */
+unsigned module_order_find(const uint8_t order[PROTO_MAX_MODULES], uint8_t type);
+
+/* The base code to SEND so that game_dial_code(base, pos) == code: the MCX adds GAME_DIAL_REPEAT_STEP * index
+ * to every digit (mod 10), so the base is code minus that shift. Always digits 0..9. */
+void dial_code_preshift(const uint8_t code[PROTO_DIAL_DIGITS], unsigned pos, uint8_t out[PROTO_DIAL_DIGITS]);
+
 /* Modules DIAL, WIRES, TRIPWIRE, LIGHTS (every level asks for all four) in an order shuffled from order_rnd,
  * the time of the level, the puzzle answers (wire count and wire come from the puzzle actually used, so the
  * clue and the config never disagree), a tripwire band from trip_rnd (independent of the order) and the
- * default strikes. Every field is inside the MCX's range checks. */
+ * default strikes. cfg.dial_code is the PRE-SHIFTED base (dial_code_preshift): the player still enters the
+ * puzzle's code at the dial's position. Every field is inside the MCX's range checks. */
 void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &wire, uint32_t trip_rnd,
                          uint32_t order_rnd, proto_bomb_config_t *out);
 
