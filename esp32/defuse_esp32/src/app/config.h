@@ -184,6 +184,12 @@
  * checker chain starts with the model that did NOT write the puzzle (see checker_order()). */
 #define APP_SOCLAAS_BASE_URL        "https://soclaas-api.comp.nus.edu.sg/v1"
 #define APP_SOCLAAS_CHAT_PATH       "/chat/completions"
+/* LLM puzzles switch. 0 = puzzles come only from the ESP32's proven built-in bank; the LLM writes only the
+ * briefing + coach (board tests 6 Nov: writer timeouts, the checker solved Hard riddles wrong). The writer/checker
+ * code stays in the tree; set 1 to re-enable the pipeline. */
+#ifndef APP_PUZZLE_USE_LLM
+#define APP_PUZZLE_USE_LLM          0
+#endif
 #define APP_LLM_CHAIN_LEN           4       /* checker chain length */
 #define APP_LLM_SETTER_CHAIN_LEN    2       /* setter chain length: rewording the ESP32's facts is the easy job; x-test-2 is not in it, it returned empty replies with finish_reason=length */
 #define APP_LLM_SETTER_CHAIN        { "x-test-1", "default" }   /* x-test-1 first, "default" is the fast fallback writer; qwen is in no setter chain so it can always check */

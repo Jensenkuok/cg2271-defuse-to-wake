@@ -639,7 +639,9 @@ static void run_command(NetCtx &c, const char *cmd, size_t len, uint32_t unix_no
         print_history(unix_now);
     } else if (strcmp(cmd, "puzzles") == 0) {
         puzzle_gen_request();
-        Serial.println("[cmd] redo of every puzzle slot requested");
+        if (APP_PUZZLE_USE_LLM) {
+            Serial.println("[cmd] redo of every puzzle slot requested");
+        }
     } else if (strcmp(cmd, "ai") == 0) {
         puzzle_print_set();
     } else if (strcmp(cmd, "diff") == 0) {

@@ -392,6 +392,7 @@ static void put_ai_header(JsonBuf *j, uint32_t gen)
     jb_kv_str(j, "generated", when);
     jb_kv_uint(j, "ai_count", s_set->ai_count);
     jb_kv_uint(j, "total", PUZZLE_SLOTS);
+    jb_kv_bool(j, "llm_puzzles", APP_PUZZLE_USE_LLM != 0);
     jb_kv_bool(j, "busy", run.busy);
     jb_kv_bool(j, "queued", run.queued);                /* a manual redo of every slot is pending */
     /* Slot under upgrade as "D2"/"W0" ("" = idle), the spent-pair mask and seconds to the next retry: three small

@@ -752,6 +752,9 @@ bool puzzle_gen_init(int level)
         s_spent = 0u;
         Serial.println("[ai] no stored puzzle set: using template-bank puzzles, upgraded to AI one slot at a time");
     }
+    if (!APP_PUZZLE_USE_LLM) {
+        Serial.println("[ai] LLM puzzles off: bank puzzles only (stored AI puzzles are used until spent)");
+    }
     s_target_level = (uint8_t)level;
     s_set_gen = 1u;
     s_reserved_pair = -1;
@@ -760,6 +763,10 @@ bool puzzle_gen_init(int level)
 
 void puzzle_gen_request(void)
 {
+    if (!APP_PUZZLE_USE_LLM) {
+        Serial.println("[ai] LLM puzzles are off (APP_PUZZLE_USE_LLM 0): bank puzzles only");
+        return;
+    }
     s_force_slots = (uint8_t)((1u << PUZZLE_SLOTS) - 1u);       /* every slot is redone by the LLM, AI or not */
     s_redo_active = true;
     s_wait_active = false;                                  /* no waiting: start with the next pass that allows it */
@@ -791,6 +798,9 @@ static void service_upgrade(uint32_t now_ms, uint32_t unix_now, bool net_ok, boo
 {
     int slot = -1;
 
+    if (!APP_PUZZLE_USE_LLM) {
+        return;                                             /* D5: bank puzzles only; never start or step an upgrade */
+    }
     if (s_gen->phase != PH_IDLE) {
         if (!net_ok) {
             upgrade_abandon("Wi-Fi or clock lost");         /* the bank puzzle stays; no wait, the network may be back soon */

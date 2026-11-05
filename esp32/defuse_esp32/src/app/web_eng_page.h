@@ -170,6 +170,7 @@ function renderLink(s){
 function renderAi(s){
   const a=s.ai,n=s.net;if(!a)return;
   let h="AI "+a.ai_count+" of "+a.total+" (rest: built-in bank)"+(a.generated?", last change "+a.generated:"");
+  if(a.llm_puzzles===false)h+=" - LLM puzzles off: built-in bank";else
   h+=a.busy?" - upgrading "+a.slot:(a.retry_s>0?" - waiting "+a.retry_s+" s after a failed attempt":" - idle");
   if(a.queued)h+=" - redo of every slot queued";
   if(a.spent){const sp=[];for(let i=0;i<4;i++)if(a.spent&(1<<i))sp.push(i);h+=" - used pairs refilling: "+sp.join(",")}
