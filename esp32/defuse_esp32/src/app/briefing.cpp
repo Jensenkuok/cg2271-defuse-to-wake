@@ -30,7 +30,7 @@ const char kBriefSys[] =
     "coach: at most 80 characters, plain ASCII, one personal light-hearted push or roast based on the history "
     "and the difficulty. Never insult appearance or identity. No emojis.";
 
-const char *const k_chain[APP_LLM_CHAIN_LEN] = APP_LLM_SETTER_CHAIN;
+const char *const k_chain[APP_LLM_SETTER_CHAIN_LEN] = APP_LLM_SETTER_CHAIN;
 
 struct BriefBlob {
     uint32_t magic;
@@ -224,7 +224,7 @@ void step_call(void)
         s_transport_fails++;                         /* timeout / no route: the Wi-Fi or the API is down */
     }
     s_pos++;
-    if (s_pos >= APP_LLM_CHAIN_LEN || s_transport_fails >= BRIEF_TRANSPORT_MAX) {
+    if (s_pos >= APP_LLM_SETTER_CHAIN_LEN || s_transport_fails >= BRIEF_TRANSPORT_MAX) {
         Serial.println("[brief] no model gave a usable text: the template is used");
         finish(0, "-");
     }

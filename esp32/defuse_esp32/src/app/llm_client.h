@@ -1,6 +1,6 @@
 /*
  * Defuse to Wake - SoCLaaS chat client (OpenAI-compatible /v1/chat/completions).
- * One blocking call, run by the network task only (lowest priority): a request has a 30 s
+ * One blocking call, run by the network task only (lowest priority): a request has a 20 s
  * limit for connect and read (APP_LLM_TIMEOUT_MS), so no other task is ever blocked by it.
  * The API key comes from secrets.h (SOCLAAS_API_KEY) and is never logged.
  */

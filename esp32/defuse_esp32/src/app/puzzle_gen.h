@@ -4,10 +4,10 @@
  * A SET is 4 dial + 4 wire puzzles; pair i = dial[i] + wire[i] is used for one bomb. Per puzzle:
  *   1. the ESP32 picks the answer (esp_random): a 4-digit code, or a wire 1..N (N from the level's
  *      wire-count range), and the LEVEL (EASY / NORMAL / HARD = the effective difficulty level);
- *   2. the SETTER model writes a riddle AND the same facts as rules in the puzzle_rules.h language
- *      (JSON {"puzzle":"..","rules":".."});
- *   3. the gate (puzzle_gate.cpp) accepts it only if the text passes validate_puzzle, the rules have
- *      exactly ONE solution equal to our answer, and the solver's rating of the rules equals the level;
+ *   2. the ESP32 writes the FACTS for that answer and level (bank_generate: exactly one solution = the answer,
+ *      the level is measured), and the SETTER model only rewrites them as a riddle (JSON {"puzzle":".."});
+ *   3. the gate (puzzle_gate.cpp, gate_check_phrase) accepts the riddle only if the text passes validate_puzzle
+ *      (length, ASCII, no leaked code / wire number) and fits the OLED rows;
  *   4. a CHECKER model from a different model ID gets only the riddle text and must reach the same
  *      answer (the setter is never its own checker);
  *   5. an exact match keeps the puzzle (source AI, verified); up to 3 attempts, then the procedural
@@ -17,7 +17,7 @@
  * at a time to an LLM puzzle (a failed attempt waits 60 s); a used pair is spent for good and its two
  * slots are refilled from the bank at once, then upgraded again when the Wi-Fi allows.
  *
- * The upgrade is a small state machine: puzzle_gen_service() does at most ONE LLM call (<= 30 s)
+ * The upgrade is a small state machine: puzzle_gen_service() does at most ONE LLM call (<= 20 s)
  * per pass, so the network task keeps serving the link, the alarm sync and the BOMB_CONFIG
  * triggers between calls. The LLM part never runs during a bomb session or close to the alarm; the
  * bank refill (offline, no LLM) does.

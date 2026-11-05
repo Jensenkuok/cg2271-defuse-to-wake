@@ -41,6 +41,32 @@ int exact_count(const char *rules, const GateTarget &t)
     return pr_count_solutions(&set, NULL, 0);
 }
 
+/* The text checks both gates share: validate_puzzle (O3 length, printable ASCII, no leaked code / wire number),
+ * then the OLED row limit after word wrap. On failure why gets the reason. */
+bool text_acceptable(const char *text, const GateTarget &t, const char *answer, char *why, size_t why_size)
+{
+    const int problem = puzzle_text_problem(text, t.kind, answer);
+
+    if (problem != PTP_OK) {
+        if (why != NULL) {
+            if (problem == PTP_TOO_LONG) {
+                snprintf(why, why_size, "text too long (%u > %u)", (unsigned)strlen(text),
+                         (unsigned)(t.kind == PUZZLE_WIRE ? PUZZLE_WIRE_TEXT_LIMIT : PUZZLE_DIAL_TEXT_LIMIT));
+            } else {
+                snprintf(why, why_size, "text %s", puzzle_text_problem_name(problem));
+            }
+        }
+        return false;
+    }
+    if (!puzzle_text_fits_oled(text, t.kind)) {
+        if (why != NULL) {
+            snprintf(why, why_size, "text wraps past %d OLED rows", t.kind == PUZZLE_WIRE ? GATE_WIRE_ROWS : GATE_DIAL_ROWS);
+        }
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 bool puzzle_text_fits_oled(const char *text, int kind)
@@ -70,7 +96,6 @@ int gate_check_setter(const char *reply, const GateTarget &target, char *json_bu
     char rules[GATE_RULES_BUF];
     char answer[PUZZLE_ANSWER_LEN];
     PrCheck chk;
-    int problem;
 
     if (text_out != NULL && text_size > 0u) {
         text_out[0] = '\0';
@@ -92,22 +117,7 @@ int gate_check_setter(const char *reply, const GateTarget &target, char *json_bu
         return GATE_NO_RULES;
     }
     gate_answer_text(target, answer, sizeof(answer));
-    problem = puzzle_text_problem(text, target.kind, answer);
-    if (problem != PTP_OK) {
-        if (why != NULL) {
-            if (problem == PTP_TOO_LONG) {
-                snprintf(why, why_size, "text too long (%u > %u)", (unsigned)strlen(text),
-                         (unsigned)(target.kind == PUZZLE_WIRE ? PUZZLE_WIRE_TEXT_LIMIT : PUZZLE_DIAL_TEXT_LIMIT));
-            } else {
-                snprintf(why, why_size, "text %s", puzzle_text_problem_name(problem));
-            }
-        }
-        return GATE_TEXT_REJECTED;
-    }
-    if (!puzzle_text_fits_oled(text, target.kind)) {
-        if (why != NULL) {
-            snprintf(why, why_size, "text wraps past %d OLED rows", target.kind == PUZZLE_WIRE ? GATE_WIRE_ROWS : GATE_DIAL_ROWS);
-        }
+    if (!text_acceptable(text, target, answer, why, why_size)) {
         return GATE_TEXT_REJECTED;
     }
     pr_check(rules, rule_kind(target), target.wire_count, target.answer, &chk);
@@ -141,6 +151,34 @@ int gate_check_setter(const char *reply, const GateTarget &target, char *json_bu
             snprintf(why, why_size, "level %s != %s", pr_level_name(chk.level), pr_level_name(target.level));
         }
         return GATE_WRONG_LEVEL;
+    }
+    snprintf(text_out, text_size, "%s", text);
+    why_str(why, why_size, "accepted");
+    return GATE_OK;
+}
+
+int gate_check_phrase(const char *reply, const GateTarget &target, char *json_buf, size_t json_size,
+                      char *text_out, size_t text_size, char *why, size_t why_size)
+{
+    char text[GATE_TEXT_SCRATCH];
+    char answer[PUZZLE_ANSWER_LEN];
+
+    if (text_out != NULL && text_size > 0u) {
+        text_out[0] = '\0';
+    }
+    if (reply == NULL || json_buf == NULL || text_out == NULL || !extract_json_object(reply, json_buf, json_size)) {
+        why_str(why, why_size, "no JSON object in the reply");
+        return GATE_NO_JSON;
+    }
+    if (!json_get_string(json_buf, "puzzle", text, sizeof(text))) {
+        if (why != NULL) {
+            snprintf(why, why_size, "no \"puzzle\" string (missing, or over %d characters)", GATE_TEXT_SCRATCH - 1);
+        }
+        return GATE_NO_PUZZLE;
+    }
+    gate_answer_text(target, answer, sizeof(answer));
+    if (!text_acceptable(text, target, answer, why, why_size)) {
+        return GATE_TEXT_REJECTED;
     }
     snprintf(text_out, text_size, "%s", text);
     why_str(why, why_size, "accepted");

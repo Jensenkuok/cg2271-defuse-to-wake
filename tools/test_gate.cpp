@@ -238,6 +238,74 @@ static void test_gate_setter_wire(void)
     CHECK(g.status == GATE_RULES_SYNTAX && has(g.why, "PR_ERR_TERM_KIND"));
 }
 
+/* The rewrite-only gate: the facts came from the ESP32, the reply only has to be a clean riddle. */
+static Gate run_phrase(const std::string &reply, const GateTarget &t)
+{
+    char json[2048];
+    char text[PUZZLE_TEXT_BUF];
+    char why[GATE_WHY_MAX];
+    Gate g;
+    g.status = gate_check_phrase(reply.c_str(), t, json, sizeof json, text, sizeof text, why, sizeof why);
+    g.text = text;
+    g.why = why;
+    return g;
+}
+
+static std::string phrase_of(const std::string &puzzle)
+{
+    return "{\"puzzle\":\"" + puzzle + "\"}";
+}
+
+static void test_gate_phrase(void)
+{
+    GateTarget t;
+    t.kind = PUZZLE_DIAL;
+    t.wire_count = 0;
+    t.answer = 5484;
+    t.level = PR_HARD;
+    const std::string good = "Sum 26; 4th-1st=-1; 2nd=4th";
+
+    Gate g = run_phrase(phrase_of(good), t);
+    CHECK(g.status == GATE_OK && g.text == good && g.why == "accepted");
+    g = run_phrase("<think>ok</think>```json\n" + phrase_of(good) + "\n```", t);     /* wrappers tolerated */
+    CHECK(g.status == GATE_OK && g.text == good);
+    g = run_phrase("{\"puzzle\":\"" + good + "\",\"rules\":\"ignored\"}", t);         /* extra fields are ignored */
+    CHECK(g.status == GATE_OK && g.text == good);
+
+    g = run_phrase("I cannot do that", t);
+    CHECK(g.status == GATE_NO_JSON && g.text.empty() && has(g.why, "no JSON object"));
+    g = run_phrase("{\"riddle\":\"" + good + "\"}", t);
+    CHECK(g.status == GATE_NO_PUZZLE && has(g.why, "no \"puzzle\" string"));
+    g = run_phrase("{\"puzzle\":42}", t);
+    CHECK(g.status == GATE_NO_PUZZLE || g.status == GATE_TEXT_REJECTED);       /* a bare token is read as text "42": too short */
+    g = run_phrase(phrase_of(std::string(64, 'b')), t);                            /* dial limit is 63 */
+    CHECK(g.status == GATE_TEXT_REJECTED && has(g.why, "text too long (64 > 63)") && g.text.empty());
+    g = run_phrase(phrase_of("The code is 5484, enter it"), t);
+    CHECK(g.status == GATE_TEXT_REJECTED && g.text.empty());                       /* leaked code */
+    g = run_phrase(phrase_of("Digits 5 4 8 4 in that order, ok"), t);
+    CHECK(g.status == GATE_TEXT_REJECTED);                                         /* leaked digits */
+    g = run_phrase(phrase_of("caf\u00e9 sum is large and then some"), t);
+    CHECK(g.status == GATE_TEXT_REJECTED);                                         /* not printable ASCII */
+    g = run_phrase(phrase_of("abcdefghijklmnopqrstu abcdefghijklmnopqrstu abcdefghijklmnopqrstu"), t);
+    CHECK(g.status == GATE_TEXT_REJECTED);                                         /* 65 chars: too long */
+    g = run_phrase(phrase_of("abcdefghijklmn abcdefghijklmn abcdefghijklmn abcdefghijklmn"), t);   /* 4 rows */
+    CHECK(g.status == GATE_TEXT_REJECTED && has(g.why, "text wraps past 3 OLED rows"));
+
+    t.kind = PUZZLE_WIRE;
+    t.wire_count = 5;
+    t.answer = 5;
+    t.level = PR_NORMAL;
+    g = run_phrase(phrase_of("Cut the odd wire right of the 3rd"), t);
+    CHECK(g.status == GATE_OK && g.text == "Cut the odd wire right of the 3rd");
+    g = run_phrase(phrase_of("Cut the 5th wire, odd and last"), t);
+    CHECK(g.status == GATE_TEXT_REJECTED && has(g.why, "states the wire number"));   /* leaked wire number */
+    g = run_phrase(phrase_of(std::string(43, 'b')), t);
+    CHECK(g.status == GATE_TEXT_REJECTED && has(g.why, "text too long (43 > 42)"));
+    g = run_phrase(phrase_of("abcdefghijklm abcdefghijklm abcdefghijklm"), t);
+    CHECK(g.status == GATE_TEXT_REJECTED && has(g.why, "text wraps past 2 OLED rows"));
+    CHECK(gate_check_phrase(NULL, t, NULL, 0, NULL, 0, NULL, 0) == GATE_NO_JSON);   /* NULLs never crash */
+}
+
 static void test_gate_checker(void)
 {
     char json[1024];
@@ -312,6 +380,7 @@ int main(void)
     printf("test_gate: acceptance gate with canned replies\n");
     test_gate_setter_dial();
     test_gate_setter_wire();
+    test_gate_phrase();
     test_gate_checker();
     printf("test_gate: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed == 0 ? 0 : 1;
