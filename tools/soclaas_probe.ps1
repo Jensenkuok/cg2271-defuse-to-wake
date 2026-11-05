@@ -30,8 +30,8 @@ if ([string]::IsNullOrWhiteSpace($key)) {
 
 # ---- Settings (config.h: APP_SOCLAAS_*, APP_LLM_*, APP_PUZZLE_ATTEMPTS) ----
 $Url = 'https://soclaas-api.comp.nus.edu.sg/v1/chat/completions'
-$SetterChain  = @('qwen3.6:35b', 'x-test-1', 'x-test-2', 'default')     # APP_LLM_SETTER_CHAIN
-$CheckerChain = @('x-test-1', 'default', 'x-test-2', 'qwen3.6:35b')     # APP_LLM_CHECKER_CHAIN
+$SetterChain  = @('x-test-1', 'default')                                # APP_LLM_SETTER_CHAIN
+$CheckerChain = @('qwen3.6:35b', 'x-test-1', 'default', 'x-test-2')     # APP_LLM_CHECKER_CHAIN
 $MaxTokens    = 2000     # APP_LLM_MAX_TOKENS
 $SetterTemp   = 0.9      # APP_LLM_SETTER_TEMP
 $CheckerTemp  = 0.0      # APP_LLM_CHECKER_TEMP

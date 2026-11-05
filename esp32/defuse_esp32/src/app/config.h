@@ -185,10 +185,12 @@
 #define APP_SOCLAAS_BASE_URL        "https://soclaas-api.comp.nus.edu.sg/v1"
 #define APP_SOCLAAS_CHAT_PATH       "/chat/completions"
 #define APP_LLM_CHAIN_LEN           4       /* checker chain length */
-#define APP_LLM_SETTER_CHAIN_LEN    3       /* setter (and briefing) chain length: x-test-2 is not in it, it returned empty replies with finish_reason=length */
-#define APP_LLM_SETTER_CHAIN        { "qwen3.6:35b", "x-test-1", "default" }
-#define APP_LLM_CHECKER_CHAIN       { "x-test-1", "default", "x-test-2", "qwen3.6:35b" }
-#define APP_LLM_TIMEOUT_MS          20000u  /* one request: connect and read, at most 20 s (qwen answers in ~4 s, the x-test-1 checker in ~2 s) */
+#define APP_LLM_SETTER_CHAIN_LEN    2       /* setter chain length: rewording the ESP32's facts is the easy job; x-test-2 is not in it, it returned empty replies with finish_reason=length */
+#define APP_LLM_SETTER_CHAIN        { "x-test-1", "default" }   /* x-test-1 first, "default" is the fast fallback writer; qwen is in no setter chain so it can always check */
+#define APP_LLM_CHECKER_CHAIN       { "qwen3.6:35b", "x-test-1", "default", "x-test-2" }   /* qwen solves the riddle blind in ~3 s (the hard job); x-test-1 has been timing out as checker */
+#define APP_BRIEF_CHAIN_LEN         3       /* briefing chain length */
+#define APP_BRIEF_CHAIN             { "qwen3.6:35b", "x-test-1", "default" }   /* qwen wrote briefings reliably; x-test-1 is slow right now */
+#define APP_LLM_TIMEOUT_MS          20000u  /* one request: connect and read, at most 20 s (qwen checks in ~3 s; x-test-1 has been timing out above 20 s, "default" is the fast fallback writer) */
 #define APP_LLM_TIMEOUT_S           20u     /* same limit for the TLS client */
 #define APP_LLM_MAX_TOKENS          3000    /* thinking models spend most of it before answering; 600 gave empty replies, 2000 was tight */
 #define APP_LLM_SETTER_TEMP         0.9f
@@ -204,7 +206,7 @@
 #define APP_KEY_PUZZLE_USED         "pz_used"   /* SPENT-pair mask: a pair a bomb started with, not yet refilled by the bank */
 #define APP_CONFIG_PENDING_MS       5000u   /* one BOMB_CONFIG at a time; give up on its ACK after this */
 
-/* ---- Briefing + coach (one LLM call per pass, same setter chain; runs while online until the next class day has an LLM-written text) ---- */
+/* ---- Briefing + coach (one LLM call per pass, APP_BRIEF_CHAIN; runs while online until the next class day has an LLM-written text) ---- */
 #define APP_BRIEF_TEMP              0.7f
 #define APP_BRIEF_MAX_TOKENS        3000    /* same thinking-model budget as APP_LLM_MAX_TOKENS */
 #define APP_BRIEF_RETRY_MS          60000u  /* after a failed briefing run (template stored) wait this long before the next (D1) */

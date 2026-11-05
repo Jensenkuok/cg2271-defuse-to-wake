@@ -1,7 +1,7 @@
 /*
  * Defuse to Wake - morning briefing + coach message (network task only, lowest priority).
  *
- * One LLM run (setter chain, temperature 0.7), repeated while the device is online until the text
+ * One LLM run (APP_BRIEF_CHAIN, temperature 0.7), repeated while the device is online until the text
  * stored for the next class day is LLM-written: a failed run stores the template and is retried
  * after APP_BRIEF_RETRY_MS (brief_needs_run in text_logic.h). The Serial command "brief" forces a
  * run. Input: the classes of the next alarm's day (<= 6), the alarm time, a summary of

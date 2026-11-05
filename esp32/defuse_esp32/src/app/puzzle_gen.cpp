@@ -591,10 +591,9 @@ GateTarget cur_target(void)
     return t;
 }
 
-/* The setter chain: one model per pass; a failing model moves on to the next one. The first model (qwen) gets one
- * retry in the same pass when its call fails at transport level (timeout, empty, HTTP error): it answers in ~4 s, so a
- * failure is usually a hiccup, and falling to the slower models costs more. At most one retry per attempt: chain
- * position 0 is visited once per attempt. */
+/* The setter chain (x-test-1, then "default"): one model per pass; a failing model moves on to the next one, with no
+ * same-pass retry. Rewording the ESP32's facts is the easy job, so a slow or failing writer is simply replaced; the
+ * hard job (solving the riddle blind) goes to qwen in step_checker. */
 void step_setter(void)
 {
     const char *model = k_setter_chain[s_gen->setter_pos];
@@ -611,11 +610,6 @@ void step_setter(void)
     }
     cur_tag(tag, sizeof(tag));
     r = llm_chat(model, s_sys, s_user, APP_LLM_MAX_TOKENS, APP_LLM_SETTER_TEMP, s_reply, APP_LLM_REPLY_MAX);
-    if (r.status != LLM_OK && s_gen->setter_pos == 0) {
-        Serial.printf("[ai] %s attempt %u: %s failed (%s): retrying it once\n", tag, (unsigned)s_gen->attempt, model,
-                      llm_status_name(r.status));
-        r = llm_chat(model, s_sys, s_user, APP_LLM_MAX_TOKENS, APP_LLM_SETTER_TEMP, s_reply, APP_LLM_REPLY_MAX);
-    }
     if (r.status != LLM_OK) {
         s_gen->setter_pos++;
         if (s_gen->setter_pos >= APP_LLM_SETTER_CHAIN_LEN) {
@@ -635,6 +629,7 @@ void step_setter(void)
         gen_fail_attempt();
         return;
     }
+    Serial.printf("[ai] %s attempt %u: %s wrote \"%s\"\n", tag, (unsigned)s_gen->attempt, model, s_gen->text);
     copy_str(s_gen->setter, sizeof(s_gen->setter), model);
     s_gen->setter_ms = clamp_ms(r.latency_ms);
     /* O5: the checker is never the setter's own model. If the chain holds no other model the
@@ -668,6 +663,14 @@ void step_checker(void)
     cur_tag(tag, sizeof(tag));
     /* The checker gets only the riddle TEXT: never the facts, never the answer. */
     r = llm_chat(model, s_sys, s_gen->text, APP_LLM_MAX_TOKENS, APP_LLM_CHECKER_TEMP, s_reply, APP_LLM_REPLY_MAX);
+    /* The first checker (qwen, ~3 s) gets one retry in the same pass when its call fails at transport level (timeout,
+     * empty, HTTP error): a failure is usually a hiccup, and falling to the slower models costs more. At most one
+     * retry per attempt: checker position 0 is visited once per attempt. */
+    if (r.status != LLM_OK && s_gen->checker_pos == 0) {
+        Serial.printf("[ai] %s attempt %u: %s failed (%s): retrying it once\n", tag, (unsigned)s_gen->attempt, model,
+                      llm_status_name(r.status));
+        r = llm_chat(model, s_sys, s_gen->text, APP_LLM_MAX_TOKENS, APP_LLM_CHECKER_TEMP, s_reply, APP_LLM_REPLY_MAX);
+    }
     if (r.status == LLM_OK) {
         s_gen->chain_replied = true;
         s_gen->dead_chains = 0u;
