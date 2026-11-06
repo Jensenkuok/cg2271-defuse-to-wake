@@ -1267,6 +1267,84 @@ static void test_lights_config(void)
     CHECK(game_set_config(&g, &c));
 }
 
+static void test_bomb_started_notice_and_config_ids(void)
+{
+    proto_bomb_config_t c;
+    proto_bomb_config_t c2;
+    proto_bomb_config_t n;
+
+    /* Default: id 0, held config readable, no running snapshot while IDLE. */
+    now = 0;
+    game_init(&g, now);
+    CHECK(game_held_config(&g)->cfg_id == 0 && game_running_config(&g) == NULL);
+    CHECK(!game_pop_bomb_started(&g, &n));
+
+    /* First bomb: one notice carrying the config incl. cfg_id, even if a new config arrives later. */
+    default_cfg(&c);
+    c.cfg_id = 7;
+    CHECK(game_set_config(&g, &c));
+    CHECK(game_held_config(&g)->cfg_id == 7 && game_running_config(&g) == NULL);
+    ev(GAME_EVT_CMD_RING_NOW, 0);
+    advance(TICK_MS);
+    CHECK(game_pop_bomb_started(&g, &n) && n.cfg_id == 7 && memcmp(&n, &c, sizeof(n)) == 0);
+    CHECK(!game_pop_bomb_started(&g, &n)); /* exactly once */
+    c2 = c;
+    c2.cfg_id = 9;
+    c2.time_limit_s = 90;
+    CHECK(game_set_config(&g, &c2));
+    CHECK(game_held_config(&g)->cfg_id == 9);
+    CHECK(game_running_config(&g) != NULL && game_running_config(&g)->cfg_id == 7);
+    CHECK(game_running_config(&g)->time_limit_s == 180);
+
+    /* A rejected config keeps the held config and its id. */
+    c2.cfg_id = 11;
+    c2.module_count = 0;
+    CHECK(!game_set_config(&g, &c2));
+    CHECK(game_held_config(&g)->cfg_id == 9 && game_held_config(&g)->time_limit_s == 90);
+
+    /* Explosion: running snapshot stays readable, then the re-bomb posts a new notice with id 9. */
+    advance(2000);
+    ev(GAME_EVT_ENC_PRESS, 0);
+    ev(GAME_EVT_ENC_PRESS, 0);
+    ev(GAME_EVT_ENC_PRESS, 0);
+    CHECK(view().state == PROTO_STATE_EXPLODED);
+    CHECK(game_running_config(&g) != NULL && game_running_config(&g)->cfg_id == 7);
+    CHECK(!game_pop_bomb_started(&g, &n));
+    advance(3000);
+    CHECK(view().state == PROTO_STATE_BOMB_ACTIVE);
+    CHECK(game_pop_bomb_started(&g, &n) && n.cfg_id == 9 && n.time_limit_s == 90);
+    CHECK(!game_pop_bomb_started(&g, &n));
+
+    /* Snooze re-ring posts another notice. */
+    ev(GAME_EVT_CMD_SNOOZE, 0);
+    CHECK(view().state == PROTO_STATE_ARMED && game_running_config(&g) == NULL);
+    CHECK(!game_pop_bomb_started(&g, &n));
+    advance(300000);
+    CHECK(view().state == PROTO_STATE_BOMB_ACTIVE);
+    CHECK(game_pop_bomb_started(&g, &n) && n.cfg_id == 9);
+    CHECK(!game_pop_bomb_started(&g, &n));
+
+    CHECK(!game_pop_bomb_started(NULL, &n) && !game_pop_bomb_started(&g, NULL));
+    CHECK(game_held_config(NULL) == NULL && game_running_config(NULL) == NULL);
+}
+
+static void test_defused_keeps_running_snapshot(void)
+{
+    proto_bomb_config_t c;
+
+    default_cfg(&c);
+    c.cfg_id = 5;
+    start_bomb(0, &c);
+    solve_dial();
+    solve_wires();
+    solve_trip();
+    solve_lights();
+    CHECK(view().state == PROTO_STATE_DEFUSED);
+    CHECK(game_running_config(&g) != NULL && game_running_config(&g)->cfg_id == 5);
+    advance(GAME_DEFUSED_HOLD_MS);
+    CHECK(view().state == PROTO_STATE_IDLE && game_running_config(&g) == NULL);
+}
+
 int main(void)
 {
     test_init_default_view();
@@ -1307,6 +1385,8 @@ int main(void)
     test_lights_no_strikes_and_ignored_elsewhere();
     test_lights_full_bomb_and_cycle();
     test_lights_config();
+    test_bomb_started_notice_and_config_ids();
+    test_defused_keeps_running_snapshot();
 
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

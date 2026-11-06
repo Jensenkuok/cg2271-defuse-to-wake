@@ -23,9 +23,68 @@ static uint32_t now_ms(void)
     return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
 }
 
+/* BOMB_REPORTs the ESP32 draws its puzzle from. One pending slot per report kind: a newer
+ * report replaces an older unsent one of the same slot (the old one is stale by definition). */
+typedef struct {
+    bool pending;
+    uint8_t status;
+    proto_bomb_config_t cfg;
+} report_slot_t;
+
+enum { REPORT_SLOT_HELD = 0, REPORT_SLOT_RUNNING, REPORT_SLOT_COUNT };
+
+static report_slot_t s_reports[REPORT_SLOT_COUNT];
+
+static void queue_report(uint32_t slot, uint8_t status, const proto_bomb_config_t *cfg)
+{
+    s_reports[slot].pending = true;
+    s_reports[slot].status = status;
+    s_reports[slot].cfg = *cfg;
+}
+
+static void queue_held(const game_t *g, uint8_t status)
+{
+    queue_report(REPORT_SLOT_HELD, status, game_held_config(g));
+}
+
+static void queue_running(const proto_bomb_config_t *cfg)
+{
+    queue_report(REPORT_SLOT_RUNNING, PROTO_REPORT_OK, cfg);
+}
+
+/* Send what is pending, HELD before RUNNING. uart_link_send fails when the TX FIFO is full;
+ * the slot then stays pending and the next loop iteration retries (the loop runs every
+ * APP_GAME_TICK_MS), so a report is never dropped silently. */
+static void flush_reports(void)
+{
+    static const uint8_t proto_slot[REPORT_SLOT_COUNT] = { PROTO_REPORT_HELD, PROTO_REPORT_RUNNING };
+    proto_bomb_report_t rep;
+    uint8_t pl[PROTO_SIZE_BOMB_REPORT];
+    uint32_t i;
+
+    for (i = 0; i < REPORT_SLOT_COUNT; i++) {
+        if (!s_reports[i].pending) {
+            continue;
+        }
+        rep.slot = proto_slot[i];
+        rep.status = s_reports[i].status;
+        rep.cfg = s_reports[i].cfg;
+        if (proto_pack_bomb_report(&rep, pl, sizeof(pl)) == 0u) {
+            s_reports[i].pending = false; /* cannot happen for our own values; do not spin on it */
+        } else if (uart_link_send(PROTO_MSG_BOMB_REPORT, pl, PROTO_SIZE_BOMB_REPORT)) {
+            s_reports[i].pending = false;
+            s_stats.reports_sent++;
+        } else {
+            s_stats.report_retries++;
+            return; /* keep the order: do not let RUNNING overtake a stuck HELD */
+        }
+    }
+}
+
 static void apply_ctrl(game_t *g, const app_ctrl_t *c)
 {
     bool ok = false;
+    const proto_bomb_config_t *run;
 
     switch (c->kind) {
     case APP_CTRL_TIME_SYNC:
@@ -36,6 +95,17 @@ static void apply_ctrl(game_t *g, const app_ctrl_t *c)
         break;
     case APP_CTRL_BOMB_CONFIG:
         ok = game_set_config(g, &c->u.cfg); /* range-checks every ESP32-sent field */
+        /* Application-level answer (the transport ACK only says the frame arrived): what the
+         * game holds after the attempt, so the ESP32 never assumes a rejected config. */
+        queue_held(g, ok ? PROTO_REPORT_OK : PROTO_REPORT_REJECTED);
+        break;
+    case APP_CTRL_REPORT:
+        queue_held(g, PROTO_REPORT_OK);
+        run = game_running_config(g);
+        if (run != NULL) {
+            queue_running(run);
+        }
+        ok = true;
         break;
     default:
         return;
@@ -74,6 +144,7 @@ static void game_task(void *arg)
     app_ctrl_t ctrl;
     game_sound_t snd;
     proto_result_msg_t res;
+    proto_bomb_config_t started;
     uint8_t pl[PROTO_SIZE_RESULT];
     uint32_t last_version = 0;
     uint16_t last_tick_ms = 0;
@@ -133,6 +204,12 @@ static void game_task(void *arg)
         while (game_pop_sound(&g, &snd)) {
             feedback_play(snd);
         }
+
+        /* A new bomb started: tell the ESP32 which config it checks (RUNNING report). */
+        while (game_pop_bomb_started(&g, &started)) {
+            queue_running(&started);
+        }
+        flush_reports();
 
         /* RESULT is reliable: the link layer retransmits it until the ESP32 ACKs. */
         while (game_pop_result(&g, &res)) {

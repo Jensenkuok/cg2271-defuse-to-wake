@@ -123,6 +123,9 @@ typedef struct {
     uint8_t result_head;
     uint8_t result_count;
 
+    bool started_pending;               /* a bomb started since the last game_pop_bomb_started */
+    proto_bomb_config_t started_cfg;    /* snapshot of that bomb's config (newest wins) */
+
     proto_game_state_t view_cache;      /* last view, for version tracking */
     uint32_t view_version;
 } game_t;
@@ -169,6 +172,22 @@ bool game_pop_sound(game_t *g, game_sound_t *s);
 
 /* RESULT FIFO (depth 4, newest dropped when full). False when empty. */
 bool game_pop_result(game_t *g, proto_result_msg_t *r);
+
+/*
+ * "Bomb started" notice: set by every enter_bomb (alarm ring, RING_NOW, the re-bomb after
+ * EXPLODED, a snooze re-ring). Pops the config snapshot the bomb runs with (incl. cfg_id).
+ * One slot: a notice not yet popped is replaced by the newer bomb's. False when none pending.
+ */
+bool game_pop_bomb_started(game_t *g, proto_bomb_config_t *out);
+
+/* The config held for the NEXT bomb (what a HELD report describes). Never NULL for a valid g. */
+const proto_bomb_config_t *game_held_config(const game_t *g);
+
+/*
+ * Snapshot of the bomb that is running / just ran (what a RUNNING report describes).
+ * Returns NULL unless the state is BOMB_ACTIVE, DEFUSED or EXPLODED.
+ */
+const proto_bomb_config_t *game_running_config(const game_t *g);
 
 #ifdef __cplusplus
 }

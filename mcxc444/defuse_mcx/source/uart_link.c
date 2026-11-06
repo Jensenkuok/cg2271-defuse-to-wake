@@ -210,6 +210,12 @@ static void route_frame(const proto_frame_t *f)
             input_post(GAME_EVT_CMD_SNOOZE, 0);
         } else if (cmd.cmd == PROTO_CMD_CANCEL) {
             input_post(GAME_EVT_CMD_CANCEL, 0);
+        } else if (cmd.cmd == PROTO_CMD_REPORT) {
+            /* Control queue, not the input queue: the game task drains ctrl after the input
+             * queue and in arrival order, so a REPORT that follows a BOMB_CONFIG always sees
+             * the config already applied. It is also not a game event. */
+            c.kind = APP_CTRL_REPORT;
+            post_ctrl(&c);
         } else {
             s_stats.rx_bad_payload++;
         }

@@ -213,6 +213,8 @@ static void enter_bomb(game_t *g, uint32_t now_ms)
         g->session_strikes = 0u;
     }
     g->state = PROTO_STATE_BOMB_ACTIVE;
+    g->started_cfg = g->bomb_cfg; /* notice for the task: the ESP32 learns what this bomb checks */
+    g->started_pending = true;
 }
 
 static void explode(game_t *g, uint32_t now_ms)
@@ -674,4 +676,28 @@ bool game_pop_result(game_t *g, proto_result_msg_t *r)
     g->result_head = (uint8_t)((g->result_head + 1u) % GAME_RESULT_FIFO_DEPTH);
     g->result_count--;
     return true;
+}
+
+bool game_pop_bomb_started(game_t *g, proto_bomb_config_t *out)
+{
+    if (g == NULL || out == NULL || !g->started_pending) {
+        return false;
+    }
+    *out = g->started_cfg;
+    g->started_pending = false;
+    return true;
+}
+
+const proto_bomb_config_t *game_held_config(const game_t *g)
+{
+    return (g == NULL) ? NULL : &g->cfg;
+}
+
+const proto_bomb_config_t *game_running_config(const game_t *g)
+{
+    if (g == NULL || (g->state != PROTO_STATE_BOMB_ACTIVE && g->state != PROTO_STATE_DEFUSED &&
+                      g->state != PROTO_STATE_EXPLODED)) {
+        return NULL;
+    }
+    return &g->bomb_cfg;
 }

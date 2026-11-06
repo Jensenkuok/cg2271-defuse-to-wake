@@ -27,6 +27,7 @@ typedef enum {
     APP_CTRL_TIME_SYNC = 0,
     APP_CTRL_SET_ALARM,
     APP_CTRL_BOMB_CONFIG,
+    APP_CTRL_REPORT,                     /* ESP32 CMD_REPORT: re-send the BOMB_REPORTs (no payload) */
     APP_CTRL_KIND_COUNT
 } app_ctrl_kind_t;
 

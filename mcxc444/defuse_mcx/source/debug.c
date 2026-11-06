@@ -35,7 +35,7 @@ static void print_stats(void)
     uart_link_stats_t st;
     game_task_stats_t gs;
     uint32_t i;
-    static const char *const ctrl_names[APP_CTRL_KIND_COUNT] = { "time_sync", "set_alarm", "bomb_config" };
+    static const char *const ctrl_names[APP_CTRL_KIND_COUNT] = { "time_sync", "set_alarm", "bomb_config", "report" };
 
     uart_link_get_stats(&st);
     PRINTF("[link] tx=%u rx=%u retx=%u fail=%u crc=%u len=%u dup=%u nack=%u uart_err=%u rxq_ovf=%u\r\n",
@@ -55,7 +55,8 @@ static void print_stats(void)
     for (i = 0; i < APP_CTRL_KIND_COUNT; i++) {
         PRINTF(" %s=%u/%u", ctrl_names[i], (unsigned)gs.accepted[i], (unsigned)gs.rejected[i]);
     }
-    PRINTF(" tick_overruns=%u us_stale=%u\r\n", (unsigned)gs.tick_overruns, (unsigned)ultrasonic_stale());
+    PRINTF(" tick_overruns=%u us_stale=%u reports_sent=%u report_retries=%u\r\n", (unsigned)gs.tick_overruns,
+           (unsigned)ultrasonic_stale(), (unsigned)gs.reports_sent, (unsigned)gs.report_retries);
     PRINTF("[stack words free]");
     print_stack("game", game_task_handle());
     print_stack("joy", joystick_task_handle());
