@@ -75,7 +75,7 @@
 #define APP_NVIC_PRIO_GPIO          128u    /* buttons/encoder: human-speed events */
 
 /* ---- Task priorities (configMAX_PRIORITIES = 5, idle = 0; CLAUDE.md) ---- */
-#define APP_PRIO_GAME               4u      /* future game/alarm FSM task (not created yet) */
+#define APP_PRIO_GAME               4u      /* game/alarm FSM task: runs the bomb engine */
 #define APP_PRIO_JOYSTICK           3u      /* fixed-rate sampling must not jitter */
 #define APP_PRIO_COMM               2u      /* link protocol */
 #define APP_PRIO_ULTRASONIC         2u      /* equal to comm on purpose: time slicing */

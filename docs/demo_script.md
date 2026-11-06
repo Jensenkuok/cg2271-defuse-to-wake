@@ -26,8 +26,6 @@ Code state: commit d1d3689. Paths: S = mcxc444/defuse_mcx/source, E = esp32/defu
   10. shared/proto_link.c
   11. E/config.h
   12. E/network_task.cpp
-- Optional fix: S/app_config.h:78 still says the game task is "not created yet". It is created
-  (main.c:162). Change the comment, because the TAs read it.
 - Who says what (each person owns the rubric lines of their block and takes the TA's follow-up questions on it):
 
   | Who | Block | Talks through | Marks | Also does |
