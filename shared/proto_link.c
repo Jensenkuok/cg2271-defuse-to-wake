@@ -18,6 +18,7 @@ static bool is_reliable_type(uint8_t type)
     case PROTO_MSG_TAMPER_EVENT:
     case PROTO_MSG_CMD:
     case PROTO_MSG_RESULT:
+    case PROTO_MSG_BOMB_REPORT:
         return true;
     default:
         return false;
@@ -53,17 +54,25 @@ static void emit_event(proto_link_t *l, proto_event_t evt, uint8_t type, uint8_t
 }
 
 /* Encode a NEW frame (takes the next SEQ) into buf and write it. Returns the
- * frame length, or 0 if encoding failed (nothing is sent, SEQ unchanged). */
+ * frame length, or 0 if encoding failed (nothing is sent, SEQ unchanged).
+ *
+ * Reliable frames draw their SEQ from tx_rel_seq, everything else from tx_seq.
+ * Why two counters: the receiver drops a reliable frame whose SEQ equals the last
+ * reliable SEQ it delivered (duplicate suppression). With one shared counter,
+ * heartbeats and ACKs moved it too, so a genuinely new reliable frame landed on the
+ * previous reliable SEQ about once in 256 sends and was ACKed but never delivered.
+ * Retransmits do not come through here, so they keep their original SEQ. */
 static size_t emit_new(proto_link_t *l, uint8_t type, const uint8_t *payload, uint8_t len,
                        uint8_t *buf, size_t buf_size, uint8_t *seq_used)
 {
-    size_t n = proto_encode(type, l->tx_seq, payload, len, buf, buf_size);
+    uint8_t *counter = is_reliable_type(type) ? &l->tx_rel_seq : &l->tx_seq;
+    size_t n = proto_encode(type, *counter, payload, len, buf, buf_size);
 
     if (n == 0u) {
         return 0u;
     }
-    *seq_used = l->tx_seq;
-    l->tx_seq = (uint8_t)(l->tx_seq + 1u);
+    *seq_used = *counter;
+    *counter = (uint8_t)(*counter + 1u);
     l->stats.tx_frames++;
     write_raw(l, buf, n);
     return n;
@@ -163,6 +172,7 @@ void proto_link_init(proto_link_t *l, const proto_link_cfg_t *cfg, uint32_t now_
     if (l->cfg.max_retries == 0u) {
         l->cfg.max_retries = (uint8_t)PROTO_LINK_DEFAULT_MAX_RETRIES;
     }
+    l->tx_rel_seq = l->cfg.initial_seq;
     proto_decoder_init(&l->decoder);
     l->last_rx_ms = now_ms;
     l->last_hb_ms = now_ms;
@@ -217,6 +227,12 @@ static void handle_frame(proto_link_t *l, const proto_frame_t *f, uint32_t now_m
     l->last_rx_ms = now_ms;
     if (!l->up) {
         l->up = true;
+        /* A peer that was silent for PROTO_LINK_DOWN_MS may have restarted, with its
+         * reliable SEQ counter back at a value we already delivered. Forget the last
+         * SEQ so its first frame is not taken for a duplicate. (A retransmit of a frame
+         * delivered just before the outage would now be delivered twice, but the
+         * outage is far longer than the retransmit window, so that cannot happen.) */
+        l->have_rx_seq = false;
         emit_event(l, PROTO_EVT_LINK_UP, 0u, 0u);
     }
 
@@ -242,6 +258,7 @@ static void handle_frame(proto_link_t *l, const proto_frame_t *f, uint32_t now_m
     case PROTO_MSG_TAMPER_EVENT:
     case PROTO_MSG_CMD:
     case PROTO_MSG_RESULT:
+    case PROTO_MSG_BOMB_REPORT:
         send_ack(l, f->seq);
         if (l->have_rx_seq && l->last_rx_seq == f->seq) {
             l->stats.dup_drops++;

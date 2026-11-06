@@ -16,7 +16,7 @@
  * allocation, no globals, no OS calls.
  *
  * Reliable types (need ACK): TIME_SYNC, SET_ALARM, BOMB_CONFIG, TAMPER_EVENT,
- * CMD, RESULT. Unreliable: HEARTBEAT, GAME_STATE, TELEMETRY, ACK, NACK.
+ * CMD, RESULT, BOMB_REPORT. Unreliable: HEARTBEAT, GAME_STATE, TELEMETRY, ACK, NACK.
  * Stop-and-wait: one outstanding reliable frame, plus a FIFO of
  * PROTO_LINK_TX_DEPTH waiting ones. See docs/protocol.md ("Transport").
  */
@@ -58,6 +58,9 @@ typedef struct {
     void *ctx;
     uint16_t timeout_ms;  /* 0 = PROTO_LINK_DEFAULT_TIMEOUT_MS */
     uint8_t max_retries;  /* 0 = PROTO_LINK_DEFAULT_MAX_RETRIES */
+    uint8_t initial_seq;  /* first SEQ of the reliable counter (0 when unset). The ESP32 passes
+                           * a random value so a reboot does not restart at a SEQ the MCX may
+                           * still remember as the last one it delivered. */
 } proto_link_cfg_t;
 
 typedef struct {
@@ -81,7 +84,9 @@ typedef struct {
 typedef struct {
     proto_link_cfg_t cfg;
     proto_decoder_t decoder;
-    uint8_t tx_seq;
+    uint8_t tx_seq;      /* SEQ of the next UNRELIABLE frame (heartbeat, ACK, NACK, ...) */
+    uint8_t tx_rel_seq;  /* SEQ of the next RELIABLE frame; separate so heartbeats and ACKs
+                          * can never make a new reliable frame look like a duplicate */
 
     proto_link_slot_t fifo[PROTO_LINK_TX_DEPTH];
     uint8_t fifo_head;

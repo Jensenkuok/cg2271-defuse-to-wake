@@ -148,12 +148,70 @@ static void test_message_roundtrips(void)
         s.dial_code[0] = 4; s.dial_code[1] = 2; s.dial_code[2] = 0; s.dial_code[3] = 9;
         s.wire_count = 5; s.correct_wire = 3;
         s.trip_min_cm = 10; s.trip_max_cm = 25; s.max_strikes = 3;
+        s.cfg_id = 0xA7;
+        CHECK(PROTO_SIZE_BOMB_CONFIG == 17u);
         CHECK(proto_pack_bomb_config(&s, pl, sizeof(pl)) == PROTO_SIZE_BOMB_CONFIG);
+        CHECK(pl[15] == 3 && pl[16] == 0xA7); /* cfg_id is the last wire byte */
         CHECK(pl[5] == 0x2C && pl[6] == 0x01); /* 300 = 0x012C */
         CHECK(roundtrip(PROTO_MSG_BOMB_CONFIG, 7, pl, PROTO_SIZE_BOMB_CONFIG, &f));
         CHECK(proto_unpack_bomb_config(f.payload, f.len, &r));
         CHECK(memcmp(&s, &r, sizeof(s)) == 0);
+        CHECK(r.cfg_id == 0xA7);
         CHECK(!proto_unpack_bomb_config(f.payload, 15, &r));
+        CHECK(!proto_unpack_bomb_config(f.payload, 16, &r)); /* the old 16-byte layout */
+        CHECK(!proto_unpack_bomb_config(f.payload, 18, &r));
+    }
+    {
+        /* Every slot x status combination round-trips with the embedded config intact. */
+        static const uint8_t slots[2] = { PROTO_REPORT_HELD, PROTO_REPORT_RUNNING };
+        static const uint8_t stats[2] = { PROTO_REPORT_OK, PROTO_REPORT_REJECTED };
+        int a, b;
+        for (a = 0; a < 2; a++) {
+            for (b = 0; b < 2; b++) {
+                proto_bomb_report_t s, r;
+                memset(&s, 0, sizeof(s));
+                memset(&r, 0, sizeof(r));
+                s.slot = slots[a];
+                s.status = stats[b];
+                s.cfg.module_count = 4;
+                s.cfg.module_order[0] = PROTO_MODULE_LIGHTS;
+                s.cfg.module_order[3] = PROTO_MODULE_DIAL;
+                s.cfg.time_limit_s = 181;
+                s.cfg.dial_code[1] = 7;
+                s.cfg.wire_count = 6; s.cfg.correct_wire = 5;
+                s.cfg.trip_min_cm = 12; s.cfg.trip_max_cm = 22; s.cfg.max_strikes = 3;
+                s.cfg.cfg_id = (uint8_t)(200 + a * 2 + b);
+                CHECK(PROTO_SIZE_BOMB_REPORT == 19u);
+                CHECK(proto_pack_bomb_report(&s, pl, sizeof(pl)) == PROTO_SIZE_BOMB_REPORT);
+                CHECK(pl[0] == slots[a] && pl[1] == stats[b] && pl[18] == s.cfg.cfg_id);
+                CHECK(roundtrip(PROTO_MSG_BOMB_REPORT, 9, pl, PROTO_SIZE_BOMB_REPORT, &f));
+                CHECK(proto_unpack_bomb_report(f.payload, f.len, &r));
+                CHECK(memcmp(&s, &r, sizeof(s)) == 0);
+            }
+        }
+    }
+    {
+        proto_bomb_report_t s, r;
+        memset(&s, 0, sizeof(s));
+        s.slot = PROTO_REPORT_HELD;
+        s.status = PROTO_REPORT_OK;
+        CHECK(proto_pack_bomb_report(&s, pl, sizeof(pl)) == PROTO_SIZE_BOMB_REPORT);
+        CHECK(!proto_unpack_bomb_report(pl, 18, &r)); /* wrong lengths */
+        CHECK(!proto_unpack_bomb_report(pl, 20, &r));
+        CHECK(!proto_unpack_bomb_report(NULL, 19, &r));
+        pl[0] = 0;  CHECK(!proto_unpack_bomb_report(pl, 19, &r)); /* unknown slot */
+        pl[0] = 3;  CHECK(!proto_unpack_bomb_report(pl, 19, &r));
+        pl[0] = PROTO_REPORT_HELD;
+        pl[1] = 0;  CHECK(!proto_unpack_bomb_report(pl, 19, &r)); /* unknown status */
+        pl[1] = 3;  CHECK(!proto_unpack_bomb_report(pl, 19, &r));
+        CHECK(proto_pack_bomb_report(&s, pl, 18) == 0); /* buffer too small */
+    }
+    {
+        proto_cmd_t s = { PROTO_CMD_REPORT, 0 }, r;
+        CHECK(PROTO_CMD_REPORT == 4 && PROTO_MSG_BOMB_REPORT == 0x23);
+        CHECK(proto_pack_cmd(&s, pl, sizeof(pl)) == PROTO_SIZE_CMD);
+        CHECK(roundtrip(PROTO_MSG_CMD, 10, pl, PROTO_SIZE_CMD, &f));
+        CHECK(proto_unpack_cmd(f.payload, f.len, &r) && r.cmd == PROTO_CMD_REPORT && r.arg == 0);
     }
     {
         proto_tamper_event_t s = { 1500 }, r;

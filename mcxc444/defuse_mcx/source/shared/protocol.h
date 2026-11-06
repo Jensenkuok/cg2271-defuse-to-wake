@@ -44,12 +44,21 @@ typedef enum {
     /* MCX -> ESP32 */
     PROTO_MSG_GAME_STATE   = 0x20,
     PROTO_MSG_RESULT       = 0x21,
-    PROTO_MSG_TELEMETRY    = 0x22
+    PROTO_MSG_TELEMETRY    = 0x22,
+    PROTO_MSG_BOMB_REPORT  = 0x23  /* the config the MCX holds / runs (reliable) */
 } proto_msg_type_t;
 
 /* ---- Field value enums ---- */
 enum { PROTO_NACK_CRC = 1, PROTO_NACK_LEN = 2, PROTO_NACK_UNKNOWN_TYPE = 3 };
-enum { PROTO_CMD_RING_NOW = 1, PROTO_CMD_SNOOZE = 2, PROTO_CMD_CANCEL = 3 };
+/* PROTO_CMD_REPORT: the ESP32 asks the MCX to re-send its BOMB_REPORTs (after an ESP32
+ * reset it has lost track of which config the MCX holds). */
+enum { PROTO_CMD_RING_NOW = 1, PROTO_CMD_SNOOZE = 2, PROTO_CMD_CANCEL = 3, PROTO_CMD_REPORT = 4 };
+/* BOMB_REPORT slot: which config the report describes. */
+enum { PROTO_REPORT_HELD = 1,     /* the config the MCX will use for the NEXT bomb */
+       PROTO_REPORT_RUNNING = 2 };/* snapshot of the bomb that is running / just ran */
+/* BOMB_REPORT status: application-level answer, unlike the transport ACK. */
+enum { PROTO_REPORT_OK = 1,       /* the MCX accepted and now holds this config */
+       PROTO_REPORT_REJECTED = 2 };/* the MCX refused the last BOMB_CONFIG; cfg is what it kept */
 enum { PROTO_MODULE_DIAL = 1, PROTO_MODULE_WIRES = 2, PROTO_MODULE_TRIPWIRE = 3, PROTO_MODULE_LIGHTS = 4 };
 enum {
     PROTO_STATE_IDLE = 0, PROTO_STATE_ARMED = 1, PROTO_STATE_BOMB_ACTIVE = 2,
@@ -67,11 +76,12 @@ enum { PROTO_OUTCOME_DEFUSED = 1, PROTO_OUTCOME_EXPLODED = 2 };
 #define PROTO_SIZE_TIME_SYNC    4u
 #define PROTO_SIZE_SET_ALARM    4u
 #define PROTO_SIZE_CMD          3u
-#define PROTO_SIZE_BOMB_CONFIG  16u
+#define PROTO_SIZE_BOMB_CONFIG  17u
 #define PROTO_SIZE_TAMPER_EVENT 2u
 #define PROTO_SIZE_GAME_STATE   9u
 #define PROTO_SIZE_RESULT       5u
 #define PROTO_SIZE_TELEMETRY    8u
+#define PROTO_SIZE_BOMB_REPORT  (2u + PROTO_SIZE_BOMB_CONFIG) /* slot, status, config = 19 */
 
 /* ---- Frame codec ---- */
 uint8_t proto_crc8(const uint8_t *data, size_t len);
@@ -139,7 +149,17 @@ typedef struct {
     uint8_t trip_min_cm;
     uint8_t trip_max_cm;
     uint8_t max_strikes;
+    uint8_t cfg_id;  /* ESP32 numbers each config it sends 1..255 (wraps, skips 0) so a
+                      * BOMB_REPORT can say which send it confirms; 0 = the MCX's built-in
+                      * default config. Appended last: the older fields keep their offsets. */
 } proto_bomb_config_t;
+/* MCX -> ESP32. Why: the transport ACK only proves the bytes arrived, not that the game
+ * engine accepted the config, so the MCX reports what it really holds. */
+typedef struct {
+    uint8_t slot;    /* PROTO_REPORT_HELD or PROTO_REPORT_RUNNING */
+    uint8_t status;  /* PROTO_REPORT_OK or PROTO_REPORT_REJECTED */
+    proto_bomb_config_t cfg; /* the config the MCX actually holds / runs (incl. cfg_id) */
+} proto_bomb_report_t;
 typedef struct { uint16_t magnitude_mg; } proto_tamper_event_t;
 typedef struct {
     uint8_t state;        /* PROTO_STATE_* */
@@ -189,6 +209,9 @@ size_t proto_pack_result(const proto_result_msg_t *s, uint8_t *out, size_t out_s
 bool proto_unpack_result(const uint8_t *p, size_t len, proto_result_msg_t *s);
 size_t proto_pack_telemetry(const proto_telemetry_t *s, uint8_t *out, size_t out_size);
 bool proto_unpack_telemetry(const uint8_t *p, size_t len, proto_telemetry_t *s);
+/* unpack_bomb_report also returns false for an unknown slot or status. */
+size_t proto_pack_bomb_report(const proto_bomb_report_t *s, uint8_t *out, size_t out_size);
+bool proto_unpack_bomb_report(const uint8_t *p, size_t len, proto_bomb_report_t *s);
 
 #ifdef __cplusplus
 }
