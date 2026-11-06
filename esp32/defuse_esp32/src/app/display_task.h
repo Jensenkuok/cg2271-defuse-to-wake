@@ -59,7 +59,7 @@ struct ScreenModel {
     bool light_holding;       /* the hold is running (grace included): same source as light_hold_pct */
     char taken_text[8];       /* DEFUSED "MM:SS" */
     char clue[APP_CLUE_MAX_CHARS + 1]; /* TRIPWIRE / LIGHTS bottom line: "Hold hand 15-25cm 3s", "Turn on a light" */
-    /* ACTIVE DIAL / WIRES: the riddle of the ACTIVE pair (the config the MCX ACKed) and the hint */
+    /* ACTIVE DIAL / WIRES: the riddle of the config the MCX reported (running while a bomb is shown, else held) and the hint */
     char puzzle_text[PUZZLE_TEXT_BUF];
     char hint[HINT_BUF];      /* "" until the current bomb has a strike */
     int8_t hint_wire;         /* WIRES: 0-based wire the hint marks with an X, -1 none */

@@ -412,7 +412,9 @@ static void put_ai(JsonBuf *j)
     uint32_t gen = 0u;
     unsigned i;
     const bool have = puzzle_set_snapshot(s_set, &gen);
-    const int active_pair = (s_st->active.valid && s_st->active.set_gen == gen) ? (int)s_st->active.pair : -1;
+    /* the pair behind the config the MCX reports (running while a bomb is shown, else held); -1 = unknown pair */
+    const CfgReport *src = cfg_pick_report(game_ringing(*s_st), s_st->held, s_st->running);
+    const int active_pair = (src != NULL && src->matched && src->view.set_gen == gen) ? (int)src->view.pair : -1;
 
     jb_key(j, "ai");
     if (!have) {

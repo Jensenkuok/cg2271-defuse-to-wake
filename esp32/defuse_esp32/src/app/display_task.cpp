@@ -122,55 +122,28 @@ static void fmt_alarm_line(ScreenModel *out, uint32_t alarm_unix)
     }
 }
 
-/* The puzzle of the ACTIVE pair for the module on screen, plus its hint. The pair is the config the
- * MCX ACKed, i.e. what the running (or next) bomb asks for. Until one is known the MCX is assumed
- * to run its default bomb (game_config.h), whose clue comes from the template bank; the literal
- * UNKNOWN_PUZZLE text is the last resort if even that cannot be rendered. */
-static void fill_puzzle(const AppState &st, ScreenModel *out)
+/* The puzzle for the module on screen, plus its hint, drawn from what the MCX REPORTED (cfg_sync.h): the code,
+ * wire count and answer wire come straight from the report, so the screen cannot disagree with what the MCX checks.
+ * The report only adds the riddle TEXT when it matches a config this ESP32 sent; otherwise (an ESP32 reset, the
+ * MCX's default config, or no report yet) the built-in clue / template for the same code is shown. UNKNOWN_PUZZLE
+ * is the last resort if even that cannot be rendered. */
+static void fill_puzzle(const AppState &st, const CfgFacts &f, ScreenModel *out)
 {
-    const bool known = st.active.valid;
-    uint8_t code[PROTO_DIAL_DIGITS] = { GAME_DEFAULT_DIAL_CODE_0, GAME_DEFAULT_DIAL_CODE_1, GAME_DEFAULT_DIAL_CODE_2,
-                                        GAME_DEFAULT_DIAL_CODE_3 };
-    int wires = (int)GAME_DEFAULT_WIRE_COUNT;
-    int wire_k = (int)GAME_DEFAULT_CORRECT_WIRE + 1;     /* game_config.h is zero-based */
     const char *stored = "";
 
-    unsigned dial_pos = 0u;                              /* the default bomb has the dial first */
-
-    if (known) {
-        memcpy(code, st.active.dial_code, sizeof(code));
-        dial_pos = st.active.dial_pos;
-        wires = st.active.wire_count;
-        wire_k = st.active.wire_k;
-    }
     if (out->module_type == PROTO_MODULE_DIAL) {
-        /* The MCX expects game_dial_code(sent base, module index). The base was pre-shifted so that at the
-         * dial's own position that is the AI puzzle's code (code); rebuild the base and derive from it. */
-        if (st.game.module_idx != dial_pos) {
-            /* A repeated dial (after an explosion or snooze): the derived code is one the AI pair knows
-             * nothing about -> built-in bank clue, hint from the derived code. */
-            uint8_t base[PROTO_DIAL_DIGITS];
-            uint8_t derived[PROTO_DIAL_DIGITS];
-
-            dial_code_preshift(code, dial_pos, base);
-            game_dial_code(base, st.game.module_idx, derived);
-            memcpy(code, derived, sizeof(code));
-            (void)dial_clue_render(dial_clue_build(code, 0u), out->puzzle_text, sizeof(out->puzzle_text));
-        } else {
-            stored = known ? st.active.dial_text : "";
-            if (stored[0] == '\0') {
-                (void)dial_template(code, 0u, out->puzzle_text, sizeof(out->puzzle_text));
-            }
-        }
-        (void)dial_hint(code, st.game.strikes, out->hint, sizeof(out->hint));
-    } else if (out->module_type == PROTO_MODULE_WIRES) {
-        stored = known ? st.active.wire_text : "";
+        stored = (f.dial_text != NULL) ? f.dial_text : "";
         if (stored[0] == '\0') {
-            (void)wire_template(wire_k, wires, 0u, out->puzzle_text, sizeof(out->puzzle_text));
+            (void)dial_template(f.dial_code, 0u, out->puzzle_text, sizeof(out->puzzle_text));
         }
-        out->wire_count = (uint8_t)wires;               /* the drawing follows the MCX's wire count */
-        out->hint_wire = (int8_t)wire_hint_index(wire_k, wires, st.game.strikes, out->wire_cut_mask);
-        (void)wire_hint(wire_k, wires, st.game.strikes, out->wire_cut_mask, out->hint, sizeof(out->hint));
+        (void)dial_hint(f.dial_code, st.game.strikes, out->hint, sizeof(out->hint));
+    } else if (out->module_type == PROTO_MODULE_WIRES) {
+        stored = (f.wire_text != NULL) ? f.wire_text : "";
+        if (stored[0] == '\0') {
+            (void)wire_template(f.wire_k, f.wire_count, 0u, out->puzzle_text, sizeof(out->puzzle_text));
+        }
+        out->hint_wire = (int8_t)wire_hint_index(f.wire_k, f.wire_count, st.game.strikes, out->wire_cut_mask);
+        (void)wire_hint(f.wire_k, f.wire_count, st.game.strikes, out->wire_cut_mask, out->hint, sizeof(out->hint));
     } else {
         return;
     }
@@ -231,6 +204,7 @@ void build_model(const AppState &st, uint32_t now_ms, uint32_t unix_now, uint32_
     uint32_t lo;
     uint32_t hi;
     uint32_t local;
+    CfgFacts facts;
 
     memset(out, 0, sizeof(*out));
     out->hint_wire = -1;
@@ -281,9 +255,12 @@ void build_model(const AppState &st, uint32_t now_ms, uint32_t unix_now, uint32_
         out->show_alarm = out->next_text[0] == '\0' || ((now_ms / APP_IDLE_TOGGLE_MS) % 2u) == 1u;
     }
 
+    /* The bomb as the MCX reports it: the running one while a bomb is shown, else the held one, else the default. */
+    cfg_facts(cfg_pick_report(game_ringing(st), st.held, st.running), st.game.module_idx, &facts);
+
     fmt_mmss(out->timer_text, sizeof(out->timer_text), st.game.time_left_s);
     out->strikes = st.game.strikes;
-    out->max_strikes = st.max_strikes;
+    out->max_strikes = facts.max_strikes;
     out->module_type = st.game.module_type;
 
     /* module_value, exactly as documented in docs/game.md:
@@ -293,13 +270,13 @@ void build_model(const AppState &st, uint32_t now_ms, uint32_t unix_now, uint32_
     hi = ((uint32_t)st.game.module_value >> 8) & 0xFFu;
     out->dial_value = (uint8_t)lo;
     out->dial_digit = (uint8_t)hi;
-    out->wire_count = st.wire_count;
+    out->wire_count = facts.wire_count;
     out->wire_cursor = (uint8_t)lo;
     out->wire_cut_mask = (uint8_t)hi;
     out->trip_cm = (uint8_t)lo;
     out->trip_hold_pct = (uint8_t)hi;
-    out->trip_min_cm = st.trip_min_cm;
-    out->trip_max_cm = st.trip_max_cm;
+    out->trip_min_cm = facts.trip_min_cm;
+    out->trip_max_cm = facts.trip_max_cm;
     out->light_level = (uint8_t)lo;
     out->light_target = (uint8_t)hi;
 
@@ -320,7 +297,7 @@ void build_model(const AppState &st, uint32_t now_ms, uint32_t unix_now, uint32_
     }
 
     if (out->screen == SCR_ACTIVE) {
-        fill_puzzle(st, out);
+        fill_puzzle(st, facts, out);
     } else if (out->screen == SCR_DEFUSED) {
         fill_defused(st, unix_now, defused_ms, out);
     }

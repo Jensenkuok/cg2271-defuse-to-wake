@@ -16,10 +16,6 @@ bool app_state_init(void)
     if (s_state == NULL) {
         return false;
     }
-    s_state->wire_count = APP_DEFAULT_WIRE_COUNT;
-    s_state->trip_min_cm = APP_DEFAULT_TRIP_MIN_CM;
-    s_state->trip_max_cm = APP_DEFAULT_TRIP_MAX_CM;
-    s_state->max_strikes = APP_DEFAULT_MAX_STRIKES;
     /* A mutex (not a critical section): the struct is copied by several tasks, and a
      * FreeRTOS mutex adds priority inheritance so the prio-4 link task is never stuck
      * behind a low-priority reader that holds the lock. */
@@ -141,16 +137,6 @@ void app_state_set_mirror_pending(uint8_t pending)
     with_lock([&]() { s_state->mirror_pending = pending; });
 }
 
-void app_state_set_bomb_config(uint8_t wires, uint8_t trip_min, uint8_t trip_max, uint8_t max_strikes)
-{
-    with_lock([&]() {
-        s_state->wire_count = wires;
-        s_state->trip_min_cm = trip_min;
-        s_state->trip_max_cm = trip_max;
-        s_state->max_strikes = max_strikes;
-    });
-}
-
 void app_state_note_config_result(bool acked)
 {
     with_lock([&]() {
@@ -162,9 +148,20 @@ void app_state_note_config_result(bool acked)
     });
 }
 
-void app_state_set_active_puzzle(const ActivePuzzle &p)
+void app_state_set_report(uint8_t slot, const CfgReport &r)
 {
-    with_lock([&]() { s_state->active = p; });
+    with_lock([&]() {
+        if (slot == PROTO_REPORT_HELD) {
+            s_state->held = r;
+        } else if (slot == PROTO_REPORT_RUNNING) {
+            s_state->running = r;
+        }
+    });
+}
+
+void app_state_note_bad_report(void)
+{
+    with_lock([&]() { s_state->report_bad++; });
 }
 
 void app_state_set_brief(const BriefText &b)

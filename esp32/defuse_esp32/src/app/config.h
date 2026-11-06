@@ -210,7 +210,8 @@
 #define APP_PUZZLE_QUIET_S          300     /* no LLM calls this close to (or just after) the alarm */
 #define APP_KEY_PUZZLES            "pz_set"
 #define APP_KEY_PUZZLE_USED         "pz_used"   /* SPENT-pair mask: a pair a bomb started with, not yet refilled by the bank */
-#define APP_CONFIG_PENDING_MS       5000u   /* one BOMB_CONFIG at a time; give up on its ACK after this */
+#define APP_CONFIG_PENDING_MS       5000u   /* one BOMB_CONFIG at a time; give up on the MCX's HELD report after this */
+#define APP_CFG_RING_LEN            4u      /* sends remembered (id + packed bytes + riddle text) to match a BOMB_REPORT against */
 
 /* ---- Briefing + coach (one LLM call per pass, APP_BRIEF_CHAIN; runs while online until the next class day has an LLM-written text) ---- */
 #define APP_BRIEF_TEMP              0.7f
