@@ -1,7 +1,8 @@
 # Final report: changes since the version sent to the group
 
-These are suggestions for B02_10_Final.docx; the docx itself was not edited. Quotes are from the
-version you sent. Code state: commit d1d3689 (6 Nov 2026).
+The current list lives in the shared Claude Doc "B02_10 Final report: changes to make"
+(https://claude.ai/artifact/9Mkxm45j5P94bGT1zncw5W), checked against the SharePoint report of 6 Nov 2026
+and code fb5595e. Keep that doc updated; this file is the older working copy (code state d1d3689).
 
 ## Must change (the report is now wrong)
 
