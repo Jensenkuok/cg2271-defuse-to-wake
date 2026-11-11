@@ -54,6 +54,11 @@ static void fatal_halt(void)
 }
 
 /* configCHECK_FOR_STACK_OVERFLOW = 2 */
+/* ===== Q&A [Task design 4 (robustness)] =====
+ * Q: What if a task overflows its stack or the heap runs out?
+ * A: configCHECK_FOR_STACK_OVERFLOW 2 + configUSE_MALLOC_FAILED_HOOK 1 call these hooks,
+ *    which stop everything with the red LED on, so a bug is visible, not silent.
+ * ===== end Q&A ===== */
 void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
 {
     (void)task;
@@ -128,6 +133,15 @@ static void on_frame(const proto_frame_t *f)
 }
 #endif
 
+/* ===== Q&A [Task design 4 / RTOS enabled 2] =====
+ * Q: What tasks do you have and why these priorities? (configMAX_PRIORITIES 5)
+ * A: game 4 (player input + alarm deadline handled at once), joystick 3 (fixed 50 Hz
+ *    sampling must not jitter), comm 2 = ultrasonic 2 (EQUAL on purpose: time slicing
+ *    shares the CPU between them), feedback 1 (buzzer/LED tolerate 10 ms). Idle 0.
+ *    The debug task only exists when APP_DEBUG_STATS / APP_GAME_DEBUG is 1 (both 0 now).
+ * Q: Order of start-up? A: queues + peripherals first, then xTaskCreate, then
+ *    vTaskStartScheduler. Any failure -> fatal_halt() = solid red LED.
+ * ===== end Q&A ===== */
 int main(void)
 {
     static const uart_link_hooks_t hooks = { on_link_change, on_frame };

@@ -47,6 +47,11 @@ bool build_url(char *url, size_t size)
 }
 
 /* POST the record; true only on HTTP 200. Logs the status code, never the URL. */
+/* ===== Q&A [Online function(s) 5 (database)] =====
+ * Q: Show the database operation. A: HTTPS POST of each morning's record to the
+ *    Firebase Realtime Database (mornings.json). Queued in flash and retried with
+ *    back-off; a write-only mirror, the local flash history is the source of truth.
+ * ===== end Q&A ===== */
 bool post_record(const HistRecord &rec)
 {
     char url[APP_FIREBASE_URL_MAX];

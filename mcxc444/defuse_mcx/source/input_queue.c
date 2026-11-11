@@ -17,6 +17,12 @@ QueueHandle_t input_queue_handle(void)
     return s_queue;
 }
 
+/* ===== Q&A [Synchronization tools 2] =====
+ * Q: Where is your queue? A: this input queue (16 events): every ISR and sensor task
+ *    posts game events here, and the game task is the only reader. Other queues: UART
+ *    RX bytes, TX requests, control (comm -> game), feedback (game -> buzzer/LED).
+ *    Sends never block (timeout 0); a full queue counts a drop instead.
+ * ===== end Q&A ===== */
 void input_post_from_isr(game_event_type_t type, int32_t value, BaseType_t *woken)
 {
     game_event_t ev;

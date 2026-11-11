@@ -55,6 +55,12 @@ static void queue_running(const proto_bomb_config_t *cfg)
 /* Send what is pending, HELD before RUNNING. uart_link_send fails when the TX FIFO is full;
  * the slot then stays pending and the next loop iteration retries (the loop runs every
  * APP_GAME_TICK_MS), so a report is never dropped silently. */
+/* ===== Q&A [Communications Protocol 5 (control flow)] =====
+ * Q: How does the ESP32 know the MCX really accepted a config? A: the transport ACK only
+ *    says the bytes arrived. After applying it, the game task sends a BOMB_REPORT
+ *    (HELD: OK or REJECTED; RUNNING: the config the live bomb uses). The ESP32 draws the
+ *    puzzle only from these reports, so the OLED can never disagree with the bomb.
+ * ===== end Q&A ===== */
 static void flush_reports(void)
 {
     static const uint8_t proto_slot[REPORT_SLOT_COUNT] = { PROTO_REPORT_HELD, PROTO_REPORT_RUNNING };
@@ -136,6 +142,14 @@ static void publish(const game_t *g, uint32_t now, uint32_t *last_version, bool 
     debug_notify_state_changed();
 }
 
+/* ===== Q&A [Task design 4] =====
+ * Q: How does the game task yield? A: its only blocking point is xQueueReceive on the
+ *    input queue with a timeout = time to the next 50 ms tick. It sleeps when idle and
+ *    wakes at once on input (priority 4 preempts everything else).
+ * Q: What does one loop do? A: handle the event, apply ESP32 control messages, tick the
+ *    game every 50 ms, publish the snapshot (mutex), tell the feedback task the LED
+ *    mode / sounds (queue), and queue RESULT + BOMB_REPORT frames for the ESP32.
+ * ===== end Q&A ===== */
 static void game_task(void *arg)
 {
     const TickType_t period = pdMS_TO_TICKS(APP_GAME_TICK_MS);

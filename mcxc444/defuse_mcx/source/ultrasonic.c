@@ -95,6 +95,12 @@ void ultrasonic_init(void)
  */
 
 /* ISR: read the captured value, clear flags, classify the edge, notify. */
+/* ===== Q&A [Polling & Interrupt 2 / ISR design 3] =====
+ * Q: How is distance measured? A: TPM1 input capture latches the counter (1 us/count)
+ *    on each ECHO edge IN HARDWARE, so the pulse width is exact even if a task runs.
+ *    This ISR stores the rising edge, computes fall - rise, and notifies the task.
+ *    cm = width / 58. ECHO is 5 V, so it goes through a resistor divider to PTA13.
+ * ===== end Q&A ===== */
 void TPM1_IRQHandler(void)
 {
     BaseType_t woken = pdFALSE;
@@ -144,6 +150,11 @@ void TPM1_IRQHandler(void)
  * RTOS tick (5 ms) and is timed by the TPM1 1 MHz counter itself, so it does not
  * depend on the CPU clock or compiler optimisation. A critical section keeps an ISR
  * from stretching the pulse. */
+/* ===== Q&A [Task design 4 (yields)] =====
+ * Q: Any busy-waiting? A: only this 10 us TRIG pulse: far shorter than one 5 ms tick,
+ *    timed by TPM1 itself. Every task otherwise blocks on a queue, notification or
+ *    vTaskDelayUntil.
+ * ===== end Q&A ===== */
 static void trigger_pulse(void)
 {
     uint16_t start;
@@ -188,6 +199,11 @@ static int32_t median_filter(int32_t cm)
     return sorted[APP_US_MEDIAN_N / 2u];
 }
 
+/* ===== Q&A [Task design 4] =====
+ * Q: What does this task do? A: every 60 ms (vTaskDelayUntil) it fires TRIG, then BLOCKS
+ *    on a notification (35 ms timeout) until the TPM1 ISR has the echo. A median of 3
+ *    readings ignores one lost echo. Priority 2 = comm: time slicing between them.
+ * ===== end Q&A ===== */
 static void ultrasonic_task(void *arg)
 {
     TickType_t wake = xTaskGetTickCount();

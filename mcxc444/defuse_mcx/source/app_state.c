@@ -37,6 +37,14 @@ bool app_state_init(void)
  *    (classic priority inversion). A binary semaphore would not do that.
  * The lock is held only for the memcpy, and every take has a bounded timeout.
  */
+/* ===== Q&A [Synchronization tools 2] =====
+ * Q: Where is your mutex and why a mutex? A: here, around the game-state snapshot
+ *    (written by game prio 4, read by comm prio 2).
+ *    - Not a critical section: that would mask the UART ISR for the whole copy.
+ *    - Not a binary semaphore: a mutex has PRIORITY INHERITANCE, so a low-priority
+ *      holder is boosted and the game task is never stuck (no priority inversion).
+ *    Every take has a bounded 5 ms timeout.
+ * ===== end Q&A ===== */
 void app_state_write(const app_state_t *s)
 {
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(APP_STATE_MUTEX_WAIT_MS)) == pdTRUE) {

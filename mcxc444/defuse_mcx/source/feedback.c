@@ -75,6 +75,11 @@ static void tpm_write_cnsc(TPM_Type *tpm, uint32_t ch, uint32_t value)
     }
 }
 
+/* ===== Q&A [Sensors/actuators 5] =====
+ * Q: How are the actuators driven? A: TPM0 PWM at 1 kHz drives the on-board RGB LED
+ *    (dim blue armed, red blink active, green defused, red/white exploded); TPM2 PWM
+ *    drives the passive buzzer. TPM1 is kept free-running for the echo capture.
+ * ===== end Q&A ===== */
 static void tpm0_led_init(void)
 {
     SIM->SCGC6 |= SIM_SCGC6_TPM0_MASK;
@@ -216,6 +221,11 @@ static void handle(const feedback_req_t *r, uint32_t now)
     }
 }
 
+/* ===== Q&A [Task design 4] =====
+ * Q: Why a separate feedback task at priority 1? A: it is the only owner of TPM0/TPM2.
+ *    Every 10 ms it drains its queue (sounds, tick rate, LED mode) and updates the
+ *    outputs. A tone 10 ms late is not noticeable, so it runs at the lowest priority.
+ * ===== end Q&A ===== */
 static void feedback_task(void *arg)
 {
     TickType_t wake = xTaskGetTickCount();

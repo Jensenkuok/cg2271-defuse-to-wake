@@ -20,6 +20,10 @@ bool i2c_bus_init(void)
     return true;
 }
 
+/* ===== Q&A [Synchronization tools 2 (ESP32)] =====
+ * Q: Mutex on the ESP32? A: this one guards the shared I2C bus (OLED, and the gyro when
+ *    enabled), with a bounded wait. Others guard the app state, flash, timetable, history.
+ * ===== end Q&A ===== */
 bool i2c_bus_lock(uint32_t timeout_ms)
 {
     return xSemaphoreTake(s_mutex, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;

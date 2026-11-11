@@ -72,6 +72,14 @@ int32_t encoder_count(void)
 }
 
 /* ISR: read pins, clear flags, decode, post. No blocking, no loops on input. */
+/* ===== Q&A [Polling & Interrupt 2 / ISR design 3] =====
+ * Q: Which sensor is interrupt-driven and why? A: the rotary encoder. Its A/B edges are
+ *    short and fast; polling would miss steps when the knob spins quickly.
+ * Q: Walk through this ISR. A: read+clear the flags (w1c), decode the Gray-code step with
+ *    a table, post ENC_STEP to the input queue with xQueueSendFromISR, then
+ *    portYIELD_FROM_ISR. No printf, no delay, no loop waiting for input.
+ *    SW3 (on-board button, PTA4) shares this port and posts RING_NOW (demo trigger).
+ * ===== end Q&A ===== */
 void PORTA_IRQHandler(void)
 {
     BaseType_t woken = pdFALSE;

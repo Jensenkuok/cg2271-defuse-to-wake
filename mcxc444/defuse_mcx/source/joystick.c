@@ -76,6 +76,11 @@ bool joystick_init(void)
 }
 
 /* ISR: read the result (clears COCO), wake the task. */
+/* ===== Q&A [ISR design 3] =====
+ * Q: Why an ADC interrupt if the joystick is polled?
+ * A: the task starts a conversion and SLEEPS on a task notification; this ISR reads the
+ *    result and wakes it (vTaskNotifyGiveFromISR). So the task never spins on COCO.
+ * ===== end Q&A ===== */
 void ADC0_IRQHandler(void)
 {
     BaseType_t woken = pdFALSE;
@@ -176,6 +181,14 @@ static void ldr_sample(void)
     }
 }
 
+/* ===== Q&A [Polling & Interrupt 2 / Task design 4] =====
+ * Q: Which sensor is polled and why? A: the joystick (and the LDR). They are analog
+ *    voltages with no event to interrupt on, so we sample at a fixed rate.
+ * Q: Why vTaskDelayUntil? A: exact 20 ms period (50 Hz) measured from the last wake,
+ *    not from now, so the sampling rate never drifts. Priority 3 so it does not jitter.
+ * Q: Why is the LDR sampled here? A: both need ADC0. One owner task = conversions can
+ *    never overlap, no lock needed. LDR every 5th loop = 10 Hz (light changes slowly).
+ * ===== end Q&A ===== */
 static void joystick_task(void *arg)
 {
     TickType_t wake = xTaskGetTickCount();

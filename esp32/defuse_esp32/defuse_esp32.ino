@@ -35,6 +35,13 @@
 #include <WebServer.h>
 #include <Wire.h>
 
+/* ===== Q&A [ESP32 use 7] =====
+ * Q: How is the ESP32 used beyond Wi-Fi? A: 4 FreeRTOS tasks on its single core:
+ *    link 4 (owns the UART protocol), display 2 (OLED 10 fps), network 1 (Wi-Fi, NTP,
+ *    NUSMods, LLM, Firebase), web 1 (local web page). Libraries: Adafruit_SSD1306/GFX,
+ *    WiFiMulti, HTTPClient + TLS, ArduinoJson, Preferences, WebServer, ESPmDNS.
+ *    setup() only creates shared objects and tasks; loop() deletes itself.
+ * ===== end Q&A ===== */
 void setup()
 {
     bool ok;

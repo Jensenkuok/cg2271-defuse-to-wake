@@ -868,6 +868,11 @@ static void web_task(void *arg)
     }
 }
 
+/* ===== Q&A [Online function(s) 5 (web application)] =====
+ * Q: Web application? A: the ESP32 serves its own page at http://defuse.local: settings,
+ *    timetable, history, Ring now, and /eng (live bomb, link stats, frame log, fault
+ *    buttons). The page polls /api/status (JSON). Lowest priority: the game never waits.
+ * ===== end Q&A ===== */
 bool web_task_start(void)
 {
     static const char *k_headers[] = { "X-Requested-With" };   /* collectHeaders wants a non-const array */

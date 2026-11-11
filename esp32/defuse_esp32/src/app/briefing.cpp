@@ -205,6 +205,12 @@ BeginResult begin_run(uint32_t unix_now)
 void step_call(void)
 {
     const char *model = k_chain[s_pos];
+    /* ===== Q&A [Online function(s) 5 (Generative AI)] =====
+     * Q: What does the LLM do? A: writes the morning briefing + coach message from today's
+     *    classes, the alarm time and recent mornings. Invalid replies -> a template.
+     * Q: Why not AI puzzles? A: board tests showed slow and wrong answers on hard riddles,
+     *    so puzzles come from the ESP32's proven bank (APP_PUZZLE_USE_LLM 0).
+     * ===== end Q&A ===== */
     LlmReply r = llm_chat(model, kBriefSys, s_prompt, APP_BRIEF_MAX_TOKENS, APP_BRIEF_TEMP, s_reply, APP_LLM_REPLY_MAX);
     int mask = 0;
 
