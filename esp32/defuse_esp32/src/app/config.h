@@ -147,8 +147,16 @@
 #define APP_KEY_MIRROR              "mirror"
 #define APP_LINK_MAX_CHARS          512
 #define APP_LEAD_MIN_DEFAULT        60      /* minutes of wake-up lead before the first lecture */
-#define APP_LEAD_MIN_LOW            15
+#define APP_LEAD_MIN_LOW            1
 #define APP_LEAD_MIN_HIGH           180
+
+/* ---- Demo morning alarm (a SET_ALARM for now + N minutes through the normal alarm path) ---- */
+#define APP_DEMO_ALARM_MAX_MIN      30      /* longest demo delay the page / Serial accept (0 = cancel) */
+#define APP_DEMO_ALARM_SLACK_S      5       /* added to now + N min so N = 1 stays above SCHED_MIN_LEAD_S */
+#define APP_DEMO_CLEAR_S            1800    /* a demo must ring at least this long before the real alarm: a demo session
+                                             * with snoozes and explosions has to end first, because the session guard
+                                             * sends no SET_ALARM during a session */
+#define APP_DEMO_MSG_LEN            64      /* last demo result text for the page (app_state.demo_msg) */
 
 /* ---- Timetable (NUSMods) ---- */
 #define APP_NUSMODS_URL_PREFIX      "https://api.nusmods.com/v2/2026-2027/modules/"
@@ -176,12 +184,21 @@
  * checker chain starts with the model that did NOT write the puzzle (see checker_order()). */
 #define APP_SOCLAAS_BASE_URL        "https://soclaas-api.comp.nus.edu.sg/v1"
 #define APP_SOCLAAS_CHAT_PATH       "/chat/completions"
-#define APP_LLM_CHAIN_LEN           4
-#define APP_LLM_SETTER_CHAIN        { "qwen3.6:35b", "x-test-1", "x-test-2", "default" }
-#define APP_LLM_CHECKER_CHAIN       { "x-test-1", "default", "x-test-2", "qwen3.6:35b" }
-#define APP_LLM_TIMEOUT_MS          30000u  /* one request: connect and read, at most 30 s */
-#define APP_LLM_TIMEOUT_S           30u     /* same limit for the TLS client */
-#define APP_LLM_MAX_TOKENS          2000    /* thinking models spend most of it before answering; 600 gave empty replies */
+/* LLM puzzles switch. 0 = puzzles come only from the ESP32's proven built-in bank; the LLM writes only the
+ * briefing + coach (board tests 6 Nov: writer timeouts, the checker solved Hard riddles wrong). The writer/checker
+ * code stays in the tree; set 1 to re-enable the pipeline. */
+#ifndef APP_PUZZLE_USE_LLM
+#define APP_PUZZLE_USE_LLM          0
+#endif
+#define APP_LLM_CHAIN_LEN           4       /* checker chain length */
+#define APP_LLM_SETTER_CHAIN_LEN    2       /* setter chain length: rewording the ESP32's facts is the easy job; x-test-2 is not in it, it returned empty replies with finish_reason=length */
+#define APP_LLM_SETTER_CHAIN        { "x-test-1", "default" }   /* x-test-1 first, "default" is the fast fallback writer; qwen is in no setter chain so it can always check */
+#define APP_LLM_CHECKER_CHAIN       { "qwen3.6:35b", "x-test-1", "default", "x-test-2" }   /* qwen solves the riddle blind in ~3 s (the hard job); x-test-1 has been timing out as checker */
+#define APP_BRIEF_CHAIN_LEN         3       /* briefing chain length */
+#define APP_BRIEF_CHAIN             { "qwen3.6:35b", "x-test-1", "default" }   /* qwen wrote briefings reliably; x-test-1 is slow right now */
+#define APP_LLM_TIMEOUT_MS          20000u  /* one request: connect and read, at most 20 s (qwen checks in ~3 s; x-test-1 has been timing out above 20 s, "default" is the fast fallback writer) */
+#define APP_LLM_TIMEOUT_S           20u     /* same limit for the TLS client */
+#define APP_LLM_MAX_TOKENS          3000    /* thinking models spend most of it before answering; 600 gave empty replies, 2000 was tight */
 #define APP_LLM_SETTER_TEMP         0.9f
 #define APP_LLM_CHECKER_TEMP        0.0f
 #define APP_LLM_REPLY_MAX           8192    /* reply text kept per call (PSRAM buffers) */
@@ -189,19 +206,18 @@
 #define APP_PUZZLE_ATTEMPTS         3       /* setter + checker rounds per puzzle before the bank */
 #define APP_PUZZLE_DEFAULT_LEVEL    2       /* fallback level (NORMAL) until puzzle_gen_init / puzzle_gen_apply_level give the effective one */
 #define APP_PUZZLE_DEAD_CHAINS      2       /* chains that failed outright in a row: stop asking the LLM */
-#define APP_PUZZLE_FRESH_S          (24 * 3600) /* a stored set younger than this needs no new run at boot */
-#define APP_PUZZLE_NIGHTLY_HOUR     22      /* local hour of the nightly run */
-#define APP_PUZZLE_RETRY_MS         1800000u /* a run with no verified puzzle is retried after 30 min... */
-#define APP_PUZZLE_RETRIES          2       /* ...at most this many times per trigger */
+#define APP_PUZZLE_UPGRADE_RETRY_MS 60000u  /* after a slot's AI attempt failed (3 attempts used, or the models are unreachable) wait this long before the next */
 #define APP_PUZZLE_QUIET_S          300     /* no LLM calls this close to (or just after) the alarm */
-#define APP_KEY_PUZZLES             "pz_set"
-#define APP_KEY_PUZZLE_USED         "pz_used"
-#define APP_CONFIG_PENDING_MS       5000u   /* one BOMB_CONFIG at a time; give up on its ACK after this */
+#define APP_KEY_PUZZLES            "pz_set"
+#define APP_KEY_PUZZLE_USED         "pz_used"   /* SPENT-pair mask: a pair a bomb started with, not yet refilled by the bank */
+#define APP_CONFIG_PENDING_MS       5000u   /* one BOMB_CONFIG at a time; give up on the MCX's HELD report after this */
+#define APP_CFG_RING_LEN            4u      /* sends remembered (id + packed bytes + riddle text) to match a BOMB_REPORT against */
 
-/* ---- Briefing + coach (one LLM call after each nightly puzzle run, same setter chain) ---- */
+/* ---- Briefing + coach (one LLM call per pass, APP_BRIEF_CHAIN; runs while online until the next class day has an LLM-written text) ---- */
 #define APP_BRIEF_TEMP              0.7f
-#define APP_BRIEF_MAX_TOKENS        2000    /* same thinking-model budget as APP_LLM_MAX_TOKENS */
-#define APP_BRIEF_MAGIC             0x42524631u /* "BRF1": bump when BriefText changes */
+#define APP_BRIEF_MAX_TOKENS        3000    /* same thinking-model budget as APP_LLM_MAX_TOKENS */
+#define APP_BRIEF_RETRY_MS          60000u  /* after a failed briefing run (template stored) wait this long before the next (D1) */
+#define APP_BRIEF_MAGIC             0x42524632u /* "BRF2": bump when BriefText changes (BRF2 added from_llm) */
 #define APP_KEY_BRIEF               "brief"
 #define APP_BRIEF_PROMPT_MAX        640     /* user message: alarm, <= 6 classes, history, difficulty */
 

@@ -10,7 +10,9 @@
  *     shown on the OLED and sent as SET_ALARM right after a TIME_SYNC (CLAUDE.md ESP32 rule).
  *   - RESULT frames from the link task -> local history ring (history.h) + Firebase queue
  *     (mirror.h, write-only).
- *   - Serial test commands: lead <min> | link <url> | refresh | resched | hist.
+ *   - Serial test commands: lead <min> | link <url> | refresh | resched | hist | demo <min>.
+ *   - Demo morning alarm: SET_ALARM for now + N min through the same path as a real alarm; after
+ *     its session ends the real timetable alarm is scheduled again at once.
  *   - Drives the 10 s status print (status.cpp) since this task has the slack for it.
  * Nothing here is on the alarm path: the MCX rings with or without Wi-Fi.
  */
@@ -28,5 +30,11 @@ TaskHandle_t network_task_handle(void);
 /* Web task (any task): ask the network task for a puzzle run now, like the serial command "puzzles".
  * Never blocks; the run itself starts when Wi-Fi, the clock and the game state allow it. */
 void network_request_puzzles(void);
+
+/* Web task (any task): ask the network task for a demo morning alarm at now + minutes (1..APP_DEMO_ALARM_MAX_MIN,
+ * plus APP_DEMO_ALARM_SLACK_S), or 0 to cancel the pending one. It then goes through the real alarm
+ * path (TIME_SYNC, SET_ALARM, ARMED, ring); the same checks as the web handler run again in the
+ * network task, which drops a request that is no longer allowed (logged on Serial). Never blocks. */
+void network_request_demo_alarm(int minutes);
 
 #endif /* NETWORK_TASK_H */

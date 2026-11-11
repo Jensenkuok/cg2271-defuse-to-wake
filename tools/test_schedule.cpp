@@ -532,6 +532,39 @@ static void test_session_next(void)
     CHECK(!session_next(false, PROTO_STATE_DEFUSED));                /* no BOMB_ACTIVE seen: not a session */
 }
 
+/* ---------------- demo morning alarm ---------------- */
+static void test_pick_alarm(void)
+{
+    const uint32_t now = kAlarmA - 3600u;
+    const uint32_t demo = now + 125u;
+
+    CHECK(sched_pick_alarm(kAlarmA, demo, now) == demo);          /* demo in the future wins */
+    CHECK(sched_pick_alarm(kAlarmA, now - 1u, now) == kAlarmA);   /* demo in the past: the real alarm */
+    CHECK(sched_pick_alarm(kAlarmA, now, now) == kAlarmA);        /* due this very second: already past */
+    CHECK(sched_pick_alarm(kAlarmA, now + 1u, now) == now + 1u);
+    CHECK(sched_pick_alarm(kAlarmA, 0u, now) == kAlarmA);         /* cancel (demo 0): the real alarm */
+    CHECK(sched_pick_alarm(0u, demo, now) == demo);               /* no real class, future demo */
+    CHECK(sched_pick_alarm(0u, 0u, now) == 0u);                   /* nothing at all */
+    CHECK(sched_pick_alarm(0u, now - 1u, now) == 0u);             /* a past demo is not an alarm either */
+    /* The earlier of two future alarms wins: a demo never pushes the real alarm out. */
+    CHECK(sched_pick_alarm(kAlarmA, kAlarmA + 60u, now) == kAlarmA);        /* real moved before the demo */
+    CHECK(sched_pick_alarm(kAlarmA, kAlarmA, now) == kAlarmA);              /* same second: the real one */
+    CHECK(sched_pick_alarm(kAlarmA, kAlarmA - 1u, now) == kAlarmA - 1u);    /* demo one second earlier */
+    CHECK(sched_pick_alarm(now + 90u, demo, now) == now + 90u);             /* a nearer real alarm (settings save) */
+}
+
+static void test_demo_alarm_at(void)
+{
+    const uint32_t now = kAlarmA;
+
+    CHECK(sched_demo_alarm_at(now, 1, 5u) == now + 65u);
+    CHECK(sched_demo_alarm_at(now, 1, 5u) > now + SCHED_MIN_LEAD_S);   /* N = 1 stays schedulable */
+    CHECK(sched_demo_alarm_at(now, 30, 5u) == now + 1805u);
+    CHECK(sched_demo_alarm_at(now, 2, 0u) == now + 120u);
+    CHECK(sched_demo_alarm_at(now, 0, 5u) == now + 5u);                /* not a valid request; stays bounded */
+    CHECK(sched_demo_alarm_at(now, -3, 5u) == now + 5u);
+}
+
 int main(void)
 {
     build_fixtures();
@@ -558,6 +591,8 @@ int main(void)
     test_alarm_action_set();
     test_alarm_action_cancel();
     test_session_next();
+    test_pick_alarm();
+    test_demo_alarm_at();
 
     printf("test_schedule: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed == 0 ? 0 : 1;

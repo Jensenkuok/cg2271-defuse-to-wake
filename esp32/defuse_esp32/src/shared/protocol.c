@@ -282,6 +282,7 @@ size_t proto_pack_bomb_config(const proto_bomb_config_t *s, uint8_t *out, size_t
     out[13] = s->trip_min_cm;
     out[14] = s->trip_max_cm;
     out[15] = s->max_strikes;
+    out[16] = s->cfg_id;
     return PROTO_SIZE_BOMB_CONFIG;
 }
 
@@ -297,6 +298,7 @@ bool proto_unpack_bomb_config(const uint8_t *p, size_t len, proto_bomb_config_t 
     s->trip_min_cm = p[13];
     s->trip_max_cm = p[14];
     s->max_strikes = p[15];
+    s->cfg_id = p[16];
     return true;
 }
 
@@ -378,4 +380,24 @@ bool proto_unpack_telemetry(const uint8_t *p, size_t len, proto_telemetry_t *s)
     s->distance_cm = get_u16(&p[4]);
     s->encoder_count = (int16_t)get_u16(&p[6]);
     return true;
+}
+
+size_t proto_pack_bomb_report(const proto_bomb_report_t *s, uint8_t *out, size_t out_size)
+{
+    CHECK_PACK(PROTO_SIZE_BOMB_REPORT);
+    out[0] = s->slot;
+    out[1] = s->status;
+    return 2u + proto_pack_bomb_config(&s->cfg, &out[2], out_size - 2u);
+}
+
+bool proto_unpack_bomb_report(const uint8_t *p, size_t len, proto_bomb_report_t *s)
+{
+    CHECK_UNPACK(PROTO_SIZE_BOMB_REPORT);
+    if ((p[0] != PROTO_REPORT_HELD && p[0] != PROTO_REPORT_RUNNING)
+        || (p[1] != PROTO_REPORT_OK && p[1] != PROTO_REPORT_REJECTED)) {
+        return false;
+    }
+    s->slot = p[0];
+    s->status = p[1];
+    return proto_unpack_bomb_config(&p[2], PROTO_SIZE_BOMB_CONFIG, &s->cfg);
 }

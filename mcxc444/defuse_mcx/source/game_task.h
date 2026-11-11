@@ -21,6 +21,8 @@ typedef struct {
     uint32_t accepted[APP_CTRL_KIND_COUNT];  /* control messages the engine accepted */
     uint32_t rejected[APP_CTRL_KIND_COUNT];  /* ... and rejected (validation failed) */
     uint32_t result_send_drops;              /* RESULT could not be queued for the link */
+    uint32_t reports_sent;                   /* BOMB_REPORTs queued for the link */
+    uint32_t report_retries;                 /* loop iterations a BOMB_REPORT stayed pending (TX full) */
     uint32_t tick_overruns;                  /* iterations that fell behind and resynced */
 } game_task_stats_t;
 

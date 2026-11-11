@@ -114,7 +114,7 @@ static void event_cb(proto_event_t evt, uint8_t type, uint8_t seq, void *ctx)
     }
 }
 
-static void setup(uint32_t start)
+static void setup_with_initial_seq(uint32_t start, uint8_t a_initial, uint8_t b_initial)
 {
     proto_link_cfg_t cfg;
 
@@ -133,9 +133,16 @@ static void setup(uint32_t start)
     cfg.deliver_fn = deliver_cb;
     cfg.event_fn = event_cb;
     cfg.ctx = &g_a;
+    cfg.initial_seq = a_initial;
     proto_link_init(&g_a.link, &cfg, start);
     cfg.ctx = &g_b;
+    cfg.initial_seq = b_initial;
     proto_link_init(&g_b.link, &cfg, start);
+}
+
+static void setup(uint32_t start)
+{
+    setup_with_initial_seq(start, 0u, 0u);
 }
 
 static int pop_frame(channel_t *ch, wire_frame_t *out)
@@ -586,6 +593,158 @@ static void test_stats_match_injected_faults(void)
     CHECK(g_b.n_delivered == 2);
 }
 
+/* Send n unreliable TELEMETRY frames from A that never reach B (dropped on the wire):
+ * they still consume A's unreliable SEQ numbers, which is all these tests need. */
+static void burn_unreliable_seqs(unsigned n)
+{
+    uint8_t pl[PROTO_SIZE_TELEMETRY] = { 0 };
+    unsigned i;
+
+    g_ab.drop_type = PROTO_MSG_TELEMETRY;
+    g_ab.drop_left = (int)n;
+    for (i = 0; i < n; i++) {
+        CHECK(proto_link_send(&g_a.link, PROTO_MSG_TELEMETRY, pl, PROTO_SIZE_TELEMETRY, g_now));
+    }
+    g_ab.drop_type = ANY_TYPE;
+    g_ab.drop_left = 0;
+}
+
+/* Regression: reliable and unreliable frames used to share one SEQ counter, so a new
+ * reliable frame could get the same SEQ as the previous delivered one (after 255
+ * unreliable frames in between) and B dropped it as a duplicate after ACKing it. */
+static void run_seq_gap_case(unsigned unreliable_between)
+{
+    setup(0);
+    CHECK(send_cmd(&g_a, 1));
+    pump();
+    CHECK(g_b.n_delivered == 1);
+    burn_unreliable_seqs(unreliable_between);
+    CHECK(send_cmd(&g_a, 2));
+    pump();
+    CHECK(g_b.n_delivered == 2 && delivered_cmd_arg(&g_b, 1) == 2);
+    CHECK(g_b.link.stats.dup_drops == 0);
+    CHECK(!g_a.link.out_active);
+}
+
+static void test_new_reliable_frame_after_255_unreliable_is_delivered(void)
+{
+    run_seq_gap_case(255);
+}
+
+static void test_new_reliable_frame_after_256_unreliable_is_delivered(void)
+{
+    run_seq_gap_case(256);
+}
+
+static void test_retransmit_after_unreliable_traffic_keeps_seq_and_delivers_once(void)
+{
+    setup(0);
+    burn_unreliable_seqs(5);
+    g_ba.drop_type = PROTO_MSG_ACK;
+    g_ba.drop_left = 1;
+    CHECK(send_cmd(&g_a, 9));
+    pump();
+    CHECK(g_b.n_delivered == 1 && g_a.link.out_active);
+    tick(100); /* timeout: retransmit with the original SEQ */
+    CHECK(g_a.link.stats.retransmits == 1);
+    CHECK(g_b.n_delivered == 1); /* delivered once */
+    CHECK(g_b.link.stats.dup_drops == 1);
+    CHECK(count_logged(&g_ab, PROTO_MSG_CMD) == 2);
+    CHECK(g_ab.log[g_ab.n_log - 1].data[1] == PROTO_MSG_CMD &&
+          g_ab.log[g_ab.n_log - 2].data[1] == PROTO_MSG_CMD &&
+          g_ab.log[g_ab.n_log - 1].data[2] == g_ab.log[g_ab.n_log - 2].data[2]); /* same SEQ on the wire */
+    CHECK(!g_a.link.out_active);
+}
+
+/* A peer that restarts (counter back to its start) after the link was down must not
+ * have its first reliable frame mistaken for a duplicate of the last one B delivered. */
+static void test_restarted_peer_with_reused_seq_is_delivered_after_link_down(void)
+{
+    proto_link_cfg_t cfg;
+
+    setup(0);
+    CHECK(send_cmd(&g_a, 1)); /* seq 0 */
+    pump();
+    CHECK(g_b.n_delivered == 1 && g_b.delivered[0].seq == 0);
+    CHECK(proto_link_is_up(&g_b.link));
+
+    g_ab.drop_type = ANY_TYPE;
+    g_ab.drop_left = 1000;
+    tick(PROTO_LINK_DOWN_MS + 1);
+    CHECK(!proto_link_is_up(&g_b.link));
+    g_ab.drop_left = 0;
+
+    /* A restarts: fresh link, SEQ counter starts again at 0. */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.write_fn = write_cb;
+    cfg.deliver_fn = deliver_cb;
+    cfg.event_fn = event_cb;
+    cfg.ctx = &g_a;
+    proto_link_init(&g_a.link, &cfg, g_now);
+    CHECK(send_cmd(&g_a, 2)); /* seq 0 again */
+    pump();
+    CHECK(g_b.n_delivered == 2 && delivered_cmd_arg(&g_b, 1) == 2);
+    CHECK(g_b.delivered[1].seq == 0);
+    CHECK(g_b.link.stats.dup_drops == 0);
+    CHECK(proto_link_is_up(&g_b.link));
+}
+
+/* cfg.initial_seq seeds only the reliable counter (the ESP32 passes a random value so a
+ * reboot does not reuse the SEQ the MCX last saw); it wraps 255 -> 0; 0 when unset. */
+static void test_initial_seq_is_honoured_for_reliable_frames_only(void)
+{
+    uint8_t pl[PROTO_SIZE_TELEMETRY] = { 0 };
+    uint8_t hb[PROTO_SIZE_HEARTBEAT] = { 0 };
+    uint8_t res[PROTO_SIZE_RESULT] = { 0 };
+
+    setup_with_initial_seq(0, 254, 77);
+    CHECK(send_cmd(&g_a, 1));
+    pump();
+    CHECK(send_cmd(&g_a, 2));
+    pump();
+    CHECK(send_cmd(&g_a, 3));
+    pump();
+    CHECK(g_b.n_delivered == 3);
+    CHECK(g_b.delivered[0].seq == 254 && g_b.delivered[1].seq == 255 && g_b.delivered[2].seq == 0);
+    /* B's ACKs are unreliable: they use B's unreliable counter, which starts at 0. */
+    CHECK(g_ba.n_log == 3 && g_ba.log[0].data[2] == 0 && g_ba.log[1].data[2] == 1);
+    /* An unreliable frame from A starts at 0 whatever initial_seq says. */
+    CHECK(proto_link_send(&g_a.link, PROTO_MSG_TELEMETRY, pl, PROTO_SIZE_TELEMETRY, g_now));
+    CHECK(g_ab.log[g_ab.n_log - 1].data[1] == PROTO_MSG_TELEMETRY && g_ab.log[g_ab.n_log - 1].data[2] == 0);
+    CHECK(proto_link_send(&g_a.link, PROTO_MSG_HEARTBEAT, hb, PROTO_SIZE_HEARTBEAT, g_now));
+    CHECK(g_ab.log[g_ab.n_log - 1].data[2] == 1);
+    /* B's first reliable frame uses its own initial_seq. */
+    CHECK(proto_link_send(&g_b.link, PROTO_MSG_RESULT, res, PROTO_SIZE_RESULT, g_now));
+    CHECK(g_ba.log[g_ba.n_log - 1].data[1] == PROTO_MSG_RESULT && g_ba.log[g_ba.n_log - 1].data[2] == 77);
+    pump();
+    CHECK(g_a.n_delivered >= 1 && g_a.delivered[g_a.n_delivered - 1].type == PROTO_MSG_RESULT);
+}
+
+static void test_bomb_report_is_reliable(void)
+{
+    proto_bomb_report_t r;
+    uint8_t pl[PROTO_SIZE_BOMB_REPORT];
+
+    setup(0);
+    memset(&r, 0, sizeof(r));
+    r.slot = PROTO_REPORT_RUNNING;
+    r.status = PROTO_REPORT_OK;
+    r.cfg.cfg_id = 42;
+    CHECK(proto_pack_bomb_report(&r, pl, sizeof(pl)) == PROTO_SIZE_BOMB_REPORT);
+    g_ba.drop_type = PROTO_MSG_BOMB_REPORT; /* first transmission lost -> must be retransmitted */
+    g_ba.drop_left = 1;
+    CHECK(proto_link_send(&g_b.link, PROTO_MSG_BOMB_REPORT, pl, PROTO_SIZE_BOMB_REPORT, g_now));
+    pump();
+    CHECK(g_a.n_delivered == 0 && g_b.link.out_active);
+    tick(100);
+    CHECK(g_b.link.stats.retransmits == 1);
+    CHECK(g_a.n_delivered == 1 && g_a.delivered[0].type == PROTO_MSG_BOMB_REPORT);
+    CHECK(count_logged(&g_ab, PROTO_MSG_ACK) == 1); /* ACKed like any reliable type */
+    CHECK(!g_b.link.out_active);
+    CHECK(proto_unpack_bomb_report(g_a.delivered[0].payload, g_a.delivered[0].len, &r) &&
+          r.cfg.cfg_id == 42);
+}
+
 int main(void)
 {
     test_reliable_delivery_and_ack();
@@ -605,6 +764,12 @@ int main(void)
     test_link_down_after_silence_and_up_again();
     test_timing_across_now_ms_wraparound();
     test_stats_match_injected_faults();
+    test_new_reliable_frame_after_255_unreliable_is_delivered();
+    test_new_reliable_frame_after_256_unreliable_is_delivered();
+    test_retransmit_after_unreliable_traffic_keeps_seq_and_delivers_once();
+    test_restarted_peer_with_reused_seq_is_delivered_after_link_down();
+    test_initial_seq_is_honoured_for_reliable_frames_only();
+    test_bomb_report_is_reliable();
 
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

@@ -4,6 +4,7 @@
  *   - validation of the settings form (NUSMods link, wake-up lead, difficulty mode),
  *   - the "simulated internet outage" expiry rule,
  *   - a small bounded JSON writer + string escaper for /api/status (fixed buffer, no String),
+ *   - the /api/timetable response (weeks mask -> list, HH:MM, whole-object writer),
  *   - whether the active puzzle's answer may be shown, and the bomb's module total.
  */
 #ifndef WEB_LOGIC_H
@@ -12,6 +13,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#include "schedule.h"
 
 /* ================= settings form ================= */
 #define WEB_LINK_PREFIX     "https://nusmods.com/timetable/"
@@ -40,7 +43,8 @@ SettingsErr web_validate_settings(const char *link, const char *lead_text, int *
  * (mode_out may be NULL). The field is optional in the request: the caller validates it only when present. */
 SettingsErr web_validate_difficulty(const char *text, int *mode_out);
 
-/* Message for the 400 response, e.g. "lead_min must be between 15 and 180". */
+/* Message for the 400 response, e.g. "lead_min must be between <LOW> and <HIGH>" (built from
+ * APP_LEAD_MIN_LOW / APP_LEAD_MIN_HIGH). */
 const char *web_settings_err_text(SettingsErr err);
 
 /* ================= simulated outage ================= */
@@ -95,6 +99,70 @@ void jb_kv_bool(JsonBuf *j, const char *key, bool v);
  * < > &, bytes >= 0x80 become '?'. out is NUL-terminated. Returns false if it did
  * not fit (out then holds the truncated text). */
 bool json_escape(const char *s, char *out, size_t out_size);
+
+/* ================= timetable response (/api/timetable) ================= */
+#define WEB_TT_WEEKS_MAX   13u    /* teaching weeks 1..13: bit (w - 1) of Lesson.weeks */
+
+/* Teaching weeks set in a Lesson.weeks mask, ascending, written to out (room for WEB_TT_WEEKS_MAX).
+ * Bits above week 13 are ignored. Returns how many. */
+uint8_t web_weeks_list(uint16_t mask, uint8_t *out);
+
+/* "HH:MM" from minutes after midnight (clamped to 23:59) into out (at least 6 bytes). */
+void web_fmt_hhmm(uint16_t minutes, char *out, size_t out_size);
+
+/* Writes the whole object {"ok":true,"week":N,"fetched_local":"..","lessons":[..]} into j (which must be
+ * freshly initialised). Lessons whose weekday is outside 1..6 are skipped. An answer that does not fit sets
+ * j->overflow: the caller must then refuse (jb_ok false), never send the cut-off text. */
+void web_put_timetable(JsonBuf *j, const Lesson *lessons, int count, int week, const char *fetched_local);
+
+/* ================= demo morning alarm (POST /api/demo_alarm) ================= */
+enum DemoErr {
+    DEMO_OK = 0,
+    /* the value: the handler answers 400 */
+    DEMO_ERR_MISSING,
+    DEMO_ERR_NOT_NUMBER,
+    DEMO_ERR_RANGE,
+    /* the device state: the handler answers 409 */
+    DEMO_ERR_LINK_DOWN,
+    DEMO_ERR_BUSY,            /* a bomb is running or a session is active (the MCX owns the alarm) */
+    DEMO_ERR_NO_TIME,
+    DEMO_ERR_REAL_FIRST,      /* the real alarm rings at or before the requested demo time */
+    DEMO_ERR_TOO_CLOSE,       /* the real alarm is later, but less than APP_DEMO_CLEAR_S after the demo */
+    DEMO_ERR_NO_DEMO,         /* cancel with no demo pending */
+    DEMO_ERR_CANCEL_LATE,     /* cancel within SCHED_MIN_LEAD_S of ringing: the scheduler would ignore it */
+    DEMO_ERR_REPLACE_LATE     /* same for replacing a demo that is about to ring */
+};
+
+/* The "minutes" form field: decimal digits (surrounding blanks allowed), 0 = cancel, otherwise
+ * 1..APP_DEMO_ALARM_MAX_MIN. Rejected, never clamped. On DEMO_OK *minutes_out holds the number. */
+DemoErr web_validate_demo_minutes(const char *text, int *minutes_out);
+
+/* What the handler knows about the device (a fresh copy of AppState). */
+struct DemoCtx {
+    bool link_up;
+    bool bomb_running;        /* game_ringing(): BOMB_ACTIVE / DEFUSED / EXPLODED hold */
+    bool session_active;
+    bool time_valid;
+    uint32_t now;             /* unix seconds */
+    uint32_t alarm_unix;      /* the alarm currently scheduled, 0 = none */
+    bool alarm_is_demo;       /* ...and it is a demo alarm */
+    uint32_t real_alarm_unix; /* the real timetable alarm if the caller can see it, else 0. The web task cannot
+                               * while a demo is pending (it only sees the demo); the network task always can. */
+};
+
+/* Whether a validated request may go to the network task. minutes 0 = cancel. Checks, in this order:
+ * link, bomb/session, clock, then for a start: a demo about to ring (cannot be replaced), a real
+ * alarm at or before the demo time (it rings first) or less than APP_DEMO_CLEAR_S after it (a demo
+ * session with snoozes must end before the real alarm: the session guard sends no SET_ALARM during
+ * one); for a cancel: a pending demo that is not within SCHED_MIN_LEAD_S of ringing. */
+DemoErr web_demo_check(int minutes, const DemoCtx &ctx);
+
+/* Generic message for the response (no clock times). */
+const char *web_demo_err_text(DemoErr err);
+
+/* Like web_demo_err_text, but REAL_FIRST / TOO_CLOSE name the real alarm: "your real alarm at HH:MM rings
+ * first" / "... is too close" (UTC+8). Truncated to out_size. */
+void web_demo_err_message(DemoErr err, uint32_t real_alarm_unix, char *out, size_t out_size);
 
 /* ================= game panel helpers ================= */
 /* May the web page show the ACTIVE puzzle's answer? No while the MCX is ARMED or BOMB_ACTIVE, while

@@ -19,8 +19,10 @@
  *   - inside a session: the MCX state just became EXPLODED, or ARMED after a snooze;
  *   - a new puzzle set while the MCX sits ARMED with an older one;
  *   - the demo RING_NOW (BOOT button), straight from the link task.
- * A pair is "used" when a bomb starts after its config was ACKed; when all four are used the
- * list starts over.
+ * What the MCX really holds is not decided by the transport ACK but by its BOMB_REPORTs (see cfg_sync.h): every
+ * config carries a cfg_id, the last few sends are remembered with their riddle text, and a HELD report that
+ * matches one (id AND bytes) confirms it. A pair is "used" when a RUNNING report names a matching send (a bomb
+ * really started with it); when all four are used the list starts over.
  */
 #ifndef BOMB_CONFIG_H
 #define BOMB_CONFIG_H
@@ -28,19 +30,24 @@
 #include <stdbool.h>
 
 #include "app_state.h"
+#include "../shared/protocol.h"
 
 /* Network task, once the puzzle set and the history exist. Until then every call below is a
  * no-op (the link task is already running). */
 void bomb_config_init(void);
 
 /* Queue one BOMB_CONFIG (reliable, through the link TX queue) for the next unused pair. False
- * when nothing was queued: another config is still waiting for its ACK, the link TX queue is
+ * when nothing was queued: another config is still waiting for the MCX's HELD report, the link TX queue is
  * full, or the puzzle set is busy. why: short tag for the log. Link task or network task. */
 bool bomb_config_send(const char *why);
 
-/* Link task, every APP_BOMB_CFG_POLL_MS with a fresh copy of the app state: ACK/failure
- * bookkeeping, pair consumption when a bomb starts, the EXPLODED / snooze / new-set triggers. */
+/* Link task, every APP_BOMB_CFG_POLL_MS with a fresh copy of the app state: BOMB_REPORT handling, ACK/failure
+ * bookkeeping, pair consumption when a RUNNING report arrives, the EXPLODED / snooze / new-set triggers. */
 void bomb_config_service(const AppState &st);
+
+/* Link task, from link_deliver: a BOMB_REPORT from the MCX. Only queued here (never blocks, never lost to a busy
+ * lock); bomb_config_service matches it against the ring and publishes it to app_state. */
+void bomb_config_note_report(const proto_bomb_report_t &rep);
 
 /* The difficulty: mode setting + score of the stored mornings (also the briefing's "difficulty" input
  * and the effective level the puzzle generator is asked for). */

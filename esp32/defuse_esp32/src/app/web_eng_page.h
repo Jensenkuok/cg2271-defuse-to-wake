@@ -169,9 +169,11 @@ function renderLink(s){
 
 function renderAi(s){
   const a=s.ai,n=s.net;if(!a)return;
-  let h=a.gen?("Set "+a.gen+", "+a.ai_count+" of "+a.total+" AI-verified"+(a.generated?", made "+a.generated:"")):"Built-in bank puzzles";
-  if(a.busy)h+=" - run in progress ("+a.progress+"/"+a.total+")";else if(a.queued)h+=" - run queued";
-  if(a.last.valid)h+=" - last run: "+a.last.ai+" AI-verified, "+(a.last.installed?"new set installed":"none verified, bank fallback, previous set kept");
+  let h="AI "+a.ai_count+" of "+a.total+" (rest: built-in bank)"+(a.generated?", last change "+a.generated:"");
+  if(a.llm_puzzles===false)h+=" - LLM puzzles off: built-in bank";else
+  h+=a.busy?" - upgrading "+a.slot:(a.retry_s>0?" - waiting "+a.retry_s+" s after a failed attempt":" - idle");
+  if(a.queued)h+=" - redo of every slot queued";
+  if(a.spent){const sp=[];for(let i=0;i<4;i++)if(a.spent&(1<<i))sp.push(i);h+=" - used pairs refilling: "+sp.join(",")}
   if(n.outage_s>0)h+=" - SIMULATED OUTAGE "+n.outage_s+" s";
   $("aisum").textContent=h;
   put($("ai"),...a.puzzles.map(p=>{

@@ -3,15 +3,22 @@
  * Compiled by the sketch and by the host tests (tools/test_puzzle.cpp), so the host tests can feed
  * canned LLM replies through exactly the checks the board runs.
  *
- * A setter reply {"puzzle":"<riddle>","rules":"<rules>"} is kept only if ALL of these hold, cheapest
- * first (the first failure is the reason that gets logged):
+ * The ESP32 writes the facts (puzzle_bank.h: exactly one solution = the answer, rated level); the setter LLM only
+ * rewrites them as a riddle. A rewrite reply {"puzzle":"<riddle>"} is kept by gate_check_phrase only if
+ *   1. the reply holds a JSON object with a "puzzle" string
+ *   2. validate_puzzle on the riddle (O3 length, printable ASCII, no leaked code / wire number) and it fits its
+ *      OLED rows after word wrap (puzzle_text_fits_oled)
+ * The LLM cannot change the logic, so no rules are proven here. The rules-writing gate below
+ * (gate_check_setter, the original design where the LLM invented the rules) is kept and tested but not used by the
+ * board any more. A setter reply {"puzzle":"<riddle>","rules":"<rules>"} is kept by it only if ALL of these hold,
+ * cheapest first (the first failure is the reason that gets logged):
  *   1. the reply holds a JSON object with a "puzzle" and a "rules" string
  *   2. validate_puzzle on the riddle text (O3 length, printable ASCII, no leaked code / wire number)
  *      and it fits its OLED rows after word wrap (puzzle_text_fits_oled)
  *   3. the rules parse, have exactly one solution, and that solution is the answer the ESP32 picked
  *   4. the rules' computed rating (puzzle_rules.h) equals the requested level
- * and then, in a second call, a checker reply {"answer":".."} given only the riddle TEXT (never the
- * rules) must equal the answer, from a model whose ID differs from the setter's (O5).
+ * In both designs, in a second call, a checker reply {"answer":".."} given only the riddle TEXT (never the
+ * rules or facts) must equal the answer, from a model whose ID differs from the setter's (O5).
  * The answer always comes from the ESP32, the level always from the solver, never from the LLM.
  */
 #ifndef PUZZLE_GATE_H
@@ -52,6 +59,12 @@ struct GateTarget {
 /* The checks 1-4 on a setter reply. json_buf (json_size bytes) is scratch for the extracted object.
  * On GATE_OK text_out holds the riddle. why always gets a one-line reason (also on success). */
 int gate_check_setter(const char *reply, const GateTarget &target, char *json_buf, size_t json_size,
+                      char *text_out, size_t text_size, char *why, size_t why_size);
+
+/* Gate for a rewrite-only setter reply {"puzzle":".."} (the facts came from the ESP32's bank): checks 1-2 only.
+ * Same arguments, result and GateStatus values (GATE_NO_JSON, GATE_NO_PUZZLE, GATE_TEXT_REJECTED, GATE_OK) as
+ * gate_check_setter. On GATE_OK text_out holds the riddle. */
+int gate_check_phrase(const char *reply, const GateTarget &target, char *json_buf, size_t json_size,
                       char *text_out, size_t text_size, char *why, size_t why_size);
 
 /* The checker step. said (if not NULL) receives the checker's normalised answer when there is one. */

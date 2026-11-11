@@ -916,21 +916,77 @@ bool puzzle_set_valid(const PuzzleSet &s)
 }
 
 /* ================= BOMB_CONFIG ================= */
-void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &wire, uint32_t trip_rnd,
-                         proto_bomb_config_t *out)
+/* Each Fisher-Yates swap draws its index from the top half of a tiny LCG (Numerical Recipes constants), seeded
+ * with the random word: a pure function of rnd, so the host tests can replay it. The low bits of an LCG are
+ * weak, hence the shift by ORDER_LCG_SHIFT before the modulo. */
+#define ORDER_LCG_MUL    1664525u
+#define ORDER_LCG_ADD    1013904223u
+#define ORDER_LCG_SHIFT  16u
+
+void module_order_shuffle(uint32_t rnd, uint8_t out[PROTO_MAX_MODULES])
 {
+    uint32_t state = rnd;
+    unsigned i;
+
+    out[0] = PROTO_MODULE_DIAL;
+    out[1] = PROTO_MODULE_WIRES;
+    out[2] = PROTO_MODULE_TRIPWIRE;
+    out[3] = PROTO_MODULE_LIGHTS;                 /* the wake-up module: every bomb has all four sensors */
+    for (i = PROTO_MAX_MODULES - 1u; i > 0u; i--) {
+        unsigned j;
+        uint8_t tmp;
+
+        state = state * ORDER_LCG_MUL + ORDER_LCG_ADD;
+        j = (unsigned)((state >> ORDER_LCG_SHIFT) % (i + 1u));
+        tmp = out[i];
+        out[i] = out[j];
+        out[j] = tmp;
+    }
+}
+
+unsigned module_order_find(const uint8_t order[PROTO_MAX_MODULES], uint8_t type)
+{
+    unsigned i;
+
+    for (i = 0u; i < PROTO_MAX_MODULES; i++) {
+        if (order[i] == type) {
+            return i;
+        }
+    }
+    return 0u;
+}
+
+/* The MCX expects code + GAME_DIAL_REPEAT_STEP * index (mod 10) at module index `index` (game_dial_code), so
+ * the base it is sent is the wanted code minus that shift. Adding DIAL_BASE keeps every step non-negative. */
+void dial_code_preshift(const uint8_t code[PROTO_DIAL_DIGITS], unsigned pos, uint8_t out[PROTO_DIAL_DIGITS])
+{
+    const unsigned shift = (GAME_DIAL_REPEAT_STEP * pos) % DIAL_BASE;
+    unsigned i;
+
+    for (i = 0u; i < PROTO_DIAL_DIGITS; i++) {
+        out[i] = (uint8_t)((code[i] % DIAL_BASE + DIAL_BASE - shift) % DIAL_BASE);
+    }
+}
+
+void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &wire, uint32_t trip_rnd,
+                         uint32_t order_rnd, proto_bomb_config_t *out)
+{
+    uint8_t ai_code[PROTO_DIAL_DIGITS];
+
     unsigned i;
 
     memset(out, 0, sizeof(*out));
     out->module_count = (uint8_t)clamp_i(d.module_count, (int)GAME_MIN_MODULES, (int)PROTO_MAX_MODULES);
-    out->module_order[0] = PROTO_MODULE_DIAL;
-    out->module_order[1] = PROTO_MODULE_WIRES;
-    out->module_order[2] = PROTO_MODULE_TRIPWIRE;
-    out->module_order[3] = PROTO_MODULE_LIGHTS;   /* the wake-up module: every bomb has all four sensors */
+    /* All four modules are shuffled; if a level ever asks for fewer than four, the MCX plays the first
+     * module_count entries. Every level asks for all four today (D5). */
+    module_order_shuffle(order_rnd, out->module_order);
     out->time_limit_s = (uint16_t)clamp_i(d.time_limit_s, (int)GAME_MIN_TIME_LIMIT_S, (int)GAME_MAX_TIME_LIMIT_S);
     for (i = 0u; i < PROTO_DIAL_DIGITS; i++) {
-        out->dial_code[i] = (uint8_t)(dial.dial_code[i] % DIAL_BASE);
+        ai_code[i] = (uint8_t)(dial.dial_code[i] % DIAL_BASE);
     }
+    /* The MCX shifts the dial code by the module index, so send a base that lands on the puzzle's code exactly
+     * where the dial sits in the shuffled order (the display derives every other index from the same base). */
+    dial_code_preshift(ai_code, module_order_find(out->module_order, PROTO_MODULE_DIAL), out->dial_code);
     out->wire_count = (uint8_t)clamp_i(wire.wire_count, (int)GAME_MIN_WIRES, (int)GAME_MAX_WIRES);
     out->correct_wire = (uint8_t)clamp_i((int)wire.wire_k - 1, 0, (int)out->wire_count - 1);
     trip_band_from_random(trip_rnd, &out->trip_min_cm, &out->trip_max_cm);
@@ -938,37 +994,107 @@ void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &
 }
 
 /* ================= selection rules ================= */
-int pair_next_unused(uint8_t used_mask, int count)
+int pair_next_unused(uint8_t spent_mask, int count)
 {
     int i;
 
     for (i = 0; i < count && i < 8; i++) {
-        if ((used_mask & (1u << i)) == 0u) {
+        if ((spent_mask & (1u << i)) == 0u) {
             return i;
         }
     }
     return -1;
 }
 
-uint8_t pair_mark_used(uint8_t used_mask, int idx, int count, bool *cycled)
+uint8_t pair_mark_spent(uint8_t spent_mask, int idx, int count)
 {
-    unsigned full;
-
-    if (cycled != NULL) {
-        *cycled = false;
-    }
     if (idx < 0 || idx >= count || count > 8) {
-        return used_mask;
+        return spent_mask;
     }
-    used_mask = (uint8_t)(used_mask | (1u << idx));
-    full = (1u << count) - 1u;
-    if ((used_mask & full) == full) {
-        if (cycled != NULL) {
-            *cycled = true;
+    return (uint8_t)(spent_mask | (1u << idx));
+}
+
+uint8_t pair_clear_spent(uint8_t spent_mask, int idx, int count)
+{
+    if (idx < 0 || idx >= count || count > 8) {
+        return spent_mask;
+    }
+    return (uint8_t)(spent_mask & ~(1u << idx));
+}
+
+int pair_oldest_spent(uint8_t spent_mask, const uint32_t *spend_order, int count)
+{
+    int best = -1;
+    int i;
+
+    for (i = 0; i < count && i < 8; i++) {
+        if ((spent_mask & (1u << i)) != 0u && (best < 0 || spend_order[i] < spend_order[best])) {
+            best = i;                               /* strict <: a tie keeps the lowest index */
         }
-        return 0u;
     }
-    return used_mask;
+    return best;
+}
+
+int pair_pick(uint8_t spent_mask, const uint32_t *spend_order, int count, bool *reused)
+{
+    const int fresh = pair_next_unused(spent_mask, count);
+
+    if (reused != NULL) {
+        *reused = (fresh < 0);
+    }
+    return fresh >= 0 ? fresh : pair_oldest_spent(spent_mask, spend_order, count);
+}
+
+int refill_next_slot(uint8_t spent_mask, uint8_t refilled_slots)
+{
+    int pair;
+
+    for (pair = 0; pair < PUZZLE_PAIRS; pair++) {
+        if ((spent_mask & (1u << pair)) == 0u) {
+            continue;
+        }
+        if ((refilled_slots & (1u << pair)) == 0u) {
+            return pair;                            /* the dial slot */
+        }
+        if ((refilled_slots & (1u << (PUZZLE_PAIRS + pair))) == 0u) {
+            return PUZZLE_PAIRS + pair;             /* the wire slot */
+        }
+    }
+    return -1;
+}
+
+static const Puzzle &set_slot(const PuzzleSet &s, int slot)
+{
+    return slot < PUZZLE_PAIRS ? s.dial[slot] : s.wire[slot - PUZZLE_PAIRS];
+}
+
+int upgrade_next_slot(const PuzzleSet &s, int target_level, uint8_t spent_mask, uint8_t force_slots, int last_slot)
+{
+    int step;
+
+    for (step = 1; step <= PUZZLE_SLOTS; step++) {
+        const int slot = (last_slot + step + PUZZLE_SLOTS) % PUZZLE_SLOTS;   /* last_slot -1 starts at 0 */
+        const Puzzle &p = set_slot(s, slot);
+
+        if ((spent_mask & (1u << (slot % PUZZLE_PAIRS))) != 0u) {
+            continue;                               /* a used pair is refilled by the bank, never upgraded */
+        }
+        if (p.source == PUZZLE_SRC_BANK || (int)p.level != target_level || (force_slots & (1u << slot)) != 0u) {
+            return slot;
+        }
+    }
+    return -1;
+}
+
+uint8_t puzzle_set_count_ai(const PuzzleSet &s)
+{
+    uint8_t n = 0u;
+    unsigned i;
+
+    for (i = 0u; i < PUZZLE_PAIRS; i++) {
+        n = (uint8_t)(n + (s.dial[i].source == PUZZLE_SRC_AI ? 1u : 0u) + (s.wire[i].source == PUZZLE_SRC_AI ? 1u : 0u));
+    }
+    return n;
 }
 
 int checker_order(const char *const *chain, int n, const char *setter, int *order_out)

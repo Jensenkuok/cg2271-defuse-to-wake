@@ -12,7 +12,6 @@
 #include "history.h"
 #include "llm_client.h"
 #include "mem_big.h"
-#include "puzzle_gen.h"
 #include "text_logic.h"
 #include "timetable.h"
 
@@ -31,7 +30,7 @@ const char kBriefSys[] =
     "coach: at most 80 characters, plain ASCII, one personal light-hearted push or roast based on the history "
     "and the difficulty. Never insult appearance or identity. No emojis.";
 
-const char *const k_chain[APP_LLM_CHAIN_LEN] = APP_LLM_SETTER_CHAIN;
+const char *const k_chain[APP_BRIEF_CHAIN_LEN] = APP_BRIEF_CHAIN;
 
 struct BriefBlob {
     uint32_t magic;
@@ -51,9 +50,11 @@ enum Phase { PH_IDLE = 0, PH_CALL };
 
 /* Everything below is touched by the network task only. */
 Phase s_phase;
-bool s_requested;
-bool s_manual;
-uint32_t s_seen_runs;
+bool s_requested;                   /* only the Serial "brief" command sets it */
+bool s_failed_before;               /* a run ended with template text (D1/D2): wait APP_BRIEF_RETRY_MS before the next */
+uint32_t s_last_fail_ms;
+uint32_t s_now_ms;                  /* millis() of the current service pass, for finish() */
+BriefText s_saved;                  /* what is in flash, so an identical failed run does not rewrite it every minute */
 bool s_today_valid;
 TodayKey s_today_key;
 
@@ -114,6 +115,11 @@ void build_templates(uint32_t day_unix, const HistSummary &sum, uint32_t day, Br
 
 void save_brief(const BriefText &b)
 {
+    if (s_saved.for_day == b.for_day && s_saved.from_llm == b.from_llm && strcmp(s_saved.briefing, b.briefing) == 0 &&
+        strcmp(s_saved.coach, b.coach) == 0) {
+        return;                                      /* a template retried every minute would wear the flash for nothing */
+    }
+    s_saved = b;
     memset(static_cast<void *>(&s_blob), 0, sizeof(s_blob));   /* no uninitialised padding in flash */
     s_blob.magic = APP_BRIEF_MAGIC;
     s_blob.text = b;
@@ -129,19 +135,28 @@ void finish(int mask, const char *model)
 
     memset(&b, 0, sizeof(b));
     b.for_day = s_target_day;
+    b.from_llm = (mask == (BRIEF_OK_BRIEFING | BRIEF_OK_COACH)) ? 1u : 0u;   /* a mixed text is retried too */
     snprintf(b.briefing, sizeof(b.briefing), "%s", (mask & BRIEF_OK_BRIEFING) ? s_llm.briefing : s_fallback.briefing);
     snprintf(b.coach, sizeof(b.coach), "%s", (mask & BRIEF_OK_COACH) ? s_llm.coach : s_fallback.coach);
     save_brief(b);
     app_state_set_brief(b);
     s_phase = PH_IDLE;
+    s_failed_before = (b.from_llm == 0u);            /* the template is shown, the LLM is asked again after the gap */
+    s_last_fail_ms = s_now_ms;
     Serial.printf("[brief] stored for local day %u (briefing: %s, coach: %s, model %s)\n", (unsigned)b.for_day,
                   (mask & BRIEF_OK_BRIEFING) ? "LLM" : "template", (mask & BRIEF_OK_COACH) ? "LLM" : "template", model);
     Serial.printf("[brief] briefing: \"%s\"\n", b.briefing);
     Serial.printf("[brief] coach:    \"%s\"\n", b.coach);
 }
 
-/* Collect the inputs for the next alarm's day. False when there is no class to brief. */
-bool begin_run(uint32_t unix_now)
+enum BeginResult { BEGIN_STARTED = 0, BEGIN_NO_CLASS, BEGIN_DEFERRED };
+
+bool s_defer_logged;                /* "waiting for the demo alarm" is printed once per wait */
+
+/* Collect the inputs for the next alarm's day. BEGIN_NO_CLASS when there is no class to brief,
+ * BEGIN_DEFERRED while a demo alarm is the scheduled one (it has no class, but the real alarm is
+ * only held back, so the request must stay pending until the demo is gone). */
+BeginResult begin_run(uint32_t unix_now)
 {
     static const char *const k_weekday[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
     AppState st;
@@ -155,9 +170,20 @@ bool begin_run(uint32_t unix_now)
     int hh;
     int mm;
 
-    if (!app_state_read(&st) || !st.next_valid || st.next_start_unix == 0u || st.alarm_unix == 0u) {
+    if (!app_state_read(&st)) {
+        return BEGIN_DEFERRED;                       /* state busy: try again on the next pass */
+    }
+    if (st.alarm_is_demo) {
+        if (!s_defer_logged) {
+            s_defer_logged = true;
+            Serial.println("[brief] demo alarm pending: the briefing run waits until it is gone");
+        }
+        return BEGIN_DEFERRED;
+    }
+    s_defer_logged = false;
+    if (!st.next_valid || st.next_start_unix == 0u || st.alarm_unix == 0u) {
         Serial.println("[brief] no next class: nothing to brief");
-        return false;
+        return BEGIN_NO_CLASS;
     }
     s_target_day = local_day(st.next_start_unix);
     sum = collect_summary(unix_now);
@@ -172,7 +198,7 @@ bool begin_run(uint32_t unix_now)
     s_phase = PH_CALL;
     Serial.printf("[brief] generating for local day %u: %d classes, alarm %s (chain starts with %s)\n",
                   (unsigned)s_target_day, s_ncls, alarm_text, k_chain[0]);
-    return true;
+    return BEGIN_STARTED;
 }
 
 /* One LLM call; a model that fails or answers unusably hands over to the next one. */
@@ -198,7 +224,7 @@ void step_call(void)
         s_transport_fails++;                         /* timeout / no route: the Wi-Fi or the API is down */
     }
     s_pos++;
-    if (s_pos >= APP_LLM_CHAIN_LEN || s_transport_fails >= BRIEF_TRANSPORT_MAX) {
+    if (s_pos >= APP_BRIEF_CHAIN_LEN || s_transport_fails >= BRIEF_TRANSPORT_MAX) {
         Serial.println("[brief] no model gave a usable text: the template is used");
         finish(0, "-");
     }
@@ -241,57 +267,69 @@ bool briefing_init(void)
     if (flash_read_blob(APP_KEY_BRIEF, &s_blob, sizeof(s_blob)) && s_blob.magic == APP_BRIEF_MAGIC &&
         brief_valid(s_blob.text)) {
         app_state_set_brief(s_blob.text);
-        Serial.printf("[brief] loaded from flash: for local day %u\n", (unsigned)s_blob.text.for_day);
+        s_saved = s_blob.text;
+        Serial.printf("[brief] loaded from flash: for local day %u (%s)\n", (unsigned)s_blob.text.for_day,
+                      s_blob.text.from_llm ? "LLM" : "template");
     } else {
         Serial.println("[brief] nothing stored: the DEFUSED screen uses today's template");
     }
-    s_seen_runs = puzzle_gen_runs_done();
     return true;
 }
 
 void briefing_request(void)
 {
     s_requested = true;
-    s_manual = true;
 }
 
-void briefing_service(uint32_t now_ms, uint32_t unix_now, bool net_ok, bool gen_ok)
+/* Does the automatic rule (brief_needs_run) want a run now? A demo alarm defers it: the demo has no class, and
+ * the real alarm's briefing is only held back until the demo is gone. Cheap: one app_state copy. */
+static bool auto_run_due(void)
 {
-    const uint32_t runs = puzzle_gen_runs_done();
+    AppState st;
+    const bool has_class = app_state_read(&st) && !st.alarm_is_demo && st.next_valid && st.next_start_unix != 0u &&
+                           st.alarm_unix != 0u;
 
-    (void)now_ms;
+    if (!has_class) {
+        return false;
+    }
+    return brief_needs_run(st.brief, true, local_day(st.next_start_unix), s_failed_before, s_last_fail_ms, s_now_ms,
+                           APP_BRIEF_RETRY_MS);
+}
+
+bool briefing_service(uint32_t now_ms, uint32_t unix_now, bool net_ok, bool gen_ok)
+{
+    s_now_ms = now_ms;
     if (unix_now != 0u) {
         refresh_today(unix_now);
-    }
-    if (runs != s_seen_runs) {
-        s_seen_runs = runs;
-        s_requested = true;                          /* after each finished puzzle run, nightly or not */
-        s_manual = false;
-        Serial.println("[brief] run wanted (a puzzle run finished)");
     }
     if (s_phase == PH_CALL) {
         if (!net_ok) {
             finish(0, "-");                          /* Wi-Fi or clock lost: the template, now */
         } else if (gen_ok) {
             step_call();
+            return true;                             /* this pass's LLM call is spent */
         }                                            /* else paused: a bomb session or the alarm comes first */
-        return;
+        return false;
     }
-    if (!s_requested) {
-        return;
-    }
-    if (!net_ok) {
-        if (s_manual) {
+    if (s_requested) {                               /* Serial "brief": forced, ignores the retry gap */
+        if (!net_ok) {
             s_requested = false;
-            s_manual = false;
             Serial.println("[brief] no Wi-Fi or clock: the stored text stays");
+            return false;
         }
-        return;                                      /* automatic runs wait for the network */
+        if (!gen_ok) {
+            return false;                            /* wait for the game state to allow it */
+        }
+        s_requested = false;
+        if (begin_run(unix_now) == BEGIN_DEFERRED) {
+            s_requested = true;                      /* a demo alarm is the scheduled one: ask again next pass */
+        }
+        return false;
     }
-    if (!gen_ok || puzzle_gen_busy()) {
-        return;                                      /* never in parallel with a puzzle run */
+    /* Automatic: every pass while online and allowed, until the next class day has an LLM-written text (D2).
+     * Not held back by puzzle upgrades: the network task offers this service first (R4). */
+    if (net_ok && gen_ok && auto_run_due()) {
+        (void)begin_run(unix_now);
     }
-    s_requested = false;
-    s_manual = false;
-    (void)begin_run(unix_now);
+    return false;
 }

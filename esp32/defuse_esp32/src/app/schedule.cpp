@@ -360,6 +360,19 @@ NextAlarm next_alarm(const Lesson *lessons, int count, uint32_t now_unix, int le
     return r;
 }
 
+uint32_t sched_pick_alarm(uint32_t real_alarm, uint32_t demo_alarm, uint32_t now)
+{
+    if (demo_alarm == 0u || demo_alarm <= now) {
+        return real_alarm;                            /* no demo, or it is past: never hides the real alarm */
+    }
+    return (real_alarm == 0u || demo_alarm < real_alarm) ? demo_alarm : real_alarm;   /* the earlier one wins */
+}
+
+uint32_t sched_demo_alarm_at(uint32_t now, int minutes, uint32_t slack_s)
+{
+    return now + (uint32_t)(minutes > 0 ? minutes : 0) * (uint32_t)SCHED_SEC_PER_MIN + slack_s;
+}
+
 AlarmAction alarm_action(uint32_t desired_alarm_unix, uint32_t last_sent_alarm_unix, uint8_t mcx_state,
                          bool session_active, bool time_sync_sent)
 {

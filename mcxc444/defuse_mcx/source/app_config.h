@@ -16,10 +16,10 @@
 #define APP_DRIVER_TEST             0   /* 1 = print every input event + sound/LED demo at boot */
 #endif
 #ifndef APP_DEBUG_STATS
-#define APP_DEBUG_STATS             1   /* 0 = no periodic stats print in normal mode */
+#define APP_DEBUG_STATS             0   /* 0 = no periodic stats print in normal mode */
 #endif
 #ifndef APP_GAME_DEBUG
-#define APP_GAME_DEBUG              1   /* 1 = debug task prints one line per game-state change */
+#define APP_GAME_DEBUG              0   /* 1 = debug task prints one line per game-state change */
 #endif
 #ifndef APP_USE_SHOCK_FALLBACK
 #define APP_USE_SHOCK_FALLBACK      0   /* 1 = shock switch on PTD6 replaces the ESP32 gyro */
@@ -75,7 +75,7 @@
 #define APP_NVIC_PRIO_GPIO          128u    /* buttons/encoder: human-speed events */
 
 /* ---- Task priorities (configMAX_PRIORITIES = 5, idle = 0; CLAUDE.md) ---- */
-#define APP_PRIO_GAME               4u      /* future game/alarm FSM task (not created yet) */
+#define APP_PRIO_GAME               4u      /* game/alarm FSM task: runs the bomb engine */
 #define APP_PRIO_JOYSTICK           3u      /* fixed-rate sampling must not jitter */
 #define APP_PRIO_COMM               2u      /* link protocol */
 #define APP_PRIO_ULTRASONIC         2u      /* equal to comm on purpose: time slicing */
@@ -130,7 +130,7 @@
 #define APP_JOY_HIGH                3000u   /* above = pushed to the high side */
 #define APP_JOY_CENTER_LO           1500u   /* re-arm only after returning inside */
 #define APP_JOY_CENTER_HI           2600u
-#define APP_JOY_X_INVERT            0       /* 0: low raw X = LEFT; 1: low raw X = RIGHT */
+#define APP_JOY_X_INVERT            1       /* 0: low raw X = LEFT; 1: low raw X = RIGHT */
 
 /* ---- Light sensor / LDR (ADC0, sampled inside the joystick task) ---- */
 #define APP_LDR_EVERY_N             5u      /* every 5th 20 ms joystick loop = 10 Hz; light changes slowly */

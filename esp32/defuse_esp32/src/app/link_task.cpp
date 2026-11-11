@@ -1,6 +1,7 @@
 /* Defuse to Wake - ESP32 link task. See link_task.h. */
 #include "link_task.h"
 
+#include <esp_random.h>
 #include <string.h>
 
 #include "app_state.h"
@@ -26,6 +27,7 @@ static AppState *s_st;             /* link task only, PSRAM (mem_big.h): a local
 static uint32_t s_tx_backpressure;
 static uint8_t s_cfg_handed;       /* BOMB_CONFIG frames given to proto_link whose outcome is not reported yet */
 static uint8_t s_cfg_failed_events;/* PROTO_EVT_SEND_FAILED for BOMB_CONFIG not yet reported */
+static volatile bool s_report_wanted; /* the link came up: ask the MCX which config it holds / runs (CMD_REPORT) */
 
 /* ---- demo-ring request: the BOOT button (this task) or the web page's "Ring now" (web task) ---- */
 static portMUX_TYPE s_ring_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -131,9 +133,20 @@ static void link_deliver(const proto_frame_t *f, void *ctx)
     proto_game_state_t gs;
     proto_telemetry_t tel;
     proto_result_msg_t res;
+    proto_bomb_report_t rep;
 
     (void)ctx;
     switch (f->type) {
+    case PROTO_MSG_BOMB_REPORT:
+        /* The config the MCX holds or runs: what the OLED and the web page draw from (cfg_sync.h). Matching it
+         * against our sends happens in bomb_config_service, not here: this callback runs inside proto_link. */
+        if (proto_unpack_bomb_report(f->payload, f->len, &rep)) {
+            bomb_config_note_report(rep);
+        } else {
+            app_state_note_bad_report();
+            Serial.printf("[cfg] unusable BOMB_REPORT payload (%u bytes) ignored\n", (unsigned)f->len);
+        }
+        break;
     case PROTO_MSG_GAME_STATE:
         if (proto_unpack_game_state(f->payload, f->len, &gs)) {
             app_state_set_game(gs);
@@ -166,6 +179,7 @@ static void link_event(proto_event_t evt, uint8_t type, uint8_t seq, void *ctx)
     switch (evt) {
     case PROTO_EVT_LINK_UP:
         app_state_set_link(true);
+        s_report_wanted = true;        /* after an ESP32 reset or a link drop the MCX may hold a config we do not know */
         Serial.println("[link] UP");
         break;
     case PROTO_EVT_LINK_DOWN:
@@ -293,6 +307,25 @@ static void report_config_results(void)
     }
 }
 
+/* CMD_REPORT whenever the link comes up (boot, reconnect): the MCX answers with its HELD report, plus the RUNNING
+ * one while a bomb is on. It changes nothing on the MCX, so the session guard (no SET_ALARM / CMD_CANCEL during a
+ * session) does not apply. Queued from the loop, not from the link event: that callback runs inside proto_link. */
+static void request_reports_if_wanted(void)
+{
+    proto_cmd_t cmd;
+    uint8_t pl[PROTO_SIZE_CMD];
+
+    if (!s_report_wanted) {
+        return;
+    }
+    cmd.cmd = PROTO_CMD_REPORT;
+    cmd.arg = 0u;
+    if (proto_pack_cmd(&cmd, pl, sizeof(pl)) != 0u && link_send(PROTO_MSG_CMD, pl, PROTO_SIZE_CMD)) {
+        s_report_wanted = false;
+        Serial.println("[cfg] CMD_REPORT queued: asking the MCX which config it holds");
+    }                                  /* TX queue full: tried again next loop */
+}
+
 /* BOOT button (GPIO0, active low), 50 ms poll = debounce. A press is only noted here; the demo
  * ring itself runs in service_game_config() of the same pass. */
 static void poll_button(void)
@@ -365,6 +398,9 @@ static void link_task(void *arg)
 
     proto_decoder_init(&s_rx_tap);
     memset(&cfg, 0, sizeof(cfg)); /* timeout / retries 0 -> proto_link defaults */
+    /* A random first reliable SEQ: after an ESP32 reset the MCX's duplicate filter (last reliable seq) must not
+     * mistake our first new frame for a repeat of the one it saw before the reset. */
+    cfg.initial_seq = (uint8_t)esp_random();
     cfg.write_fn = link_write;
     cfg.deliver_fn = link_deliver;
     cfg.event_fn = link_event;
@@ -390,6 +426,7 @@ static void link_task(void *arg)
             last_cfg = now;
             service_game_config();         /* before the drain: what it queues leaves in this pass */
         }
+        request_reports_if_wanted();
         drain_tx_queue(now);
         report_config_results();
 

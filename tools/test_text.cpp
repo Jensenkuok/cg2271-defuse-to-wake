@@ -581,6 +581,45 @@ static void test_pick_and_pages(void)
     CHECK(defused_page(30000) == 1);
 }
 
+static void test_brief_needs_run(void)
+{
+    BriefText st;
+    const uint32_t day = 20000u;
+    const uint32_t gap = 60000u;
+
+    memset(&st, 0, sizeof(st));
+    snprintf(st.briefing, sizeof(st.briefing), "%s", "Stored briefing for today");
+    snprintf(st.coach, sizeof(st.coach), "%s", "Stored coach for today");
+
+    /* no next class: never, whatever is stored */
+    CHECK(!brief_needs_run(st, false, day, false, 0u, 1000u, gap));
+    CHECK(!brief_needs_run(st, true, 0u, false, 0u, 1000u, gap));
+    /* invalid (for_day 0) */
+    CHECK(brief_needs_run(st, true, day, false, 0u, 1000u, gap));
+    /* another day, even LLM-written */
+    st.for_day = day - 1u;
+    st.from_llm = 1u;
+    CHECK(brief_needs_run(st, true, day, false, 0u, 1000u, gap));
+    /* same day + LLM: done */
+    st.for_day = day;
+    CHECK(!brief_needs_run(st, true, day, false, 0u, 1000u, gap));
+    CHECK(!brief_needs_run(st, true, day, true, 900u, 1000u, gap));
+    /* same day + template: retried */
+    st.from_llm = 0u;
+    CHECK(brief_needs_run(st, true, day, false, 0u, 1000u, gap));
+    /* retry gap after a failure */
+    CHECK(!brief_needs_run(st, true, day, true, 1000u, 1000u, gap));
+    CHECK(!brief_needs_run(st, true, day, true, 1000u, 1000u + gap - 1u, gap));
+    CHECK(brief_needs_run(st, true, day, true, 1000u, 1000u + gap, gap));
+    /* millis() wrap: failure just before 2^32, now just after */
+    CHECK(!brief_needs_run(st, true, day, true, 0xFFFFFFF0u, 0x00000010u, gap));            /* 32 ms later */
+    CHECK(brief_needs_run(st, true, day, true, 0xFFFFFFF0u, 0xFFFFFFF0u + gap, gap));       /* wrapped sum, 60 s later */
+    /* an invalid text is retried too, but also waits out the gap */
+    st.briefing[0] = '\0';
+    CHECK(brief_needs_run(st, true, day, false, 0u, 5u, gap));
+    CHECK(!brief_needs_run(st, true, day, true, 0u, 5u, gap));
+}
+
 int main(void)
 {
     test_wrap();
@@ -597,6 +636,7 @@ int main(void)
     test_text_ok();
     test_brief_parse();
     test_pick_and_pages();
+    test_brief_needs_run();
     printf("test_text: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed == 0 ? 0 : 1;
 }

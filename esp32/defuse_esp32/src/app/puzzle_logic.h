@@ -203,17 +203,54 @@ static_assert(PUZZLE_TRIP_MIN_BASE_CM >= GAME_TRIP_BOUND_MIN_CM && PUZZLE_TRIP_F
 /* One 32-bit random word (esp_random on the board) -> a band of PUZZLE_TRIP_WIDTH_CM. */
 void trip_band_from_random(uint32_t r, uint8_t *min_cm, uint8_t *max_cm);
 
-/* Modules DIAL, WIRES, TRIPWIRE, LIGHTS (every level asks for all four), the time of the level, the puzzle answers (wire count
- * and wire come from the puzzle actually used, so the clue and the config never disagree), a tripwire
- * band from trip_rnd and the default strikes. Every field is inside the MCX's range checks. */
+/* A Fisher-Yates permutation of DIAL, WIRES, TRIPWIRE, LIGHTS into out[0..3], swaps drawn from rnd (pure: the
+ * same rnd always gives the same order). Every module appears exactly once. */
+void module_order_shuffle(uint32_t rnd, uint8_t out[PROTO_MAX_MODULES]);
+
+/* Index of `type` in the order (0 if absent, which cannot happen for a permutation). */
+unsigned module_order_find(const uint8_t order[PROTO_MAX_MODULES], uint8_t type);
+
+/* The base code to SEND so that game_dial_code(base, pos) == code: the MCX adds GAME_DIAL_REPEAT_STEP * index
+ * to every digit (mod 10), so the base is code minus that shift. Always digits 0..9. */
+void dial_code_preshift(const uint8_t code[PROTO_DIAL_DIGITS], unsigned pos, uint8_t out[PROTO_DIAL_DIGITS]);
+
+/* Modules DIAL, WIRES, TRIPWIRE, LIGHTS (every level asks for all four) in an order shuffled from order_rnd,
+ * the time of the level, the puzzle answers (wire count and wire come from the puzzle actually used, so the
+ * clue and the config never disagree), a tripwire band from trip_rnd (independent of the order) and the
+ * default strikes. cfg.dial_code is the PRE-SHIFTED base (dial_code_preshift): the player still enters the
+ * puzzle's code at the dial's position. Every field is inside the MCX's range checks. */
 void puzzle_build_config(const Difficulty &d, const Puzzle &dial, const Puzzle &wire, uint32_t trip_rnd,
-                         proto_bomb_config_t *out);
+                         uint32_t order_rnd, proto_bomb_config_t *out);
 
 /* ================= selection rules ================= */
-/* Lowest pair index whose bit is clear in used_mask, -1 if all `count` are used. */
-int pair_next_unused(uint8_t used_mask, int count);
-/* Marks idx used. When that was the last unused pair the mask restarts at 0 and *cycled is true. */
-uint8_t pair_mark_used(uint8_t used_mask, int idx, int count, bool *cycled);
+/* A pair is SPENT once a bomb started with it (D4): it is never shown again. The network task refills its two
+ * slots from the bank and only then clears the spent bit. All of this is a bit mask (bit i = pair i) plus a
+ * spend counter per pair; none of it allocates or touches a lock, the caller guards the data. */
+
+/* Lowest pair index whose bit is clear in spent_mask, -1 if all `count` are spent. */
+int pair_next_unused(uint8_t spent_mask, int count);
+/* Sets / clears the spent bit of pair idx; out-of-range idx leaves the mask unchanged. */
+uint8_t pair_mark_spent(uint8_t spent_mask, int idx, int count);
+uint8_t pair_clear_spent(uint8_t spent_mask, int idx, int count);
+/* The spent pair with the smallest spend_order (spent the longest ago), -1 if none is spent. A tie goes to
+ * the lowest index. spend_order[i] is a counter that grows with every spend (0 = unknown, e.g. after a reboot). */
+int pair_oldest_spent(uint8_t spent_mask, const uint32_t *spend_order, int count);
+/* The pair a bomb should take: the lowest unspent one; when every pair is spent the least recently spent
+ * one (D6 last resort, *reused = true). */
+int pair_pick(uint8_t spent_mask, const uint32_t *spend_order, int count, bool *reused);
+
+/* Slots: 0..PUZZLE_PAIRS-1 are the dial puzzles, PUZZLE_PAIRS..2*PUZZLE_PAIRS-1 the wire puzzles; the pair of
+ * slot i is i % PUZZLE_PAIRS. */
+#define PUZZLE_SLOTS            (2 * PUZZLE_PAIRS)
+/* Next slot of a SPENT pair that the bank has not refilled yet (refilled_slots: bit per slot), -1 if none.
+ * Lowest spent pair first, its dial before its wire. */
+int refill_next_slot(uint8_t spent_mask, uint8_t refilled_slots);
+/* Continuous AI upgrade: the next slot after `last_slot` (round-robin, wraps; -1 = start at slot 0) whose pair is
+ * not spent and that still needs work: source BANK, or a level other than target_level, or its bit set in
+ * force_slots (manual redo). -1 when nothing needs work. */
+int upgrade_next_slot(const PuzzleSet &s, int target_level, uint8_t spent_mask, uint8_t force_slots, int last_slot);
+/* Puzzles of source AI in the set. */
+uint8_t puzzle_set_count_ai(const PuzzleSet &s);
 
 /* Order in which the checker chain is tried: every model EXCEPT the setter's own, in chain order
  * (O5: the setter never checks itself, there is no fallback to its own model). Returns the count,

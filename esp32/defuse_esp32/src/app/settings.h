@@ -2,7 +2,7 @@
  * Defuse to Wake - user settings kept in flash (Preferences namespace "defuse"):
  *   nusmods_link  NUSMods share link, at most APP_LINK_MAX_CHARS chars. Until one is saved the
  *                 NUSMODS_SHARE_LINK default from secrets.h is used.
- *   lead_min      wake-up lead before the first lecture, clamped to 15..180 min, default 60.
+ *   lead_min      wake-up lead before the first lecture, clamped to 1..180 min, default 60.
  *   diff_mode     difficulty mode (DiffMode): auto / easy / normal / hard, default auto. Kept in a RAM
  *                 copy too, so the link task can read it without touching flash.
  * Every change bumps settings_version(); the network task watches it and answers a change

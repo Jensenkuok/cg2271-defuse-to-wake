@@ -3,7 +3,7 @@
  * display text and rules, the acceptance check and the template fallback. The random rule sets
  * themselves come from puzzle_bank_dial.cpp and puzzle_bank_wire.cpp.
  *
- * RTOS note: runs in the network task (lowest priority) during the nightly puzzle run, never at
+ * RTOS note: runs in the network task (lowest priority) for each bank slot refill, never at
  * alarm time. The work is bounded: at most BANK_TRIES_DIAL dial tries (each a few brute-force passes
  * over the 10,000 codes) or BANK_TRIES_WIRE wire tries (<= 6 wires, trivial), and the optional
  * yield hook lets the caller give the CPU back every BANK_YIELD_EVERY tries so the idle task's

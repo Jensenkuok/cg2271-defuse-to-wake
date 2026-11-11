@@ -128,9 +128,11 @@ size_t brief_user_prompt(const char *alarm_text, const BriefClass *cls, int n, c
 /* Printable ASCII (0x20..0x7E), no leading or trailing space, length min_len..max_len. */
 bool brief_text_ok(const char *s, size_t min_len, size_t max_len);
 
-/* The text shown for one day. for_day = local day number (see local_day), 0 = nothing. */
+/* The text shown for one day. for_day = local day number (see local_day), 0 = nothing.
+ * from_llm: 1 = both fields were written by the LLM, 0 = the template (or a mix): such a text is retried. */
 struct BriefText {
     uint32_t for_day;
+    uint8_t from_llm;
     char briefing[BRIEF_BRIEFING_MAX + 1];
     char coach[BRIEF_COACH_MAX + 1];
 };
@@ -149,6 +151,13 @@ int brief_parse(const char *reply, char *json_scratch, size_t scratch_size, Brie
 /* What to show for today_day: the stored text if it is for that day, else the template built from
  * today's timetable if that is for that day, else NULL. */
 const BriefText *brief_pick(const BriefText &stored, const BriefText &today_tmpl, uint32_t today_day);
+
+/* Does the briefing need an automatic LLM run? Not when there is no next class (next_day = its local day).
+ * Yes when the stored text is invalid, for another day, or not LLM-written (template). After a failed run
+ * (failed_before, at last_fail_ms) wait retry_ms first; the elapsed time is an unsigned subtraction, so a
+ * millis() wrap-around is harmless. The Serial "brief" command does not use this: it forces a run. */
+bool brief_needs_run(const BriefText &stored, bool has_next_class, uint32_t next_day, bool failed_before,
+                     uint32_t last_fail_ms, uint32_t now_ms, uint32_t retry_ms);
 
 /* DEFUSED screen page for the time spent on it. */
 int defused_page(uint32_t defused_ms);
