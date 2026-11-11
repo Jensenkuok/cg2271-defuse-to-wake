@@ -100,11 +100,6 @@ static void rx_tap_byte(uint8_t byte)
  * is applied: the CRC byte of one outgoing frame is flipped on its way to the UART, proto_link keeps
  * its intact copy for the retransmit. A retransmit is recognised by proto_link's counter, which it
  * increments just before it writes the frame again. */
-/* ===== Q&A [Communications Protocol 5 (live demo)] =====
- * Q: Can you show error recovery? A: the web page's 'Corrupt next packet' arms a flag;
- *    here the next reliable frame gets a bad CRC on the wire -> the MCX NACKs -> we
- *    retransmit. The frame log on /eng shows CRC CORRUPTED, NACK, RETX, ACK.
- * ===== end Q&A ===== */
 static void link_write(const uint8_t *buf, size_t len, void *ctx)
 {
     uint8_t copy[PROTO_MAX_FRAME];
@@ -388,11 +383,6 @@ static void service_game_config(void)
     bomb_config_service(*s_st);
 }
 
-/* ===== Q&A [Communications Protocol 5 / ESP32 use 7] =====
- * Q: Which code owns the link on the ESP32? A: only this task (every 5 ms with
- *    vTaskDelayUntil). Other tasks hand frames to it through a queue. It runs the SAME
- *    shared/proto_link.c as the MCX, and also builds BOMB_CONFIG and the demo ring.
- * ===== end Q&A ===== */
 static void link_task(void *arg)
 {
     TickType_t wake = xTaskGetTickCount();

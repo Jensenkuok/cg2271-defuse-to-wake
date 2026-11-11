@@ -106,12 +106,6 @@ static void uart2_hw_init(uint32_t baud)
 }
 
 /* ISR: no blocking, no loops waiting for input. Read/clear hardware, then FromISR. */
-/* ===== Q&A [ISR design 3 (does not wait for UART input)] =====
- * Q: Show an ISR that does not wait for input. A: this one. RX: read ONE byte (clears
- *    RDRF) and xQueueSendFromISR it to the comm task; all parsing happens in the task.
- *    TX: feed the next byte from a ring, disable the TX interrupt when it is empty.
- *    Ends with portYIELD_FROM_ISR so the comm task runs at once if it was woken.
- * ===== end Q&A ===== */
 void UART2_FLEXIO_IRQHandler(void)
 {
     BaseType_t woken = pdFALSE;
@@ -143,11 +137,6 @@ void UART2_FLEXIO_IRQHandler(void)
 }
 
 /* ---- proto_link callbacks (run in the comm task) ---- */
-/* ===== Q&A [Synchronization tools 2 (resource protection)] =====
- * Q: How is the TX ring shared between a task and an ISR? A: the comm task copies one
- *    whole frame (<= 37 bytes) inside a short critical section; a frame that does not
- *    fit is dropped whole and the link layer retransmits it.
- * ===== end Q&A ===== */
 static void link_write(const uint8_t *buf, size_t len, void *ctx)
 {
     uint16_t used;
@@ -177,11 +166,6 @@ static void post_ctrl(const app_ctrl_t *c)
 
 /* Map one delivered frame to the game: control queue for the rare setup messages,
  * the input queue for commands/tamper (same path as the local buttons). */
-/* ===== Q&A [Communications Protocol 5 (2-way)] =====
- * Q: What does the MCX receive from the ESP32? A: TIME_SYNC, SET_ALARM, BOMB_CONFIG
- *    and CMD report (-> control queue to the game task), CMD ring/snooze/cancel and
- *    TAMPER (-> input queue). It SENDS GAME_STATE, RESULT, TELEMETRY and BOMB_REPORT.
- * ===== end Q&A ===== */
 static void route_frame(const proto_frame_t *f)
 {
     app_ctrl_t c;
@@ -351,12 +335,8 @@ static void send_reports(uint32_t now)
 }
 
 /* ---- comm task ---- */
-/* ===== Q&A [Task design 4 / Communications Protocol 5] =====
- * Q: What does the comm task do? A: it is the ONLY owner of the link state (no lock
- *    needed). Blocks on the RX queue (10 ms timeout), feeds bytes to the decoder, sends
- *    queued frames, runs retransmit/heartbeat timers (proto_link_poll), and sends
- *    GAME_STATE (<= 10/s) and TELEMETRY (2/s).
- * ===== end Q&A ===== */
+/* Only owner of s_link, so the link state needs no lock. The UART ISR only queues bytes;
+ * all parsing, ACKs and retransmits happen here. */
 static void comm_task(void *arg)
 {
     uint8_t byte;

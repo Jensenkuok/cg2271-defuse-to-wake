@@ -62,12 +62,6 @@ static void emit_event(proto_link_t *l, proto_event_t evt, uint8_t type, uint8_t
  * heartbeats and ACKs moved it too, so a genuinely new reliable frame landed on the
  * previous reliable SEQ about once in 256 sends and was ACKed but never delivered.
  * Retransmits do not come through here, so they keep their original SEQ. */
-/* ===== Q&A [Communications Protocol 5 (control flow)] =====
- * Q: What is beyond Lab 3's UART? A: reliable delivery on top of the frames:
- *    stop-and-wait ACKs, retransmit after 100 ms (max 3), NACK on a CRC error = resend
- *    at once, duplicates (same SEQ) re-ACKed but not delivered twice, 1 s heartbeat,
- *    link down after 3 s silence. One reliable frame in flight + a FIFO of 4.
- * ===== end Q&A ===== */
 static size_t emit_new(proto_link_t *l, uint8_t type, const uint8_t *payload, uint8_t len,
                        uint8_t *buf, size_t buf_size, uint8_t *seq_used)
 {
@@ -143,11 +137,6 @@ static void start_next(proto_link_t *l, uint32_t now_ms)
 }
 
 /* Retransmit the outstanding frame, or drop it once retries are exhausted. */
-/* ===== Q&A [Communications Protocol 5] =====
- * Q: What happens when a frame is lost? A: no ACK within the timeout (or a NACK) ->
- *    resend the SAME frame and SEQ; after max_retries it is dropped with SEND_FAILED
- *    and the next queued frame goes out.
- * ===== end Q&A ===== */
 static void retry_or_fail(proto_link_t *l, uint32_t now_ms)
 {
     uint8_t type;
@@ -316,10 +305,6 @@ void proto_link_rx_byte(proto_link_t *l, uint8_t byte, uint32_t now_ms)
     }
 }
 
-/* ===== Q&A [Communications Protocol 5] =====
- * Q: How do you know the other board is alive? A: a HEARTBEAT every 1 s; no valid frame
- *    for 3 s = link down (the idle MCX then blinks its LED blue). It recovers by itself.
- * ===== end Q&A ===== */
 void proto_link_poll(proto_link_t *l, uint32_t now_ms)
 {
     proto_heartbeat_t hb;

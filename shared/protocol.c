@@ -29,11 +29,6 @@ static uint32_t get_u32(const uint8_t *p)
 }
 
 /* ---- CRC-8 (poly 0x07, init 0, no reflection, no xorout) ---- */
-/* ===== Q&A [Communications Protocol 5 (packetization)] =====
- * Q: What is in a frame? A: [0xAA][TYPE][SEQ][LEN][PAYLOAD 0-32][CRC-8], max 37 bytes.
- *    CRC-8 poly 0x07 over TYPE..PAYLOAD detects corrupted frames. This file compiles
- *    unchanged on BOTH boards (shared/, synced by tools/sync_shared.ps1).
- * ===== end Q&A ===== */
 uint8_t proto_crc8(const uint8_t *data, size_t len)
 {
     uint8_t crc = 0u;
@@ -134,11 +129,6 @@ static proto_result_t decoder_step(proto_decoder_t *d, uint8_t byte, proto_frame
     }
 }
 
-/* ===== Q&A [Communications Protocol 5] =====
- * Q: How do you find frames in a byte stream? A: this decoder takes one byte at a time,
- *    waits for 0xAA, checks LEN <= 32 and the CRC, and after an error resyncs on the
- *    next 0xAA so one bad frame never loses the following good one.
- * ===== end Q&A ===== */
 proto_result_t proto_decoder_feed(proto_decoder_t *d, uint8_t byte, proto_frame_t *out)
 {
     proto_result_t res;

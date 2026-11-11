@@ -398,10 +398,6 @@ static bool send_to_mcx(NetCtx &c, uint32_t unix_now, AlarmAction action, bool s
     return true;
 }
 
-/* ===== Q&A [Communications Protocol 5 (2-way)] =====
- * Q: What does the ESP32 send the MCX? A: TIME_SYNC, then BOMB_CONFIG, then SET_ALARM
- *    (always in that order: the MCX needs the clock to turn an alarm time into a deadline).
- * ===== end Q&A ===== */
 static void sync_with_mcx(NetCtx &c, uint32_t now_ms, uint32_t unix_now)
 {
     AppState st;
@@ -759,14 +755,6 @@ static void service_outage_end(NetCtx &c, uint32_t now_ms)
 }
 
 /* ================= task ================= */
-/* ===== Q&A [Online function(s) 5] =====
- * Q: Which online functions? A: all in this lowest-priority task, all cached with an
- *    offline fallback, never needed at alarm time:
- *    - REST: NUSMods timetable -> alarm = first class - lead time (timetable.cpp)
- *    - GenAI: SoCLaaS LLM writes the morning briefing + coach (briefing.cpp, llm_client.cpp)
- *    - Database: Firebase Realtime DB write of each morning (mirror.cpp)
- *    - NTP time; local web page on the same Wi-Fi (web_task.cpp)
- * ===== end Q&A ===== */
 static void network_task(void *arg)
 {
     NetCtx &c = s_ctx;

@@ -141,10 +141,6 @@ int collect_lessons(JsonDocument &doc, const ShareLink &link, const char *module
 }
 
 /* GET one module and add its lessons to s_scratch. False on any HTTP/JSON failure. */
-/* ===== Q&A [Online function(s) 5 (REST API)] =====
- * Q: Show a REST call. A: HTTPS GET api.nusmods.com/v2/2026-2027/modules/<CODE>.json,
- *    filtered with ArduinoJson to our lesson slots and cached in flash (works offline).
- * ===== end Q&A ===== */
 bool fetch_module(const char *module, const ShareLink &link, int *total, int *added)
 {
     char url[APP_TT_MODULE_URL_MAX];

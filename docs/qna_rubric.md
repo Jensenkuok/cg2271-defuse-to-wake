@@ -1,12 +1,11 @@
 # Q&A by rubric line: where each requirement lives in the code
 
-For the `qna-notes` branch: Ryan's latest code (`2d5e7a5`, 6 Nov) plus **comments only**. The
+For the `qna-notes` branch: Ryan's latest code (`2d5e7a5`, 6 Nov) plus a few explanatory **comments only**. The
 firmware it builds is the same as Ryan's `master`, so what you show on your laptop is what runs on
 the demo board, as long as that board was flashed from Ryan's latest.
 
-Each location below has a comment block right above the code that starts with
-`/* ===== Q&A [<rubric line>] =====`. It holds the likely TA question and a short answer.
-Line numbers are where that block starts; the code is directly under it.
+Line numbers point at the function (or setting) to show; the comment explaining it is directly above.
+In MCUXpresso press Ctrl+L to jump to a line number.
 
 Who answers follows `docs/demo_script.md` (A pitch + plays, B live bomb, C protocol + online,
 D code walk). Everyone should still be able to answer the first line of every row.
@@ -19,8 +18,7 @@ git checkout qna-notes
 - **MCUXpresso:** File > Import > Existing Projects into Workspace > `<repo>/mcxc444/defuse_mcx`,
   untick "Copy projects into workspace" (`mcxc444/README.md`). Paths below for the MCX are relative to
   that project (`source/...`).
-- **Find every block:** Search > File... (Ctrl+H), text `Q&A [`, scope Workspace. Narrow it with the
-  rubric name, e.g. `Q&A [ISR`.
+- **Jump to a line:** open the file, press Ctrl+L, type the number.
 - **ESP32 files** are under `esp32/defuse_esp32/src/app/`. Arduino IDE only shows the `.ino` as a tab,
   so open these in MCUXpresso (File > Open File) or VS Code.
 - **Do not** click "Update Code" in MCUXpresso Config Tools: it regenerates the FreeRTOS config.
@@ -43,9 +41,9 @@ git checkout qna-notes
 
 ## Polling & Interrupt used (2) — B
 **Need:** at least 1 polled sensor, at least 1 interrupt sensor.
-- **Polled:** joystick X/Y every 20 ms and LDR every 100 ms, `vTaskDelayUntil`: `source/joystick.c:184`.
-- **Interrupt:** encoder A/B edges `source/encoder.c:75`; encoder + joystick buttons
-  `source/buttons.c:82`; ultrasonic echo by TPM1 input capture `source/ultrasonic.c:98`.
+- **Polled:** joystick X/Y every 20 ms and LDR every 100 ms, `vTaskDelayUntil`: `source/joystick.c:182`.
+- **Interrupt:** encoder A/B edges `source/encoder.c:77`; encoder + joystick buttons
+  `source/buttons.c:78`; ultrasonic echo by TPM1 input capture `source/ultrasonic.c:98`.
 - **One-line reason:** analog voltages have no event to interrupt on, so poll them; encoder edges are
   fast and would be missed by polling.
 
@@ -70,23 +68,23 @@ git checkout qna-notes
 
 | Show | Where |
 |---|---|
-| Task list + priorities + reasons | `source/main.c:136`, `source/app_config.h:84` |
-| Game task: one blocking point (queue with timeout) | `source/game_task.c:145` |
-| Sensor task blocking on a notification | `source/ultrasonic.c:202` |
-| The only busy wait, justified | `source/ultrasonic.c:153` |
-| Feedback task (owner of TPM0/TPM2) | `source/feedback.c:224` |
+| Task list + priorities + reasons | `source/main.c:131`, `source/app_config.h:77` |
+| Game task: one blocking point (queue with timeout) | `source/game_task.c:141` |
+| Sensor task blocking on a notification | `source/ultrasonic.c:194` |
+| The only busy wait, justified | `source/ultrasonic.c:147` |
+| Feedback task (owner of TPM0/TPM2) | `source/feedback.c:221` |
 | Game state machine (pure C, unit-tested) | `source/game/game.c:425` |
 | Stack overflow / malloc hooks | `source/main.c:57` |
 | ESP32 task priorities | `esp32/.../config.h:56` |
 
 ## Synchronization tools (2) — D
 **Need:** at least 1 mutex/semaphore, at least 1 queue.
-- **Mutex:** game-state snapshot, `source/app_state.c:40`. A mutex, not a critical section (that would
+- **Mutex:** game-state snapshot, `source/app_state.c:29`. A mutex, not a critical section (that would
   mask the UART ISR) and not a binary semaphore (a mutex has priority inheritance).
 - **Queue:** the input queue every ISR and sensor task posts to, `source/input_queue.c:20`. Also the
   UART RX, TX-request, control and feedback queues.
 - **Task notifications** as lightweight semaphores: ADC ISR to joystick, TPM1 ISR to ultrasonic.
-- **ISR/task shared buffer:** TX ring in a short critical section, `source/uart_link.c:146`.
+- **ISR/task shared buffer:** TX ring in a short critical section, `source/uart_link.c:140`.
 - **ESP32:** I2C bus mutex `esp32/.../i2c_bus.cpp:23` (plus app state, flash, timetable mutexes).
 
 ## RTOS enabled (2) — D
@@ -105,7 +103,7 @@ git checkout qna-notes
 | Show | Where |
 |---|---|
 | Tasks + libraries | `esp32/defuse_esp32/defuse_esp32.ino:38` |
-| Link task (owns the protocol) | `esp32/.../link_task.cpp:391` |
+| Link task (owns the protocol) | `esp32/.../link_task.cpp:386` |
 | OLED drawing | `esp32/.../display_task.cpp:700` |
 
 ## Communications Protocol(s) (5) — C, B drives /eng
@@ -119,14 +117,14 @@ git checkout qna-notes
 | Show | Where |
 |---|---|
 | CRC-8 + frame format | `source/shared/protocol.c:32` |
-| Decoder with resync | `source/shared/protocol.c:137` |
+| Decoder with resync | `source/shared/protocol.c:132` |
 | ACK / retransmit / dup / heartbeat overview | `source/shared/proto_link.c:65` |
-| Lost frame -> resend, give up after 3 | `source/shared/proto_link.c:146` |
-| Heartbeat + link down | `source/shared/proto_link.c:319` |
-| What the MCX receives / sends | `source/uart_link.c:180` |
-| Comm task | `source/uart_link.c:354` |
+| Lost frame -> resend, give up after 3 | `source/shared/proto_link.c:140` |
+| Heartbeat + link down | `source/shared/proto_link.c:308` |
+| What the MCX receives / sends | `source/uart_link.c:169` |
+| Comm task | `source/uart_link.c:340` |
 | Application-level confirmation (BOMB_REPORT) | `source/game_task.c:58` |
-| Bad config rejected / clamped | `source/game/game.c:479` |
+| Bad config rejected / clamped | `source/game/game.c:473` |
 | ESP32 send order TIME_SYNC, BOMB_CONFIG, SET_ALARM | `esp32/.../network_task.cpp:401` |
 | Fault injection (bad CRC on purpose) | `esp32/.../link_task.cpp:103` |
 
@@ -136,7 +134,7 @@ git checkout qna-notes
 
 | Function | Where |
 |---|---|
-| Overview of all online functions | `esp32/.../network_task.cpp:762` |
+| Overview of all online functions | `esp32/.../network_task.cpp:758` |
 | REST: NUSMods timetable GET | `esp32/.../timetable.cpp:144` |
 | GenAI: SoCLaaS chat call | `esp32/.../llm_client.cpp:101` |
 | GenAI use: morning briefing + coach | `esp32/.../briefing.cpp:208` |
@@ -152,5 +150,4 @@ puzzles come from the ESP32's bank (proven unique by brute force), and the LLM w
 ## 30-second check before the TA arrives
 - [ ] Laptop on `qna-notes`, MCUXpresso open with `source/main.c`, `source/app_config.h`,
       `FreeRTOSConfig_Gen.h`, `source/uart_link.c` and `source/app_state.c` in tabs.
-- [ ] Ctrl+H search for `Q&A [` in the MCX project returns 30 hits (the 13 ESP32 blocks are outside it).
 - [ ] Browser on `http://defuse.local/eng` for the protocol demo.

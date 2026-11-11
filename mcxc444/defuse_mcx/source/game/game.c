@@ -422,12 +422,6 @@ static void ring_now(game_t *g, int32_t delay_s, uint32_t now_ms)
 }
 
 /* Module inputs apply only to the current module; tamper to any module. */
-/* ===== Q&A [Task design 4 (FSM)] =====
- * Q: Where is the game logic? A: game/game.c, pure C99 with no RTOS or hardware calls,
- *    unit-tested on a PC (tools/test_game.c). The game task owns it and feeds it events.
- *    States: IDLE -> ARMED -> BOMB_ACTIVE -> DEFUSED / EXPLODED (docs/game.md).
- *    Inputs only count for the current module; tamper counts for any.
- * ===== end Q&A ===== */
 static void module_event(game_t *g, const game_event_t *ev, uint32_t now_ms)
 {
     uint8_t type = g->modules[g->cleared];
@@ -476,10 +470,6 @@ void game_init(game_t *g, uint32_t now_ms)
     compute_view(g, now_ms, &g->view_cache);
 }
 
-/* ===== Q&A [Communications Protocol 5 (robustness)] =====
- * Q: What if the ESP32 sends a bad config? A: every field is range-checked here:
- *    bad module/digit/band/wire values reject the whole config, the rest are clamped.
- * ===== end Q&A ===== */
 bool game_set_config(game_t *g, const proto_bomb_config_t *cfg)
 {
     proto_bomb_config_t c;

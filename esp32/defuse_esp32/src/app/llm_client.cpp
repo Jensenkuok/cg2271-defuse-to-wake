@@ -98,11 +98,6 @@ const char *llm_status_name(LlmStatus s)
     return "?";
 }
 
-/* ===== Q&A [Online function(s) 5 (Generative AI)] =====
- * Q: Show the GenAI call. A: HTTPS POST to SoCLaaS /v1/chat/completions (OpenAI style):
- *    model, system + user message, max_tokens, temperature; API key in the Authorization
- *    header (from git-ignored secrets.h, never printed). We parse only the JSON answer.
- * ===== end Q&A ===== */
 LlmReply llm_chat(const char *model, const char *system, const char *user, int max_tokens, float temperature,
                   char *out_text, size_t out_size)
 {

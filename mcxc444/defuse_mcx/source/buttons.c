@@ -58,12 +58,6 @@ void buttons_init(void)
 }
 
 /* Accept an edge if the level really changed and the debounce window has passed. */
-/* ===== Q&A [ISR design 3] =====
- * Q: How do you debounce without waiting in an ISR?
- * A: compare xTaskGetTickCountFromISR() with the last accepted edge and ignore edges
- *    within 30 ms. Long press (>= 800 ms = snooze) is timed the same way: press time
- *    stored, decided on release. Nothing ever loops or delays.
- * ===== end Q&A ===== */
 static bool accept_edge(button_t *b, bool pressed_now, TickType_t now)
 {
     if (pressed_now == b->pressed) {
@@ -78,12 +72,9 @@ static bool accept_edge(button_t *b, bool pressed_now, TickType_t now)
     return true;
 }
 
+/* The push buttons are on Port C because only Ports A, C and D can raise pin interrupts
+ * on this MCU (RM Table 11-1). */
 /* ISR: read pins, clear flags, decide, post. No blocking, no loops on input. */
-/* ===== Q&A [Polling & Interrupt 2 / ISR design 3] =====
- * Q: Interrupt sensors on Port C? A: encoder push (PTC1) and joystick push (PTC2).
- *    Ports B and E cannot raise pin interrupts on this chip (RM Table 11-1), so all
- *    buttons/encoder sit on Ports A and C.
- * ===== end Q&A ===== */
 void PORTC_PORTD_IRQHandler(void)
 {
     BaseType_t woken = pdFALSE;

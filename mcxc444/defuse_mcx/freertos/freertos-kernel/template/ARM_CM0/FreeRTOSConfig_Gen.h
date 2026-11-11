@@ -41,14 +41,6 @@
  * See http://www.freertos.org/a00110.html.
  *----------------------------------------------------------*/
 
-/* ===== Q&A [RTOS enabled 2] =====
- * Q: Show preemption and time slicing. A: configUSE_PREEMPTION 1 (this line) and
- *    configUSE_TIME_SLICING 1 (below; was 0 in the template). Tick 200 Hz = 5 ms slices.
- * Q: Unnecessary components removed? A: software timers (no timer task), counting +
- *    recursive semaphores, queue sets, queue registry, trace, run-time stats,
- *    co-routines, tickless idle, idle/tick hooks. Every change is marked 'defuse:'.
- * Do NOT click 'Update Code' in Config Tools: it regenerates this file.
- * ===== end Q&A ===== */
 #define configUSE_PREEMPTION                    1   /* defuse: preemptive, so the game task pre-empts comm/sensor tasks at once */
 #define configUSE_TICKLESS_IDLE                 0
 #define configCPU_CLOCK_HZ                      (SystemCoreClock)

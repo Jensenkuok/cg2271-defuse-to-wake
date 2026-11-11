@@ -68,23 +68,12 @@
 #define APP_LDR_PIN                 0u      /* PTB0 ADC0_SE8 = J4[2] (docs/pin_table.md) */
 #define APP_LDR_ADC_CH              8u      /* ADC0_SE8 is a plain channel: CFG2 MUXSEL = 0 still works */
 
-/* ===== Q&A [ISR design 3] =====
- * Q: Why these interrupt priorities? (M0+ has 2 bits: 0/64/128/192, lower = more urgent)
- * A: UART2 and TPM1 at 64: a late UART byte is lost (1-byte data register) and a late
- *    echo timestamp gives a wrong distance. ADC0 and GPIO at 128: human-speed events.
- * Q: Is FromISR legal at 64? A: yes, the CM0 port masks interrupts with PRIMASK
- *    (all or nothing), so ...FromISR calls are safe at any priority.
- * ===== end Q&A ===== */
 /* ---- NVIC priorities (Cortex-M0+: 2 bits -> 0/64/128/192, lower = more urgent) ---- */
 #define APP_NVIC_PRIO_UART2         64u     /* link bytes beat GPIO so RX never overruns */
 #define APP_NVIC_PRIO_TPM1          64u     /* echo edge timestamps are timing-critical */
 #define APP_NVIC_PRIO_ADC0          128u    /* conversion done: a 50 Hz sample can wait */
 #define APP_NVIC_PRIO_GPIO          128u    /* buttons/encoder: human-speed events */
 
-/* ===== Q&A [Task design 4] =====
- * Q: Where are the task priorities? A: here, one place, each with its reason.
- *    comm and ultrasonic share priority 2 on purpose to show time slicing.
- * ===== end Q&A ===== */
 /* ---- Task priorities (configMAX_PRIORITIES = 5, idle = 0; CLAUDE.md) ---- */
 #define APP_PRIO_GAME               4u      /* game/alarm FSM task: runs the bomb engine */
 #define APP_PRIO_JOYSTICK           3u      /* fixed-rate sampling must not jitter */

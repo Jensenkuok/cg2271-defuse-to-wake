@@ -697,12 +697,6 @@ static void draw_oled(const ScreenModel &m, const TextBlock &tb)
 }
 
 /* ================= task ================= */
-/* ===== Q&A [Sensors/actuators 5 / ESP32 use 7] =====
- * Q: Why is the OLED on the ESP32? A: it needs a 1 KB framebuffer, the Adafruit
- *    libraries and I2C; the ESP32 has the RAM and it keeps the MCX free for real-time I/O.
- *    10 fps via vTaskDelayUntil. Draws into RAM first, then takes the I2C mutex only
- *    for the transfer. Puzzles come only from the MCX's BOMB_REPORTs.
- * ===== end Q&A ===== */
 static void display_task(void *arg)
 {
     TickType_t wake = xTaskGetTickCount();

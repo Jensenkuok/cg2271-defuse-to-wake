@@ -53,11 +53,6 @@
                                              * next bomb 3 s after EXPLODED, so this is far inside that window */
 
 /* ---- Task priorities (FreeRTOS: larger = more urgent). One core, no pinning. ---- */
-/* ===== Q&A [ESP32 use 7 / Task design 4] =====
- * Q: Why these ESP32 priorities? A: link highest: Serial1 must be drained and ACKs sent
- *    within the 100 ms retransmit window. Network lowest: one HTTPS/LLM call can block
- *    10-30 s and nothing waits on it. network = web = 1, so they time-slice.
- * ===== end Q&A ===== */
 #define APP_PRIO_LINK               4u  /* serial RX must never overflow, ACK/retransmit timing (100 ms) */
 #define APP_PRIO_GYRO               3u  /* fixed 50 Hz sampling must not jitter; tamper latency matters */
 #define APP_PRIO_DISPLAY            2u  /* 10 fps drawing; a late frame is harmless */
