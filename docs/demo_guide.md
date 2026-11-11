@@ -1,3 +1,5 @@
+> **Superseded.** Line numbers here are from 4 Nov. Use `docs/qna_rubric.md` (qna-notes branch) and Ryan's `docs/demo_script.md`.
+
 # Defuse to Wake: demo guide (where every behaviour lives in the code)
 
 How to use this: each section is one thing you show or get asked about at the demo. It says
